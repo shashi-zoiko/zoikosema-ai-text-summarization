@@ -1,16 +1,21 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080'
+const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
 export function getApiBase() {
   return API_BASE
 }
 
 export function getWsBase() {
+  if (!API_BASE) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${proto}//${window.location.host}`
+  }
   try {
     const u = new URL(API_BASE)
     u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
     return u.toString().replace(/\/$/, '')
   } catch {
-    return 'ws://localhost:8080'
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${proto}//${window.location.host}`
   }
 }
 

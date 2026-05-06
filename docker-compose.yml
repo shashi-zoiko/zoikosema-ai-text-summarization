@@ -23,7 +23,7 @@ services:
     container_name: zoiko-server
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://zoiko:${POSTGRES_PASSWORD:-zoiko_dev}@db:5432/zoiko}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://zoiko:zoiko_dev@db:5432/zoiko}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       JWT_ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 10080
@@ -42,8 +42,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "8001:8080"
     volumes:
       - zoiko_uploads:/app/uploads
       - zoiko_recordings:/app/recordings
@@ -51,14 +49,12 @@ services:
   client:
     build:
       context: ./client
-      args:
-        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8001}
     container_name: zoiko-client
     restart: unless-stopped
     depends_on:
       - server
     ports:
-      - "8080:80"
+      - "8080:8080"
 
 volumes:
   zoiko_pg_data:
