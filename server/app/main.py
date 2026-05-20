@@ -24,7 +24,13 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    # Cloud Run kills the container if the port isn't bound quickly, so
+    # never let DB init block boot — if the DB is unreachable or misconfigured,
+    # log it and let /api/health/ready surface a 503 at request time.
+    try:
+        init_db()
+    except Exception:
+        log.exception("init_db failed at startup; serving with DB unhealthy")
     cleanup_task = asyncio.create_task(recording_cleanup_loop())
     try:
         yield
