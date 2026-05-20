@@ -22,24 +22,31 @@ log = logging.getLogger(__name__)
 settings = get_settings()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Cloud Run kills the container if the port isn't bound quickly, so
-    # never let DB init block boot — if the DB is unreachable or misconfigured,
-    # log it and let /api/health/ready surface a 503 at request time.
+async def _init_db_background() -> None:
+    # Runs in a worker thread so a slow/unreachable Postgres can never block
+    # uvicorn from binding the port — Cloud Run kills the container otherwise.
     try:
-        init_db()
+        await asyncio.to_thread(init_db)
     except Exception:
         log.exception("init_db failed at startup; serving with DB unhealthy")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_task = asyncio.create_task(_init_db_background())
     cleanup_task = asyncio.create_task(recording_cleanup_loop())
     try:
         yield
     finally:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
+        for t in (init_task, cleanup_task):
+            t.cancel()
+        for t in (init_task, cleanup_task):
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.exception("background task raised during shutdown")
 
 
 app = FastAPI(title="ZoikoSema API", version="0.1.0", lifespan=lifespan)
