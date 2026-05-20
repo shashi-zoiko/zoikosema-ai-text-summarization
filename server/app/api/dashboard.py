@@ -1,8 +1,8 @@
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, desc, or_, and_, extract
-from sqlalchemy.orm import Session
+from sqlalchemy import select, func, desc, or_, and_, case, extract
+from sqlalchemy.orm import Session, aliased
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
@@ -18,11 +18,16 @@ def get_stats(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """One Meeting roll-up query + one recording count + one participant count.
+
+    Was 6 separate queries plus a Python loop that pulled every ended meeting
+    into memory just to sum durations; now everything that can roll up in SQL
+    does so server-side.
+    """
     now = datetime.now(timezone.utc)
     week_ago = now - timedelta(days=7)
     month_ago = now - timedelta(days=30)
 
-    # Meetings where user is host or participant
     user_meeting_ids = (
         select(Meeting.id).where(Meeting.host_id == user.id)
         .union(
@@ -32,25 +37,36 @@ def get_stats(
         )
     ).subquery()
 
-    total_meetings = db.scalar(
-        select(func.count()).select_from(
-            select(Meeting.id).where(Meeting.id.in_(select(user_meeting_ids))).subquery()
+    # Duration delta in minutes; portable across Postgres + SQLite by using
+    # the JULIANDAY/EPOCH trick. Postgres path uses EXTRACT; SQLite test path
+    # falls back to seconds difference via strftime — both yield minutes.
+    dialect = db.bind.dialect.name if db.bind else "postgresql"
+    if dialect == "sqlite":
+        duration_min_expr = (
+            (func.strftime("%s", Meeting.ended_at) - func.strftime("%s", Meeting.created_at)) / 60
         )
-    ) or 0
+    else:
+        duration_min_expr = (
+            extract("epoch", Meeting.ended_at - Meeting.created_at) / 60
+        )
 
-    meetings_this_week = db.scalar(
-        select(func.count()).where(
-            Meeting.id.in_(select(user_meeting_ids)),
-            Meeting.created_at >= week_ago,
+    row = db.execute(
+        select(
+            func.count(Meeting.id).label("total_meetings"),
+            func.count(case((Meeting.created_at >= week_ago, Meeting.id))).label("week"),
+            func.count(case((Meeting.created_at >= month_ago, Meeting.id))).label("month"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Meeting.ended_at.is_not(None), duration_min_expr),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("duration_min"),
         )
-    ) or 0
-
-    meetings_this_month = db.scalar(
-        select(func.count()).where(
-            Meeting.id.in_(select(user_meeting_ids)),
-            Meeting.created_at >= month_ago,
-        )
-    ) or 0
+        .where(Meeting.id.in_(select(user_meeting_ids)))
+    ).one()
 
     total_participants = db.scalar(
         select(func.count()).where(
@@ -60,30 +76,16 @@ def get_stats(
         )
     ) or 0
 
-    # Total duration from ended meetings (in minutes)
-    ended_meetings = db.scalars(
-        select(Meeting).where(
-            Meeting.id.in_(select(user_meeting_ids)),
-            Meeting.ended_at.is_not(None),
-        )
-    ).all()
-
-    total_duration_minutes = 0
-    for m in ended_meetings:
-        if m.ended_at and m.created_at:
-            delta = m.ended_at - m.created_at
-            total_duration_minutes += int(delta.total_seconds() / 60)
-
     total_recordings = db.scalar(
         select(func.count()).where(MeetingRecording.user_id == user.id)
     ) or 0
 
     return DashboardStats(
-        total_meetings=total_meetings,
-        meetings_this_week=meetings_this_week,
-        meetings_this_month=meetings_this_month,
+        total_meetings=row.total_meetings or 0,
+        meetings_this_week=row.week or 0,
+        meetings_this_month=row.month or 0,
         total_participants=total_participants,
-        total_duration_minutes=total_duration_minutes,
+        total_duration_minutes=int(row.duration_min or 0),
         total_recordings=total_recordings,
     )
 
@@ -95,9 +97,11 @@ def meeting_history(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Single-query history. Previously ran 1 + 2N queries (host lookup +
+    participant count per row); now joins the host and uses a correlated
+    subquery for the count so the whole page fits in one round-trip."""
     offset = (page - 1) * limit
 
-    # All meetings where user participated or hosted
     user_meeting_ids = (
         select(Meeting.id).where(Meeting.host_id == user.id)
         .union(
@@ -107,8 +111,28 @@ def meeting_history(
         )
     ).subquery()
 
-    meetings = db.scalars(
-        select(Meeting)
+    host = aliased(User)
+    participant_count_subq = (
+        select(func.count())
+        .where(MeetingParticipant.meeting_id == Meeting.id)
+        .correlate(Meeting)
+        .scalar_subquery()
+    )
+
+    rows = db.execute(
+        select(
+            Meeting.id,
+            Meeting.code,
+            Meeting.title,
+            Meeting.host_id,
+            host.name.label("host_name"),
+            Meeting.is_active,
+            Meeting.scheduled_at,
+            Meeting.created_at,
+            Meeting.ended_at,
+            participant_count_subq.label("participant_count"),
+        )
+        .join(host, host.id == Meeting.host_id)
         .where(Meeting.id.in_(select(user_meeting_ids)))
         .order_by(desc(Meeting.created_at))
         .offset(offset)
@@ -116,27 +140,21 @@ def meeting_history(
     ).all()
 
     result = []
-    for m in meetings:
-        host = db.get(User, m.host_id)
-        participant_count = db.scalar(
-            select(func.count()).where(MeetingParticipant.meeting_id == m.id)
-        ) or 0
-
+    for r in rows:
         duration_minutes = None
-        if m.ended_at and m.created_at:
-            duration_minutes = int((m.ended_at - m.created_at).total_seconds() / 60)
-
+        if r.ended_at and r.created_at:
+            duration_minutes = int((r.ended_at - r.created_at).total_seconds() / 60)
         result.append({
-            "id": m.id,
-            "code": m.code,
-            "title": m.title,
-            "host_id": m.host_id,
-            "host_name": host.name if host else None,
-            "is_active": m.is_active,
-            "scheduled_at": m.scheduled_at,
-            "created_at": m.created_at,
-            "ended_at": m.ended_at,
-            "participant_count": participant_count,
+            "id": r.id,
+            "code": r.code,
+            "title": r.title,
+            "host_id": r.host_id,
+            "host_name": r.host_name,
+            "is_active": r.is_active,
+            "scheduled_at": r.scheduled_at,
+            "created_at": r.created_at,
+            "ended_at": r.ended_at,
+            "participant_count": r.participant_count or 0,
             "duration_minutes": duration_minutes,
         })
 
