@@ -1,24 +1,35 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
+import {
+  ArrowRight, ArrowUpRight, Bot, Calendar, CalendarPlus, Clock, Download,
+  Lock, MessageSquareText, Mic, Radio, Share2, Sparkles, Trash2, Users2,
+  Video, Zap,
+} from 'lucide-react'
 import { api, getApiBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
-import Icon from '../components/Icon'
-import './Home.css'
+import { fadeUp, stagger } from '../lib/motion'
+import { cn } from '../lib/cn'
+import Button from '../components/ui/Button'
+import { Input, Field } from '../components/ui/Input'
+import IconButton from '../components/ui/IconButton'
+import Badge from '../components/ui/Badge'
+import Modal from '../components/ui/Modal'
+import { Card } from '../components/ui/Card'
+import { useToast } from '../components/ui/Toast'
 
-function formatWhen(iso) {
+/* ────────────────────────── helpers ────────────────────────── */
+
+function timeAgo(iso) {
   try {
     const d = new Date(iso)
-    const now = new Date()
-    const diffMs = now - d
-    const mins = Math.floor(diffMs / 60000)
+    const mins = Math.floor((new Date() - d) / 60000)
     if (mins < 1) return 'Just now'
     if (mins < 60) return `${mins}m ago`
     const hrs = Math.floor(mins / 60)
     if (hrs < 24) return `${hrs}h ago`
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
-  } catch {
-    return ''
-  }
+  } catch { return '' }
 }
 
 function greeting() {
@@ -29,17 +40,68 @@ function greeting() {
   return 'Good evening'
 }
 
+function formatDuration(secs) {
+  if (!secs) return '0:00'
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function formatSize(bytes) {
+  if (!bytes) return ''
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/* ────────────────────────── action tiles ────────────────────────── */
+
+const SECONDARY_TILES = [
+  {
+    key: 'schedule',
+    title: 'Schedule meeting',
+    desc: 'Plan for later, send invites.',
+    icon: <CalendarPlus />,
+    bg: 'linear-gradient(160deg,#7B86FF 0%,#5B67F2 55%,#3F4ACB 100%)',
+    glow: 'rgba(91,103,242,0.55)',
+  },
+  {
+    key: 'chat',
+    title: 'Team chat',
+    desc: 'Channels, threads, DMs.',
+    icon: <MessageSquareText />,
+    bg: 'linear-gradient(160deg,#7EE2C2 0%,#3FBF9B 55%,#1F9D7B 100%)',
+    glow: 'rgba(63,191,155,0.5)',
+  },
+  {
+    key: 'ai',
+    title: 'AI assistant',
+    desc: 'Recap, action items, search.',
+    icon: <Bot />,
+    bg: 'linear-gradient(160deg,#E07BFF 0%,#B658F0 55%,#7C3CC8 100%)',
+    glow: 'rgba(182,88,240,0.55)',
+  },
+  {
+    key: 'invite',
+    title: 'Invite teammates',
+    desc: 'Grow your workspace.',
+    icon: <Users2 />,
+    bg: 'linear-gradient(160deg,#FFB877 0%,#F08A44 55%,#D86919 100%)',
+    glow: 'rgba(240,138,68,0.5)',
+  },
+]
+
+/* ────────────────────────── page ────────────────────────── */
+
 export default function Home() {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const { toast } = useToast()
   const [code, setCode] = useState('')
   const [recent, setRecent] = useState([])
   const [recordings, setRecordings] = useState([])
   const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
   const [showMeetOptions, setShowMeetOptions] = useState(false)
   const [meetPassword, setMeetPassword] = useState('')
-  // Schedule modal
   const [showSchedule, setShowSchedule] = useState(false)
   const [schedTitle, setSchedTitle] = useState('')
   const [schedDate, setSchedDate] = useState('')
@@ -57,17 +119,13 @@ export default function Home() {
 
   const startInstant = async () => {
     setBusy(true)
-    setErr('')
     try {
       const body = { title: 'Instant meeting' }
       if (meetPassword.trim()) body.password = meetPassword.trim()
-      const meeting = await api('/api/meetings', {
-        method: 'POST',
-        body,
-      })
+      const meeting = await api('/api/meetings', { method: 'POST', body })
       navigate(`/meet/${meeting.code}`)
     } catch (e) {
-      setErr(e.message)
+      toast({ variant: 'error', title: 'Could not start meeting', description: e.message })
     } finally {
       setBusy(false)
     }
@@ -83,7 +141,6 @@ export default function Home() {
   const scheduleMeeting = async () => {
     if (!schedTitle.trim() || !schedDate || !schedTime) return
     setScheduling(true)
-    setErr('')
     try {
       const scheduledAt = new Date(`${schedDate}T${schedTime}`).toISOString()
       const body = {
@@ -94,25 +151,16 @@ export default function Home() {
       }
       if (schedPassword.trim()) body.password = schedPassword.trim()
       const meeting = await api('/api/meetings', { method: 'POST', body })
-
-      // Send invites if emails provided
-      const emails = schedInvites.split(/[,;\s]+/).filter(e => e.includes('@'))
+      const emails = schedInvites.split(/[,;\s]+/).filter((e) => e.includes('@'))
       if (emails.length > 0) {
-        await api(`/api/meetings/${meeting.code}/invite`, {
-          method: 'POST',
-          body: { emails },
-        }).catch(() => {})
+        await api(`/api/meetings/${meeting.code}/invite`, { method: 'POST', body: { emails } }).catch(() => {})
       }
-
+      toast({ variant: 'success', title: 'Meeting scheduled', description: meeting.title })
       setShowSchedule(false)
-      setSchedTitle('')
-      setSchedDate('')
-      setSchedTime('')
-      setSchedPassword('')
-      setSchedInvites('')
-      setRecent(prev => [meeting, ...prev])
+      setSchedTitle(''); setSchedDate(''); setSchedTime(''); setSchedPassword(''); setSchedInvites('')
+      setRecent((prev) => [meeting, ...prev])
     } catch (e) {
-      setErr(e.message)
+      toast({ variant: 'error', title: 'Could not schedule', description: e.message })
     } finally {
       setScheduling(false)
     }
@@ -122,16 +170,17 @@ export default function Home() {
     if (!window.confirm('Delete this recording?')) return
     try {
       await api(`/api/recordings/${id}`, { method: 'DELETE' })
-      setRecordings(prev => prev.filter(r => r.id !== id))
+      setRecordings((prev) => prev.filter((r) => r.id !== id))
     } catch {}
   }
 
   const shareRecording = async (id) => {
     try {
       const rec = await api(`/api/recordings/${id}/share`, { method: 'POST' })
-      setRecordings(prev => prev.map(r => r.id === id ? { ...r, share_token: rec.share_token } : r))
+      setRecordings((prev) => prev.map((r) => (r.id === id ? { ...r, share_token: rec.share_token } : r)))
       const shareUrl = `${window.location.origin}/recording/${rec.share_token}`
       await navigator.clipboard.writeText(shareUrl)
+      toast({ variant: 'success', title: 'Share link copied' })
     } catch {}
   }
 
@@ -142,345 +191,517 @@ export default function Home() {
     a.click()
   }
 
-  const formatDuration = (secs) => {
-    if (!secs) return '0:00'
-    const m = Math.floor(secs / 60)
-    const s = secs % 60
-    return `${m}:${s.toString().padStart(2, '0')}`
-  }
-
-  const formatSize = (bytes) => {
-    if (!bytes) return ''
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  }
-
   const firstName = user?.name?.split(' ')[0] || 'there'
-  const today = new Date().toLocaleDateString([], {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  })
+  const today = useMemo(() =>
+    new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }),
+    []
+  )
+  const upcomingCount = recent.filter((m) => m.scheduled_at && new Date(m.scheduled_at) > new Date()).length
+
+  const SECONDARY_ACTIONS = {
+    schedule: () => setShowSchedule(true),
+    chat: () => navigate('/chat'),
+    ai: () => navigate('/chat'),
+    invite: () => navigate('/admin'),
+  }
 
   return (
-    <div className="home">
-      <header className="home-hero">
-        <div className="home-hero-top">
-          <span className="badge accent">
-            <Icon name="sparkle" size={12} />
-            <span>ZoikoSema · Workspace</span>
-          </span>
-          <span className="home-hero-date">{today}</span>
-        </div>
-        <h1 className="home-hero-title">
-          {greeting()}, <span className="grad">{firstName}</span>
-        </h1>
-        <p className="home-hero-sub">
-          Your meetings, chat, and AI assistant — all in one place. Start an instant call,
-          schedule for later, or pick up where your team left off.
-        </p>
-        <div className="home-hero-pills">
-          <span className="home-hero-pill"><Icon name="video" size={11} /> Meet</span>
-          <span className="home-hero-pill"><Icon name="chat" size={11} /> Chat</span>
-          <span className="home-hero-pill"><Icon name="screen" size={11} /> Webinar</span>
-          <span className="home-hero-pill"><Icon name="robot" size={11} /> AI co-pilot</span>
-        </div>
-      </header>
-
-      {err && (
-        <div className="auth-error" style={{ marginBottom: 16 }}>
-          <Icon name="close" size={14} /> {err}
-        </div>
-      )}
-
-      <div className="home-grid">
-        <article className="home-card home-card-featured">
-          <div className="home-card-glow" />
-          <div className="home-card-head">
-            <div className="home-card-icon gradient">
-              <Icon name="video" size={22} />
-            </div>
-            <span className="badge live">Live</span>
-          </div>
-          <h3>New meeting</h3>
-          <p>Start an instant video call and share the link with anyone.</p>
-          {showMeetOptions && (
-            <div className="home-card-password">
-              <Icon name="lock" size={13} />
-              <input
-                type="password"
-                placeholder="Optional meeting password"
-                value={meetPassword}
-                onChange={(e) => setMeetPassword(e.target.value)}
-                autoComplete="off"
-              />
-            </div>
-          )}
-          <div className="home-card-actions">
-            <button className="primary lg" onClick={startInstant} disabled={busy}>
-              {busy ? (
-                <><span className="spinner" style={{ width: 16, height: 16 }} /> Starting…</>
-              ) : (
-                <><Icon name="bolt" size={16} /> Start instant meeting</>
-              )}
-            </button>
-            <button
-              className="outline"
-              onClick={() => setShowMeetOptions(!showMeetOptions)}
-              title="Meeting security options"
-            >
-              <Icon name="lock" size={14} />
-            </button>
-          </div>
-        </article>
-
-        <article className="home-card">
-          <div className="home-card-head">
-            <div className="home-card-icon">
-              <Icon name="link" size={22} />
-            </div>
-          </div>
-          <h3>Join with code</h3>
-          <p>Enter the meeting code someone shared with you.</p>
-          <form className="home-card-actions" onSubmit={joinCode}>
-            <input
-              placeholder="abc-defg-hij"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              className="mono"
-            />
-            <button type="submit" className="primary" disabled={!code.trim()}>
-              Join
-            </button>
-          </form>
-        </article>
-
-        <article className="home-card">
-          <div className="home-card-head">
-            <div className="home-card-icon">
-              <Icon name="chat" size={22} />
-            </div>
-          </div>
-          <h3>Team chat</h3>
-          <p>Continue a channel conversation or start a new DM.</p>
-          <div className="home-card-actions">
-            <button onClick={() => navigate('/chat')} className="outline">
-              Open chat <Icon name="arrowLeft" size={14} style={{ transform: 'rotate(180deg)' }} />
-            </button>
-          </div>
-        </article>
-
-        <article className="home-card">
-          <div className="home-card-head">
-            <div className="home-card-icon">
-              <Icon name="calendarPlus" size={22} />
-            </div>
-          </div>
-          <h3>Schedule</h3>
-          <p>Plan a meeting for later and send invites.</p>
-          <div className="home-card-actions">
-            <button onClick={() => setShowSchedule(true)} className="outline">
-              <Icon name="calendar" size={14} /> Schedule meeting
-            </button>
-          </div>
-        </article>
+    <div className="relative isolate mx-auto w-full max-w-[1320px] px-4 py-6 sm:px-8 sm:py-10">
+      {/* ambient backdrop */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+        <div
+          className="absolute -top-32 -left-24 h-[460px] w-[460px] rounded-full opacity-[0.16] blur-3xl"
+          style={{ background: 'radial-gradient(closest-side,#5b67f2,transparent 70%)' }}
+        />
+        <div
+          className="absolute -top-24 right-0 h-[460px] w-[460px] rounded-full opacity-[0.16] blur-3xl"
+          style={{ background: 'radial-gradient(closest-side,#d670ff,transparent 70%)' }}
+        />
       </div>
 
-      <section className="home-section">
-        <div className="home-section-head">
-          <div>
-            <div className="home-section-title">Recent meetings</div>
-            <div className="home-section-sub">Your latest rooms — click to rejoin.</div>
-          </div>
-        </div>
-        {recent.length === 0 ? (
-          <div className="home-empty">
-            <div className="home-empty-icon"><Icon name="calendar" size={24} /></div>
-            <div>
-              <div className="home-empty-title">No meetings yet</div>
-              <div className="home-empty-sub">Start one above to see it here.</div>
-            </div>
-          </div>
-        ) : (
-          <div className="home-recent">
-            {recent.map((m) => (
-              <button
-                key={m.id}
-                className="home-recent-item"
-                onClick={() => navigate(`/meet/${m.code}`)}
-              >
-                <div className="home-recent-icon">
-                  <Icon name="video" size={18} />
-                </div>
-                <div className="home-recent-body">
-                  <div className="home-recent-title">{m.title}</div>
-                  <div className="home-recent-code mono">
-                    {m.password_protected && <Icon name="lock" size={11} style={{ marginRight: 4 }} />}
-                    {m.code}
-                  </div>
-                </div>
-                <div className="home-recent-meta">
-                  {m.scheduled_at ? (
-                    <>
-                      <Icon name="calendar" size={13} />
-                      <span>{new Date(m.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Icon name="clock" size={13} />
-                      <span>{formatWhen(m.created_at)}</span>
-                    </>
-                  )}
-                </div>
-                <div className="home-recent-chev">
-                  <Icon name="arrowLeft" size={16} style={{ transform: 'rotate(180deg)' }} />
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
+      {/* ============ Greeting ============ */}
+      <motion.header
+        variants={stagger(0.06)}
+        initial="initial"
+        animate="animate"
+        className="mb-8"
+      >
+        <motion.div variants={fadeUp} className="flex items-center gap-2">
+          <Badge tone="accent" size="md"><Sparkles className="h-3 w-3" /> Workspace</Badge>
+          <span className="text-[12.5px] text-[var(--c-fg-muted)]">{today}</span>
+        </motion.div>
+        <motion.h1
+          variants={fadeUp}
+          className="mt-3 text-[34px] font-bold leading-[1.1] tracking-[-0.025em] sm:text-[44px]"
+        >
+          {greeting()}, <span className="gradient-text">{firstName}</span>
+        </motion.h1>
+        <motion.p variants={fadeUp} className="mt-2 max-w-[560px] text-[14.5px] leading-relaxed text-[var(--c-fg-dim)]">
+          Your meetings, chat, and AI assistant — all in one place. Start an instant call, schedule for later, or pick up where your team left off.
+        </motion.p>
+      </motion.header>
 
-      <section className="home-section">
-        <div className="home-section-head">
-          <div>
-            <div className="home-section-title">Recordings</div>
-            <div className="home-section-sub">Your saved meeting recordings — download or share.</div>
-          </div>
-        </div>
-        {recordings.length === 0 ? (
-          <div className="home-empty">
-            <div className="home-empty-icon"><Icon name="record" size={24} /></div>
-            <div>
-              <div className="home-empty-title">No recordings yet</div>
-              <div className="home-empty-sub">Record a meeting to see it here.</div>
-            </div>
-          </div>
-        ) : (
-          <div className="home-recordings">
-            {recordings.map((rec) => (
-              <div key={rec.id} className="home-rec-item">
-                <div className="home-rec-icon">
-                  <Icon name="record" size={18} />
-                </div>
-                <div className="home-rec-body">
-                  <div className="home-rec-title">{rec.meeting_title || 'Untitled meeting'}</div>
-                  <div className="home-rec-meta-row">
-                    <span className="home-rec-code mono">{rec.meeting_code}</span>
-                    <span className="home-rec-sep" />
-                    <span>{formatDuration(rec.duration)}</span>
-                    <span className="home-rec-sep" />
-                    <span>{formatSize(rec.file_size)}</span>
-                    {rec.includes_chat && (
-                      <>
-                        <span className="home-rec-sep" />
-                        <span className="home-rec-chat-tag"><Icon name="chat" size={11} /> Chat log</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="home-rec-date">
-                  <Icon name="clock" size={13} />
-                  <span>{formatWhen(rec.created_at)}</span>
-                </div>
-                <div className="home-rec-actions">
-                  <button className="home-rec-action" onClick={() => downloadRecording(rec)} title="Download">
-                    <Icon name="download" size={15} />
-                  </button>
-                  <button className="home-rec-action" onClick={() => shareRecording(rec.id)} title={rec.share_token ? 'Copy share link' : 'Create share link'}>
-                    <Icon name="share" size={15} />
-                  </button>
-                  <button className="home-rec-action danger" onClick={() => deleteRecording(rec.id)} title="Delete">
-                    <Icon name="trash" size={15} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Schedule modal */}
-      {showSchedule && (
-        <div className="schedule-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowSchedule(false) }}>
-          <div className="schedule-modal">
-            <div className="schedule-modal-head">
-              <h2>Schedule a meeting</h2>
-              <button className="ghost" onClick={() => setShowSchedule(false)}>
-                <Icon name="close" size={18} />
-              </button>
-            </div>
-            <div className="schedule-form">
-              <div className="schedule-field">
-                <span>Meeting title</span>
-                <input
-                  placeholder="Team standup"
-                  value={schedTitle}
-                  onChange={(e) => setSchedTitle(e.target.value)}
-                />
-              </div>
-              <div className="schedule-row">
-                <div className="schedule-field">
-                  <span>Date</span>
-                  <input type="date" value={schedDate} onChange={(e) => setSchedDate(e.target.value)} />
-                </div>
-                <div className="schedule-field">
-                  <span>Time</span>
-                  <input type="time" value={schedTime} onChange={(e) => setSchedTime(e.target.value)} />
-                </div>
-              </div>
-              <div className="schedule-field">
-                <span>Timezone</span>
-                <select value={schedTz} onChange={(e) => setSchedTz(e.target.value)}>
-                  {['America/New_York','America/Chicago','America/Denver','America/Los_Angeles','Europe/London','Europe/Paris','Europe/Berlin','Asia/Kolkata','Asia/Tokyo','Asia/Shanghai','Australia/Sydney','Pacific/Auckland'].map(tz => (
-                    <option key={tz} value={tz}>{tz.replace(/_/g,' ')}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="schedule-field">
-                <span>Invite people (emails, comma-separated)</span>
-                <input
-                  placeholder="alice@example.com, bob@example.com"
-                  value={schedInvites}
-                  onChange={(e) => setSchedInvites(e.target.value)}
-                />
-              </div>
-              <div className="schedule-field">
-                <span>Password (optional)</span>
-                <input
-                  type="password"
-                  placeholder="Leave blank for no password"
-                  value={schedPassword}
-                  onChange={(e) => setSchedPassword(e.target.value)}
-                  autoComplete="off"
-                />
-              </div>
-              <label className="schedule-toggle">
-                <input
-                  type="checkbox"
-                  checked={schedWaiting}
-                  onChange={(e) => setSchedWaiting(e.target.checked)}
-                />
-                Enable waiting room
-              </label>
-              <div className="schedule-actions">
-                <button className="outline" onClick={() => setShowSchedule(false)}>Cancel</button>
-                <button
-                  className="primary"
-                  onClick={scheduleMeeting}
-                  disabled={scheduling || !schedTitle.trim() || !schedDate || !schedTime}
+      {/* ============ Hero row: Instant meeting + Join with code ============ */}
+      <motion.section
+        variants={stagger(0.05)}
+        initial="initial"
+        animate="animate"
+        className="grid gap-4 lg:grid-cols-3"
+      >
+        {/* ── Instant meeting (featured) ── */}
+        <motion.div variants={fadeUp} className="lg:col-span-2">
+          <Card glow className="group/hero relative overflow-hidden p-6 sm:p-7">
+            {/* layered ambient inside the card */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 opacity-[0.65] transition-opacity duration-500 group-hover/hero:opacity-90"
+              style={{
+                background:
+                  'radial-gradient(700px 220px at 0% 0%, color-mix(in srgb, var(--c-accent) 22%, transparent), transparent 55%),' +
+                  'radial-gradient(420px 200px at 100% 100%, color-mix(in srgb, var(--c-accent-3) 18%, transparent), transparent 60%)',
+              }}
+            />
+            <div className="relative flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
+              <div className="max-w-md space-y-3">
+                <motion.div
+                  whileHover={{ scale: 1.04 }}
+                  transition={{ type: 'spring', stiffness: 320, damping: 20 }}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-[var(--c-line)] bg-[var(--c-bg-2)] px-2.5 py-1 text-[11px] font-semibold text-[var(--c-fg-dim)]"
                 >
-                  {scheduling ? (
-                    <><span className="spinner" style={{ width: 14, height: 14 }} /> Scheduling…</>
-                  ) : (
-                    <><Icon name="calendar" size={14} /> Schedule</>
+                  <span className="relative inline-flex h-1.5 w-1.5">
+                    <span className="absolute inset-0 animate-ping rounded-full bg-[var(--c-success)] opacity-70" />
+                    <span className="relative h-1.5 w-1.5 rounded-full bg-[var(--c-success)]" />
+                  </span>
+                  Ready to host
+                </motion.div>
+                <h2 className="text-[24px] font-bold tracking-tight">Start an instant meeting</h2>
+                <p className="text-[13.5px] leading-relaxed text-[var(--c-fg-dim)]">
+                  HD video, screen share, captions, recording — share the link with anyone, no install required.
+                </p>
+                <AnimatePresence initial={false}>
+                  {showMeetOptions && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                      className="overflow-hidden"
+                    >
+                      <div className="pt-1">
+                        <Input
+                          type="password"
+                          placeholder="Optional meeting password"
+                          value={meetPassword}
+                          onChange={(e) => setMeetPassword(e.target.value)}
+                          leftIcon={<Lock />}
+                          autoComplete="off"
+                        />
+                      </div>
+                    </motion.div>
                   )}
-                </button>
+                </AnimatePresence>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <Button
+                    size="lg"
+                    loading={busy}
+                    onClick={startInstant}
+                    asMotion
+                    leftIcon={!busy && <Zap className="h-4 w-4" />}
+                  >
+                    {busy ? 'Starting…' : 'Start instant meeting'}
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    onClick={() => setShowMeetOptions((v) => !v)}
+                    leftIcon={<Lock className="h-4 w-4" />}
+                    asMotion
+                  >
+                    {showMeetOptions ? 'Hide options' : 'Set password'}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Camera-grid preview */}
+              <motion.div
+                initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ delay: 0.2, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+                className="relative hidden shrink-0 sm:block"
+              >
+                <div
+                  aria-hidden
+                  className="absolute -inset-6 rounded-full opacity-40 blur-3xl transition-opacity duration-500 group-hover/hero:opacity-60"
+                  style={{ background: 'radial-gradient(closest-side, var(--c-accent-3), transparent)' }}
+                />
+                <div className="relative grid h-[180px] w-[280px] grid-cols-3 grid-rows-2 gap-1.5 overflow-hidden rounded-2xl border border-[var(--c-line-strong)] bg-[var(--c-bg-2)] p-1.5 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.5)]">
+                  {[0,1,2,3,4,5].map((i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.25 + i * 0.06, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                      className={cn(
+                        'relative overflow-hidden rounded-lg border border-[var(--c-line)]',
+                        i === 0 ? 'row-span-2 col-span-2' : ''
+                      )}
+                      style={{
+                        background: `linear-gradient(135deg, ${['#6366f1','#a78bfa','#ec4899','#10b981','#f59e0b','#06b6d4'][i]}40, transparent)`,
+                      }}
+                    >
+                      <div className="absolute inset-0 bg-[radial-gradient(closest-side,rgba(255,255,255,0.12),transparent)]" />
+                      {i === 0 && (
+                        <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded bg-black/45 px-1.5 py-0.5 text-[9px] font-medium text-white backdrop-blur-sm">
+                          <Mic className="h-2.5 w-2.5" /> You
+                        </div>
+                      )}
+                    </motion.div>
+                  ))}
+                </div>
+              </motion.div>
+            </div>
+          </Card>
+        </motion.div>
+
+        {/* ── Join with code ── */}
+        <motion.div variants={fadeUp}>
+          <Card className="group/join h-full p-6">
+            <div className="flex items-center gap-3">
+              <motion.div
+                whileHover={{ rotate: -8, scale: 1.08 }}
+                transition={{ type: 'spring', stiffness: 320, damping: 18 }}
+                className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--c-accent-soft)] text-[var(--c-accent)] shadow-[0_4px_14px_-4px_var(--c-accent-ring)]"
+              >
+                <ArrowRight className="h-5 w-5" />
+              </motion.div>
+              <div>
+                <div className="text-[15px] font-semibold tracking-tight">Join with code</div>
+                <div className="text-[12px] text-[var(--c-fg-muted)]">Enter the link or code someone shared.</div>
               </div>
             </div>
+            <form onSubmit={joinCode} className="mt-5 space-y-3">
+              <Input
+                placeholder="abc-defg-hij"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                className="mono tracking-widest text-center"
+              />
+              <Button
+                type="submit"
+                block
+                disabled={!code.trim()}
+                rightIcon={<ArrowRight className="h-4 w-4" />}
+                asMotion
+              >
+                Join meeting
+              </Button>
+            </form>
+          </Card>
+        </motion.div>
+      </motion.section>
+
+      {/* ============ Secondary actions (colorful tiles) ============ */}
+      <motion.section
+        variants={stagger(0.06)}
+        initial="initial"
+        animate="animate"
+        className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+      >
+        {SECONDARY_TILES.map((t, i) => (
+          <ActionTile
+            key={t.key}
+            tile={t}
+            index={i + 1}
+            onClick={SECONDARY_ACTIONS[t.key]}
+          />
+        ))}
+      </motion.section>
+
+      {/* ============ Recent meetings ============ */}
+      <Section
+        title="Recent meetings"
+        sub="Your latest rooms — click to rejoin or copy the link."
+        action={
+          upcomingCount > 0 ? <Badge tone="accent" size="md"><Calendar className="h-3 w-3" /> {upcomingCount} upcoming</Badge> : null
+        }
+      >
+        {recent.length === 0 ? (
+          <EmptyState
+            icon={<Calendar />}
+            title="No meetings yet"
+            desc="Start one above to see it here. Scheduled meetings will also appear in this list."
+          />
+        ) : (
+          <ul className="divide-y divide-[var(--c-line)] overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-surface)]">
+            <AnimatePresence initial={false}>
+              {recent.slice(0, 6).map((m, i) => (
+                <motion.li
+                  key={m.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0, transition: { delay: i * 0.04 } }}
+                  exit={{ opacity: 0, y: -6 }}
+                >
+                  <button
+                    onClick={() => navigate(`/meet/${m.code}`)}
+                    className="group/row flex w-full items-center gap-4 px-4 py-3 text-left transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)]"
+                  >
+                    <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--c-bg-3)] text-[var(--c-fg-dim)] transition-all duration-200 group-hover/row:scale-110 group-hover/row:bg-[var(--c-accent-soft)] group-hover/row:text-[var(--c-accent)]">
+                      <Video className="h-5 w-5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-[13.5px] font-semibold tracking-tight transition-colors group-hover/row:text-[var(--c-accent)]">{m.title}</span>
+                        {m.password_protected && <Lock className="h-3 w-3 text-[var(--c-fg-muted)]" />}
+                      </div>
+                      <div className="mono text-[11px] text-[var(--c-fg-muted)]">{m.code}</div>
+                    </div>
+                    <div className="hidden items-center gap-1.5 text-[12px] text-[var(--c-fg-muted)] sm:flex">
+                      {m.scheduled_at ? (
+                        <>
+                          <Calendar className="h-3.5 w-3.5" />
+                          <span>{new Date(m.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Clock className="h-3.5 w-3.5" />
+                          <span>{timeAgo(m.created_at)}</span>
+                        </>
+                      )}
+                    </div>
+                    <ArrowRight className="h-4 w-4 -translate-x-1 text-[var(--c-fg-muted)] opacity-0 transition-all duration-200 group-hover/row:translate-x-0 group-hover/row:opacity-100 group-hover/row:text-[var(--c-accent)]" />
+                  </button>
+                </motion.li>
+              ))}
+            </AnimatePresence>
+          </ul>
+        )}
+      </Section>
+
+      {/* ============ Recordings ============ */}
+      <Section
+        title="Recordings"
+        sub="Your saved meeting recordings — download, share, or delete."
+      >
+        {recordings.length === 0 ? (
+          <EmptyState
+            icon={<Radio />}
+            title="No recordings yet"
+            desc="Record a meeting and it'll appear here. Recordings auto-delete after 5 days."
+          />
+        ) : (
+          <ul className="divide-y divide-[var(--c-line)] overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-surface)]">
+            <AnimatePresence initial={false}>
+              {recordings.map((rec, i) => (
+                <motion.li
+                  key={rec.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0, transition: { delay: i * 0.03 } }}
+                  exit={{ opacity: 0, y: -6 }}
+                  className="group/rec flex items-center gap-4 px-4 py-3 transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_4%,transparent)]"
+                >
+                  <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--c-danger-soft)] text-[var(--c-danger)] transition-transform duration-200 group-hover/rec:scale-110">
+                    <Radio className="h-5 w-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13.5px] font-semibold tracking-tight">
+                      {rec.meeting_title || 'Untitled meeting'}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[var(--c-fg-muted)]">
+                      <span className="mono">{rec.meeting_code}</span>
+                      <span className="h-0.5 w-0.5 rounded-full bg-[var(--c-fg-muted)]" />
+                      <span>{formatDuration(rec.duration)}</span>
+                      <span className="h-0.5 w-0.5 rounded-full bg-[var(--c-fg-muted)]" />
+                      <span>{formatSize(rec.file_size)}</span>
+                      {rec.includes_chat && (
+                        <>
+                          <span className="h-0.5 w-0.5 rounded-full bg-[var(--c-fg-muted)]" />
+                          <span className="inline-flex items-center gap-1"><MessageSquareText className="h-3 w-3" /> Chat log</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="hidden text-[11.5px] text-[var(--c-fg-muted)] sm:flex sm:items-center sm:gap-1.5">
+                    <Clock className="h-3.5 w-3.5" />
+                    {timeAgo(rec.created_at)}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <IconButton variant="ghost" size="sm" label="Download" onClick={() => downloadRecording(rec)}>
+                      <Download />
+                    </IconButton>
+                    <IconButton variant="ghost" size="sm" label={rec.share_token ? 'Copy share link' : 'Create share link'} onClick={() => shareRecording(rec.id)}>
+                      <Share2 />
+                    </IconButton>
+                    <IconButton variant="ghost" size="sm" label="Delete" onClick={() => deleteRecording(rec.id)}>
+                      <Trash2 />
+                    </IconButton>
+                  </div>
+                </motion.li>
+              ))}
+            </AnimatePresence>
+          </ul>
+        )}
+      </Section>
+
+      {/* ============ Schedule modal ============ */}
+      <Modal
+        open={showSchedule}
+        onClose={() => setShowSchedule(false)}
+        title="Schedule a meeting"
+        description="Pick a date, invite people, and we'll handle the calendar invites."
+        size="md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setShowSchedule(false)}>Cancel</Button>
+            <Button
+              onClick={scheduleMeeting}
+              loading={scheduling}
+              disabled={!schedTitle.trim() || !schedDate || !schedTime}
+              leftIcon={!scheduling && <Calendar className="h-4 w-4" />}
+              asMotion
+            >
+              {scheduling ? 'Scheduling…' : 'Schedule'}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Field label="Meeting title" required>
+            <Input value={schedTitle} onChange={(e) => setSchedTitle(e.target.value)} placeholder="Team standup" />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Date" required>
+              <Input type="date" value={schedDate} onChange={(e) => setSchedDate(e.target.value)} />
+            </Field>
+            <Field label="Time" required>
+              <Input type="time" value={schedTime} onChange={(e) => setSchedTime(e.target.value)} />
+            </Field>
           </div>
+          <Field label="Timezone">
+            <select
+              value={schedTz}
+              onChange={(e) => setSchedTz(e.target.value)}
+              className="h-11 w-full rounded-xl border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] px-3.5 text-[14px] text-[var(--c-fg)] outline-none transition focus:border-[var(--c-accent)] focus:shadow-[0_0_0_4px_var(--c-accent-ring)]"
+            >
+              {[
+                'America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
+                'Europe/London','Europe/Paris','Europe/Berlin','Asia/Kolkata','Asia/Tokyo',
+                'Asia/Shanghai','Australia/Sydney','Pacific/Auckland',
+              ].map((tz) => (
+                <option key={tz} value={tz}>{tz.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Invite people" hint="Comma-separated email addresses">
+            <Input
+              value={schedInvites}
+              onChange={(e) => setSchedInvites(e.target.value)}
+              placeholder="alice@example.com, bob@example.com"
+            />
+          </Field>
+          <Field label="Password" hint="Leave blank for no password">
+            <Input
+              type="password"
+              value={schedPassword}
+              onChange={(e) => setSchedPassword(e.target.value)}
+              leftIcon={<Lock />}
+              autoComplete="off"
+            />
+          </Field>
+          <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)] p-3 transition-colors hover:border-[var(--c-line-strong)] hover:bg-[var(--c-bg-2)]/80">
+            <input
+              type="checkbox"
+              checked={schedWaiting}
+              onChange={(e) => setSchedWaiting(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--c-accent)]"
+            />
+            <div className="flex-1">
+              <div className="text-[13px] font-semibold">Enable waiting room</div>
+              <div className="text-[11.5px] text-[var(--c-fg-muted)]">Approve attendees one-by-one before they join.</div>
+            </div>
+          </label>
         </div>
-      )}
+      </Modal>
+    </div>
+  )
+}
+
+/* ────────────────────────── pieces ────────────────────────── */
+
+function ActionTile({ tile, index, onClick }) {
+  return (
+    <motion.button
+      variants={fadeUp}
+      whileHover={{ y: -6 }}
+      whileTap={{ scale: 0.97 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 22 }}
+      onClick={onClick}
+      className="group/tile relative isolate flex aspect-[5/3] flex-col justify-between overflow-hidden rounded-2xl p-4 text-left text-white outline-none focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)]"
+      style={{ background: tile.bg }}
+    >
+      {/* Soft hover halo */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute -inset-4 -z-10 opacity-0 blur-2xl transition-opacity duration-300 group-hover/tile:opacity-80"
+        style={{ background: tile.glow }}
+      />
+      {/* Shine sweep */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -translate-x-full bg-[linear-gradient(120deg,transparent_30%,rgba(255,255,255,0.28)_50%,transparent_70%)] transition-transform duration-700 ease-out group-hover/tile:translate-x-full"
+      />
+      <div className="flex items-start justify-between">
+        <motion.span
+          whileHover={{ rotate: -8, scale: 1.08 }}
+          transition={{ type: 'spring', stiffness: 320, damping: 18 }}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur-sm [&_svg]:h-5 [&_svg]:w-5"
+        >
+          {tile.icon}
+        </motion.span>
+        <ArrowUpRight className="h-4 w-4 -translate-y-0 translate-x-0 text-white/70 transition-all duration-200 group-hover/tile:-translate-y-0.5 group-hover/tile:translate-x-0.5 group-hover/tile:text-white" />
+      </div>
+      <div>
+        <div className="text-[10.5px] font-bold tabular-nums tracking-[0.14em] text-white/65">
+          {String(index).padStart(2, '0')}
+        </div>
+        <div className="mt-1 text-[14.5px] font-bold tracking-tight">{tile.title}</div>
+        <div className="text-[11.5px] font-medium leading-snug text-white/80">{tile.desc}</div>
+      </div>
+    </motion.button>
+  )
+}
+
+function Section({ title, sub, action, children }) {
+  return (
+    <section className="mt-10">
+      <div className="mb-4 flex items-end justify-between">
+        <div>
+          <h2 className="text-[18px] font-semibold tracking-tight">{title}</h2>
+          {sub && <p className="mt-1 text-[12.5px] text-[var(--c-fg-muted)]">{sub}</p>}
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function EmptyState({ icon, title, desc }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-[var(--c-line-strong)] bg-[var(--c-bg-2)]/40 p-10 text-center">
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0.7 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ type: 'spring', stiffness: 280, damping: 18 }}
+        className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--c-bg-3)] text-[var(--c-fg-muted)] [&_svg]:h-6 [&_svg]:w-6"
+      >
+        {icon}
+      </motion.div>
+      <div>
+        <div className="text-[14px] font-semibold tracking-tight">{title}</div>
+        <div className="mt-1 max-w-md text-[12.5px] text-[var(--c-fg-muted)] leading-relaxed">{desc}</div>
+      </div>
     </div>
   )
 }

@@ -288,3 +288,164 @@
   .admin-table-head span:nth-child(n+4),
   .admin-table-row .admin-table-cell:nth-child(n+4) { display: none; }
 }
+
+/* =====================================================================
+   2026 SaaS polish — visual overrides for the Workspace admin page
+   ===================================================================== */
+
+.admin-hero-title {
+  background: linear-gradient(135deg, var(--c-fg) 0%, color-mix(in srgb, var(--c-accent) 65%, var(--c-fg)) 70%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Tabs — animated underline + hover sweep */
+.admin-tab {
+  position: relative;
+  overflow: hidden;
+  font-weight: 600;
+  border-radius: 10px 10px 0 0;
+  transition: color 180ms ease, background 180ms ease, transform 180ms cubic-bezier(0.16,1,0.3,1);
+}
+.admin-tab:hover {
+  background: color-mix(in srgb, var(--c-accent) 6%, transparent);
+  color: var(--c-fg);
+  transform: translateY(-1px);
+}
+.admin-tab.active {
+  color: var(--c-accent);
+  border-bottom-color: transparent;
+  background: color-mix(in srgb, var(--c-accent) 8%, transparent);
+}
+.admin-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--c-accent), var(--c-accent-3), transparent);
+  border-radius: 2px 2px 0 0;
+}
+
+/* Stat cards — premium hover with accent shadow */
+.admin-stat-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 18px;
+  transition:
+    border-color 220ms cubic-bezier(0.16,1,0.3,1),
+    transform 220ms cubic-bezier(0.16,1,0.3,1),
+    box-shadow 220ms cubic-bezier(0.16,1,0.3,1);
+}
+.admin-stat-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--c-accent) 10%, transparent), transparent 40%, color-mix(in srgb, var(--c-accent-3) 8%, transparent));
+  opacity: 0;
+  transition: opacity 300ms cubic-bezier(0.16,1,0.3,1);
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+.admin-stat-card:hover::before { opacity: 1; }
+.admin-stat-card:hover {
+  border-color: color-mix(in srgb, var(--c-accent) 28%, var(--c-line-strong));
+  transform: translateY(-3px);
+  box-shadow: 0 22px 48px -18px color-mix(in srgb, var(--c-accent) 30%, rgba(0,0,0,0.4));
+}
+.admin-stat-card > * { position: relative; }
+
+.admin-stat-icon {
+  border-radius: 12px;
+  transition:
+    transform 220ms cubic-bezier(0.16,1,0.3,1),
+    background 220ms ease,
+    box-shadow 220ms ease;
+}
+.admin-stat-card:hover .admin-stat-icon {
+  transform: scale(1.12) rotate(-6deg);
+  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--c-accent) 50%, transparent);
+}
+
+/* Stat value — slightly bolder, tabular */
+.admin-stat-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
+}
+
+/* Tables — softer dividers, row lift on hover */
+.admin-table-head {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--c-surface) 88%, transparent), color-mix(in srgb, var(--c-surface) 68%, transparent));
+  border-bottom: 1px solid var(--c-line);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.admin-table-row {
+  transition:
+    background 180ms cubic-bezier(0.16,1,0.3,1),
+    transform 180ms cubic-bezier(0.16,1,0.3,1);
+}
+.admin-table-row:hover {
+  background: color-mix(in srgb, var(--c-accent) 4%, transparent);
+}
+
+/* Activity icons */
+.admin-activity-icon {
+  border-radius: 12px;
+  transition: transform 200ms cubic-bezier(0.16,1,0.3,1), box-shadow 200ms ease;
+}
+.admin-activity-item:hover .admin-activity-icon {
+  transform: scale(1.08) rotate(-4deg);
+}
+.admin-activity-item {
+  border-radius: 14px;
+  padding: 10px 12px;
+  transition: background 180ms ease, transform 180ms cubic-bezier(0.16,1,0.3,1);
+}
+.admin-activity-item:hover {
+  background: color-mix(in srgb, var(--c-accent) 5%, transparent);
+  transform: translateX(2px);
+}
+
+/* Spinner used during loading */
+.admin .spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid color-mix(in srgb, var(--c-fg) 14%, transparent);
+  border-top-color: var(--c-accent);
+  border-radius: 50%;
+  animation: zk-spin 0.7s linear infinite;
+}
+
+/* Inputs & buttons in the admin page (search field, action buttons) */
+.admin input[type="text"],
+.admin input[type="search"],
+.admin input[type="email"] {
+  border-radius: 12px;
+  border: 1px solid var(--c-line-strong);
+  background: var(--c-bg-1);
+  transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+.admin input[type="text"]:focus,
+.admin input[type="search"]:focus,
+.admin input[type="email"]:focus {
+  border-color: var(--c-accent);
+  background: var(--c-surface);
+  box-shadow: 0 0 0 4px var(--c-accent-ring);
+}
+
+/* Error card */
+.admin-error {
+  border: 1px dashed var(--c-line-strong);
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--c-danger) 5%, var(--c-bg-2));
+}

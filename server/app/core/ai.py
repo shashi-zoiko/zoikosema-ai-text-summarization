@@ -1,6 +1,8 @@
 """AI assistant service powered by Anthropic Claude."""
 import json
 import logging
+import re
+import time
 from datetime import datetime, timezone
 
 from app.core.config import get_settings
@@ -189,3 +191,228 @@ def ai_suggest_actions(
         suggestions.append("Most participants have both audio and video off. Consider checking if everyone is engaged.")
 
     return suggestions
+
+
+# ── Structured meeting intelligence ────────────────────────────────────────
+
+# Schema string is embedded in the prompt so the model knows exactly what
+# JSON shape to produce. Kept in lockstep with `_EMPTY_INTELLIGENCE` so the
+# UI never has to special-case "missing key" vs "empty list".
+_INTELLIGENCE_SCHEMA = """{
+  "tldr": "2-3 sentence executive headline — what happened, why it matters",
+  "score": {
+    "productivity": 0-100,
+    "clarity": 0-100,
+    "decision_speed": 0-100,
+    "participation": 0-100,
+    "overall": 0-100
+  },
+  "topics": [
+    {"title": "string", "summary": "1-2 sentence summary", "started_at": "HH:MM or null", "ended_at": "HH:MM or null"}
+  ],
+  "decisions": [
+    {"title": "string", "detail": "string", "type": "approved|rejected|deferred|escalated", "time": "HH:MM or null"}
+  ],
+  "action_items": [
+    {"task": "string", "owner": "person name or null", "due": "YYYY-MM-DD or relative string or null", "priority": "low|med|high", "depends_on": "string or null"}
+  ],
+  "risks": [
+    {"title": "string", "severity": "low|med|high", "rationale": "1 sentence why this is risky"}
+  ],
+  "speakers": [
+    {"name": "string", "message_count": 0, "role_in_meeting": "leader|expert|contributor|silent|blocker", "highlights": ["short quotes or paraphrases"]}
+  ],
+  "sentiment": {
+    "overall": "positive|neutral|mixed|negative",
+    "energy": "low|medium|high",
+    "notes": "1-2 sentences about team mood / confidence"
+  },
+  "follow_ups": {
+    "emails": ["drafted subject lines for follow-up emails"],
+    "slack": ["1-line slack updates"],
+    "tasks": ["jira-style task titles"]
+  },
+  "contradictions": [
+    {"summary": "what conflicts", "between": ["statement A", "statement B"]}
+  ],
+  "knowledge_nuggets": ["facts/decisions worth saving to the org wiki"]
+}"""
+
+
+def _empty_intelligence() -> dict:
+    """Default-shaped intelligence object. Returned when there's nothing
+    meaningful to summarize so the UI can always render the same structure."""
+    return {
+        "tldr": "",
+        "score": {
+            "productivity": 0,
+            "clarity": 0,
+            "decision_speed": 0,
+            "participation": 0,
+            "overall": 0,
+        },
+        "topics": [],
+        "decisions": [],
+        "action_items": [],
+        "risks": [],
+        "speakers": [],
+        "sentiment": {"overall": "neutral", "energy": "low", "notes": ""},
+        "follow_ups": {"emails": [], "slack": [], "tasks": []},
+        "contradictions": [],
+        "knowledge_nuggets": [],
+    }
+
+
+def _extract_json(text: str) -> dict | None:
+    """Best-effort JSON extraction from a model response.
+
+    Claude is generally cooperative when asked to output raw JSON, but it
+    occasionally wraps the payload in ```json fences or trailing prose. We
+    strip fences first, then fall back to grabbing the largest {...} block.
+    """
+    if not text:
+        return None
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        # Drop a leading "json" language tag if present
+        if raw.lower().startswith("json"):
+            raw = raw[4:].lstrip("\r\n ")
+        # Trim any trailing fence remnants
+        raw = raw.split("```", 1)[0].strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    # Last-ditch: pull the outermost { ... } and try again
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            return None
+    return None
+
+
+def _format_chat_log(chat_log: list[dict], limit: int = 800) -> str:
+    """Render chat messages as `[HH:MM] Name: body`. Older middle slices are
+    trimmed for very long meetings so we stay under the input-token budget."""
+    if not chat_log:
+        return "(no chat activity)"
+    msgs = list(chat_log)
+    if len(msgs) > limit:
+        head = msgs[: limit // 2]
+        tail = msgs[-limit // 2 :]
+        msgs = head + [{"time": "", "name": "system", "body": f"... ({len(chat_log) - limit} messages trimmed) ..."}] + tail
+    lines = []
+    for m in msgs:
+        t = m.get("time") or m.get("timestamp") or ""
+        name = m.get("name") or m.get("sender") or m.get("user") or "Unknown"
+        body = m.get("body") or m.get("text") or m.get("content") or ""
+        if not body:
+            continue
+        lines.append(f"[{t}] {name}: {body}")
+    return "\n".join(lines) if lines else "(no chat activity)"
+
+
+def ai_generate_intelligence(
+    chat_log: list[dict],
+    meeting_title: str = "Meeting",
+    participants: list[dict] | None = None,
+    duration_seconds: int | None = None,
+) -> dict:
+    """Produce a structured meeting-intelligence payload.
+
+    Returns a dict shaped like `_empty_intelligence()`, plus metadata keys
+    `_model`, `_input_tokens`, `_output_tokens`, `_latency_ms`, `_error`.
+
+    Failure modes are surfaced via `_error`; callers should still persist the
+    row so the UI can show "generation failed — retry".
+    """
+    client = _get_client()
+    started = time.monotonic()
+    result: dict = _empty_intelligence()
+    meta = {
+        "_model": None,
+        "_input_tokens": None,
+        "_output_tokens": None,
+        "_latency_ms": None,
+        "_error": None,
+    }
+
+    if not client:
+        meta["_error"] = "Anthropic API key not configured."
+        result.update(meta)
+        return result
+
+    if not chat_log:
+        meta["_error"] = "No chat or transcript content available to analyze."
+        meta["_latency_ms"] = int((time.monotonic() - started) * 1000)
+        result.update(meta)
+        return result
+
+    settings = get_settings()
+    convo = _format_chat_log(chat_log)
+    roster = ""
+    if participants:
+        roster = "Participants: " + ", ".join(
+            f"{p.get('name','?')}" + (f" ({p.get('role')})" if p.get("role") else "")
+            for p in participants[:50]
+        )
+    duration_line = ""
+    if duration_seconds:
+        mins = duration_seconds // 60
+        duration_line = f"Meeting duration: ~{mins} minutes."
+
+    system = (
+        "You are Zoiko Sema's Meeting Intelligence Engine. Your job is to read a "
+        "meeting transcript (chat log) and produce an executive-grade structured "
+        "analysis in pure JSON.\n\n"
+        "Rules:\n"
+        "- Output JSON ONLY. No prose before or after. No markdown code fences.\n"
+        "- Match the schema exactly. Use [] for empty arrays, null for unknown scalars.\n"
+        "- Be specific: extract real owners, real deadlines, real decisions.\n"
+        "  Never invent names that don't appear in the chat log.\n"
+        "- Score fields are 0-100 integers; calibrate honestly.\n"
+        "- Sentiment must be grounded in actual language — don't sugarcoat.\n"
+        "- tldr should read like a McKinsey one-liner: what was decided, why it matters."
+    )
+
+    user_prompt = (
+        f"Meeting title: {meeting_title}\n"
+        f"{duration_line}\n"
+        f"{roster}\n\n"
+        f"Schema to follow:\n{_INTELLIGENCE_SCHEMA}\n\n"
+        f"Chat log (oldest first):\n{convo}\n\n"
+        "Return the JSON object now."
+    )
+
+    try:
+        response = client.messages.create(
+            model=settings.ai_model,
+            max_tokens=4096,
+            system=system,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        meta["_model"] = settings.ai_model
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            meta["_input_tokens"] = getattr(usage, "input_tokens", None)
+            meta["_output_tokens"] = getattr(usage, "output_tokens", None)
+        text = response.content[0].text if response.content else ""
+        parsed = _extract_json(text)
+        if parsed is None:
+            meta["_error"] = "Model did not return parseable JSON."
+        else:
+            # Merge so any missing keys fall back to defaults.
+            base = _empty_intelligence()
+            for k, v in parsed.items():
+                base[k] = v
+            result = base
+    except Exception as e:
+        log.exception("ai_generate_intelligence failed")
+        meta["_error"] = f"AI request failed: {e}"
+
+    meta["_latency_ms"] = int((time.monotonic() - started) * 1000)
+    result.update(meta)
+    return result

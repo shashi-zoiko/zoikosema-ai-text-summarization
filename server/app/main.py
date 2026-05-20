@@ -1,18 +1,23 @@
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from app.core.config import get_settings
-from app.core.database import init_db
+from app.core.database import engine, init_db
 from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.core.recording_cleanup import recording_cleanup_loop
-from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls
+from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence
 from app.websocket import chat as chat_ws, signaling as meeting_ws
 from app.connect import router as connect_router
+
+log = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -46,7 +51,36 @@ app.add_middleware(RateLimitMiddleware, max_requests=10, window=60)
 
 @app.get("/api/health")
 def health():
+    """Lightweight liveness probe — process is up and serving."""
     return {"status": "ok"}
+
+
+@app.get("/api/health/ready")
+def health_ready():
+    """Readiness probe — verifies the DB is reachable before accepting traffic.
+
+    Returns 503 with a structured error so load balancers / orchestrators can
+    pull the pod out of rotation when Postgres is unreachable instead of
+    routing requests that will then 500 inside endpoints.
+    """
+    checks: dict[str, dict] = {}
+    overall_ok = True
+
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        checks["database"] = {"ok": True}
+    except Exception as exc:  # noqa: BLE001 — surface any DB failure mode
+        overall_ok = False
+        checks["database"] = {"ok": False, "error": str(exc)[:200]}
+        log.warning("readiness: database check failed: %s", exc)
+
+    # AI is informational only — we don't fail readiness just because the key
+    # isn't configured; the app still serves non-AI traffic fine.
+    checks["ai"] = {"ok": bool(settings.anthropic_api_key), "configured": bool(settings.anthropic_api_key)}
+
+    body = {"status": "ok" if overall_ok else "degraded", "checks": checks}
+    return JSONResponse(body, status_code=200 if overall_ok else 503)
 
 
 app.include_router(auth.router)
@@ -59,6 +93,7 @@ app.include_router(notifications.router)
 app.include_router(invites.router)
 app.include_router(dashboard.router)
 app.include_router(ai.router)
+app.include_router(intelligence.router)
 app.include_router(admin.router)
 app.include_router(calls.router)
 app.include_router(chat_ws.router)

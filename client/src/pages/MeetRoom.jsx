@@ -1,17 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getApiBase, getWsBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Avatar from '../components/Avatar'
 import Icon from '../components/Icon'
-import Whiteboard from '../components/Whiteboard'
-import AnnotationOverlay from '../components/AnnotationOverlay'
+// Heavy panels that are off-screen by default — defer their JS until the
+// user actually opens them. Saves ~10-20 KB on initial MeetRoom load and
+// avoids paying for canvas/AI-panel deps just to enter a meeting. The
+// `null` fallback means the overlay simply doesn't appear for the ~50 ms
+// it takes the chunk to load — invisible to the user.
+const _Whiteboard = lazy(() => import('../components/Whiteboard'))
+const _AnnotationOverlay = lazy(() => import('../components/AnnotationOverlay'))
+const _AIChatPanel = lazy(() => import('../components/AIChatPanel'))
+const Whiteboard = (props) => (
+  <Suspense fallback={null}><_Whiteboard {...props} /></Suspense>
+)
+const AnnotationOverlay = (props) => (
+  <Suspense fallback={null}><_AnnotationOverlay {...props} /></Suspense>
+)
+const AIChatPanel = (props) => (
+  <Suspense fallback={null}><_AIChatPanel {...props} /></Suspense>
+)
 import useSpeakerDetection from '../hooks/useSpeakerDetection'
 import useMediaDevices from '../hooks/useMediaDevices'
 import useBackgroundEffect from '../hooks/useBackgroundEffect'
 import useNoiseSuppression from '../hooks/useNoiseSuppression'
-import AIChatPanel from '../components/AIChatPanel'
+import MeetingDock from '../components/meeting/MeetingDock'
+import PeerTile from '../components/meeting/PeerTile'
+import Logo from '../components/ui/Logo'
+import ThemeToggle from '../components/ui/ThemeToggle'
+import Badge from '../components/ui/Badge'
+import { Check, Copy as CopyIcon, Lock as LockIcon, MonitorUp as ShareIcon, Radio as RecIcon } from 'lucide-react'
 import './Meet.css'
+import './MeetRoom.theme.css'
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -68,6 +89,7 @@ export default function MeetRoom() {
   const [recapText, setRecapText] = useState('')
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapOpen, setRecapOpen] = useState(false)
+  const [intelLoading, setIntelLoading] = useState(false)
 
   // Live captions (browser SpeechRecognition; broadcast finals to peers)
   const [captionsOn, setCaptionsOn] = useState(false)
@@ -133,6 +155,15 @@ export default function MeetRoom() {
     })
   }, [])
   const { attachStream, detachStream } = useSpeakerDetection(onSpeaking)
+
+  // Callback ref: re-attach the active stream whenever the <video> remounts
+  // (e.g. after toggling the camera off and back on, which unmounts the tile).
+  const attachSelfVideoEl = useCallback((el) => {
+    selfVideoRef.current = el
+    if (!el) return
+    const stream = screenStreamRef.current || processedStreamRef.current || localStreamRef.current
+    if (stream && el.srcObject !== stream) el.srcObject = stream
+  }, [])
 
   // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -824,6 +855,42 @@ export default function MeetRoom() {
     }
   }
 
+  // Kicks off a structured intelligence run on the new endpoint and opens
+  // the rich /meet/:code/intelligence page once it's ready. Host-only on the
+  // server; we surface the rejection inline if the API says no.
+  const generateIntelligence = async () => {
+    if (intelLoading) return
+    setIntelLoading(true)
+    try {
+      const token = localStorage.getItem('zoiko_token')
+      const chatLog = chatMessages.map((m) => ({
+        name: m.name,
+        body: m.body,
+        time: m.created_at,
+      }))
+      const participants = [user.name, ...peerList.map((p) => p.name)].filter(Boolean).map((n) => ({ name: n }))
+      const res = await fetch(`${getApiBase()}/api/meetings/${code}/intelligence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ chat_log: chatLog, participants, force: true }),
+      })
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`
+        try { detail = (await res.json()).detail || detail } catch {}
+        setPermissionToast(`Intelligence failed: ${detail}`)
+        setTimeout(() => setPermissionToast(''), 4000)
+        return
+      }
+      // Open the rich view in a new tab so the meeting keeps running.
+      window.open(`/meet/${code}/intelligence`, '_blank', 'noopener,noreferrer')
+    } catch (e) {
+      setPermissionToast(`Intelligence failed: ${e.message || e}`)
+      setTimeout(() => setPermissionToast(''), 4000)
+    } finally {
+      setIntelLoading(false)
+    }
+  }
+
   // ── Live captions (browser SpeechRecognition) ──────────────────────────
   const captionsSupported = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
 
@@ -978,7 +1045,7 @@ export default function MeetRoom() {
         <div className="speaker-main">
           {isSelfSpeaker ? (
             <div className={'tile self spotlight' + (screenOn ? ' screen' : '') + (speakingPeers.has('self') ? ' speaking' : '') + (pinnedPeerId === 'self' ? ' pinned' : '')}>
-              {videoOn || screenOn ? <video ref={selfVideoRef} autoPlay playsInline muted />
+              {videoOn || screenOn ? <video ref={attachSelfVideoEl} autoPlay playsInline muted />
                 : <div className="tile-placeholder"><Avatar name={user.name} color={user.avatar_color} size="lg" /></div>}
               <button
                 className={'tile-pin-btn' + (pinnedPeerId === 'self' ? ' active' : '')}
@@ -1022,7 +1089,7 @@ export default function MeetRoom() {
         <div className="speaker-strip">
           {!isSelfSpeaker && (
             <div className={'tile self mini' + (speakingPeers.has('self') ? ' speaking' : '')}>
-              {videoOn ? <video ref={!isSelfSpeaker ? selfVideoRef : undefined} autoPlay playsInline muted />
+              {videoOn ? <video ref={!isSelfSpeaker ? attachSelfVideoEl : undefined} autoPlay playsInline muted />
                 : <div className="tile-placeholder"><Avatar name={user.name} color={user.avatar_color} size="sm" /></div>}
               <div className="tile-name"><span>{user.name}</span></div>
               {!audioOn && <div className="tile-muted" title="Muted"><Icon name="micOff" size={12} /></div>}
@@ -1048,7 +1115,7 @@ export default function MeetRoom() {
   const renderGridView = () => (
     <div className={`room-stage tiles-${Math.min(tileCount, 12)}`}>
       <div className={'tile self' + (screenOn ? ' screen' : '') + (speakingPeers.has('self') ? ' speaking' : '') + (pinnedPeerId === 'self' ? ' pinned' : '')}>
-        {videoOn || screenOn ? <video ref={selfVideoRef} autoPlay playsInline muted />
+        {videoOn || screenOn ? <video ref={attachSelfVideoEl} autoPlay playsInline muted />
           : <div className="tile-placeholder"><Avatar name={user.name} color={user.avatar_color} size="lg" /></div>}
         {handRaised && <div className="tile-hand" title="Hand raised"><Icon name="hand" size={16} /></div>}
         <button
@@ -1095,34 +1162,45 @@ export default function MeetRoom() {
   )
 
   return (
-    <div className="room">
-      <div className="room-topbar">
-        <div className="room-topbar-brand">
-          <span className="room-topbar-brand-mark">Z</span>
-          <span className="room-topbar-brand-name">ZoikoSema</span>
-          <span className="room-topbar-brand-pill">Meet</span>
-        </div>
+    <div className="room room-themed">
+      {/* Ambient mesh background — futuristic depth */}
+      <div aria-hidden className="room-ambient">
+        <div className="room-ambient-grid" />
+        <div className="room-ambient-orb room-ambient-orb-a" />
+        <div className="room-ambient-orb room-ambient-orb-b" />
+        <div className="room-ambient-orb room-ambient-orb-c" />
+      </div>
+
+      <div className="room-topbar room-topbar-glass">
+        <Logo size={36} withWordmark />
+        <span className="room-topbar-pill">Meeting</span>
         <div className="room-title" />
         <div className="room-meta">
           {isRecording && (
-            <span className="badge recording-badge" title="Recording in progress">
-              <span className="rec-dot" /> REC {formatRecTime(recordingTime)}
-            </span>
+            <Badge tone="danger" size="md" pulse>
+              <RecIcon className="h-3 w-3" /> REC {formatRecTime(recordingTime)}
+            </Badge>
           )}
-          <span className="badge live">Live</span>
-          <span className={'quality-badge quality-' + qualityLevel} title={`Quality: ${qualityLevel}`}>{qualityLabel}</span>
+          <Badge tone="live" size="md" pulse>Live</Badge>
+          <Badge tone="neutral" size="md" title={`Quality: ${qualityLevel}`}>{qualityLabel}</Badge>
           {meetingLocked && (
-            <span className="badge locked-badge" title="Meeting is locked"><Icon name="lock" size={11} /> Locked</span>
+            <Badge tone="warn" size="md" title="Meeting is locked"><LockIcon className="h-3 w-3" /> Locked</Badge>
           )}
           {activeSharerCount > 0 && (
-            <span className="badge presenter-badge" title={`${activeSharerCount} presenting`}>
-              <Icon name="present" size={11} /> {activeSharerCount} sharing
-            </span>
+            <Badge tone="accent" size="md" title={`${activeSharerCount} presenting`}>
+              <ShareIcon className="h-3 w-3" /> {activeSharerCount} sharing
+            </Badge>
           )}
-          <span className="room-code">{code}</span>
-          <button className="ghost room-copy" onClick={copyInvite} title="Copy invite link">
-            <Icon name="copy" size={14} /> Copy
+          <span className="room-code-pill mono" title="Meeting code">{code}</span>
+          <button
+            className="room-copy-pill"
+            onClick={copyInvite}
+            title="Copy invite link"
+            aria-label="Copy invite link"
+          >
+            <CopyIcon className="h-3.5 w-3.5" /> Copy
           </button>
+          <ThemeToggle />
         </div>
       </div>
 
@@ -1268,8 +1346,16 @@ export default function MeetRoom() {
                           <Icon name="download" size={14} /> Download attendance (CSV)
                         </button>
                       )}
-                      <button className="host-control-btn" onClick={generateRecap} disabled={recapLoading || chatMessages.length === 0} title="Generate an AI recap from the meeting chat">
+                      <button className="host-control-btn" onClick={generateRecap} disabled={recapLoading || chatMessages.length === 0} title="Quick plain-text recap from chat">
                         <Icon name="sparkle" size={14} /> {recapLoading ? 'Generating recap…' : 'Generate AI recap'}
+                      </button>
+                      <button
+                        className="host-control-btn"
+                        onClick={generateIntelligence}
+                        disabled={intelLoading || chatMessages.length === 0}
+                        title="Open the structured Meeting Intelligence page in a new tab"
+                      >
+                        <Icon name="sparkle" size={14} /> {intelLoading ? 'Analyzing…' : 'Open Meeting Intelligence'}
                       </button>
                       {isHost && (
                         <button className="host-control-btn danger" onClick={endMeeting}>
@@ -1381,145 +1467,48 @@ export default function MeetRoom() {
         )}
       </div>
 
-      {/* ── Bottom controls ─────────────────────────────────────────────── */}
-      <div className="room-controls">
-        <div className="room-controls-info" aria-hidden="false">
-          <span className="clock">{clock}</span>
-          <span className="sep">|</span>
-          <span className="code">{code}</span>
-        </div>
-        <div className="room-controls-group">
-          <button className={'round-btn lg' + (audioOn ? '' : ' off')} onClick={toggleAudio} title={audioOn ? 'Mute' : 'Unmute'}>
-            <Icon name={audioOn ? 'mic' : 'micOff'} size={26} />
-          </button>
-          <button className={'round-btn lg' + (videoOn ? '' : ' off')} onClick={toggleVideo} title={videoOn ? 'Camera off' : 'Camera on'}>
-            <Icon name={videoOn ? 'camera' : 'cameraOff'} size={26} />
-          </button>
-
-          {/* Screen share with mode picker */}
-          <div style={{ position: 'relative' }}>
-            <button
-              className={'round-btn lg' + (screenOn ? ' active' : '')}
-              onClick={screenOn ? stopScreenShare : () => setShowSharePicker(!showSharePicker)}
-              disabled={!screenOn && !screenshareEnabled && !isHostOrCohost}
-              title={
-                !screenOn && !screenshareEnabled && !isHostOrCohost
-                  ? 'Screen sharing is disabled by the host'
-                  : (screenOn ? 'Stop sharing' : 'Share screen')
-              }
-            >
-              <Icon name="screen" size={26} />
-            </button>
-            {showSharePicker && (
-              <div className="share-picker">
-                <div className="share-picker-title">Share your screen</div>
-                <button className="share-picker-opt" onClick={() => startScreenShare('screen')}>
-                  <Icon name="screen" size={18} />
-                  <div>
-                    <div className="share-picker-opt-title">Entire screen</div>
-                    <div className="share-picker-opt-sub">Share everything on your display</div>
-                  </div>
-                </button>
-                <button className="share-picker-opt" onClick={() => startScreenShare('window')}>
-                  <Icon name="spotlight" size={18} />
-                  <div>
-                    <div className="share-picker-opt-title">Application window</div>
-                    <div className="share-picker-opt-sub">Share a specific application</div>
-                  </div>
-                </button>
-                <button className="share-picker-opt" onClick={() => startScreenShare('tab')}>
-                  <Icon name="layout" size={18} />
-                  <div>
-                    <div className="share-picker-opt-title">Browser tab</div>
-                    <div className="share-picker-opt-sub">Share a single tab with audio</div>
-                  </div>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Record button */}
-          <button
-            className={'round-btn lg' + (isRecording ? ' recording' : '')}
-            onClick={isRecording ? stopRecording : startRecording}
-            title={isRecording ? 'Stop recording' : 'Start recording'}
-          >
-            <Icon name={isRecording ? 'recordStop' : 'record'} size={26} />
-          </button>
-
-          <button className={'round-btn lg' + (bgMode !== 'none' ? ' active' : '')} onClick={cycleBgMode} title={`Background: ${bgMode === 'none' ? 'Off' : bgMode}`}>
-            <Icon name="blur" size={26} />
-          </button>
-          <button className={'round-btn lg' + (noiseSupp ? ' active' : '')} onClick={toggleNoiseSuppression} title={noiseSupp ? 'Noise suppression on' : 'Noise suppression off'}>
-            <Icon name="noise" size={26} />
-          </button>
-          <button className={'round-btn lg hand-btn' + (handRaised ? ' active' : '')} onClick={toggleHand} title={handRaised ? 'Lower hand' : 'Raise hand'}>
-            <Icon name="hand" size={26} />
-          </button>
-          {captionsSupported && (
-            <button
-              className={'round-btn lg' + (captionsOn ? ' active' : '')}
-              onClick={toggleCaptions}
-              title={captionsOn ? 'Turn off live captions' : 'Turn on live captions'}
-            >
-              <Icon name="type" size={26} />
-            </button>
-          )}
-          <button className="round-btn lg smile-btn" onClick={() => setShowEmoji((v) => !v)} title="Send reaction">
-            <Icon name="smile" size={26} />
-          </button>
-          {showEmoji && (
-            <div className="emoji-picker">
-              {['\u{1F44D}', '\u{2764}\u{FE0F}', '\u{1F602}', '\u{1F389}', '\u{1F44F}', '\u{1F64F}', '\u{1F525}', '\u{1F62E}'].map((e) => (
-                <button key={e} onClick={() => sendReaction(e)}>{e}</button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="room-controls-group">
-          {/* Collaboration tools */}
-          <button
-            className={'round-btn lg' + (showWhiteboard ? ' active' : '')}
-            onClick={() => { setShowWhiteboard(!showWhiteboard); if (!showWhiteboard) setShowAnnotations(false) }}
-            title={showWhiteboard ? 'Close whiteboard' : 'Open whiteboard'}
-          >
-            <Icon name="whiteboard" size={26} />
-          </button>
-          {anyoneSharing && (
-            <button
-              className={'round-btn lg' + (showAnnotations ? ' active' : '')}
-              onClick={() => { setShowAnnotations(!showAnnotations); if (!showAnnotations) setShowWhiteboard(false) }}
-              title={showAnnotations ? 'Stop annotating' : 'Annotate screen'}
-            >
-              <Icon name="pen" size={26} />
-            </button>
-          )}
-
-          <button className={'round-btn lg' + (layout === 'speaker' ? ' active' : '')} onClick={toggleLayout} title={layout === 'grid' ? 'Speaker view' : 'Grid view'}>
-            <Icon name={layout === 'grid' ? 'speakerView' : 'gridView'} size={26} />
-          </button>
-          <button className={'round-btn lg' + (sidebar === 'chat' ? ' active' : '')} onClick={() => setSidebar((s) => (s === 'chat' ? null : 'chat'))} title="Open chat">
-            <Icon name="chat" size={26} />
-          </button>
-          <button className={'round-btn lg' + (sidebar === 'people' ? ' active' : '')} onClick={() => setSidebar((s) => (s === 'people' ? null : 'people'))} title="Participants">
-            <Icon name="users" size={26} />
-            {waitingList.length > 0 && <span className="btn-badge">{waitingList.length}</span>}
-          </button>
-          <button className={'round-btn lg' + (sidebar === 'ai' ? ' active' : '')} onClick={() => setSidebar((s) => (s === 'ai' ? null : 'ai'))} title="AI Assistant">
-            <Icon name="robot" size={26} />
-          </button>
-          <button className={'round-btn lg settings-btn' + (sidebar === 'settings' ? ' active' : '')} onClick={() => setSidebar((s) => (s === 'settings' ? null : 'settings'))} title="Settings">
-            <Icon name="settings" size={26} />
-          </button>
-        </div>
-
-        <div className="room-controls-group">
-          <button className="round-btn lg leave" onClick={leave} title="Leave meeting">
-            <Icon name="hangup" size={26} />
-          </button>
-        </div>
-      </div>
+      {/* ── Bottom controls (new glass dock) ──────────────────────────── */}
+      <MeetingDock
+        clock={clock}
+        code={code}
+        audioOn={audioOn}
+        toggleAudio={toggleAudio}
+        videoOn={videoOn}
+        toggleVideo={toggleVideo}
+        screenOn={screenOn}
+        screenshareEnabled={screenshareEnabled}
+        isHostOrCohost={isHostOrCohost}
+        showSharePicker={showSharePicker}
+        setShowSharePicker={setShowSharePicker}
+        startScreenShare={startScreenShare}
+        stopScreenShare={stopScreenShare}
+        isRecording={isRecording}
+        startRecording={startRecording}
+        stopRecording={stopRecording}
+        bgMode={bgMode}
+        cycleBgMode={cycleBgMode}
+        noiseSupp={noiseSupp}
+        toggleNoiseSuppression={toggleNoiseSuppression}
+        handRaised={handRaised}
+        toggleHand={toggleHand}
+        captionsSupported={captionsSupported}
+        captionsOn={captionsOn}
+        toggleCaptions={toggleCaptions}
+        showEmoji={showEmoji}
+        setShowEmoji={setShowEmoji}
+        sendReaction={sendReaction}
+        showWhiteboard={showWhiteboard}
+        setShowWhiteboard={setShowWhiteboard}
+        anyoneSharing={anyoneSharing}
+        showAnnotations={showAnnotations}
+        setShowAnnotations={setShowAnnotations}
+        layout={layout}
+        toggleLayout={toggleLayout}
+        sidebar={sidebar}
+        setSidebar={setSidebar}
+        waitingList={waitingList}
+        leave={leave}
+      />
 
       <div className="reaction-overlay">
         {reactions.map((r) => (
@@ -1578,42 +1567,4 @@ export default function MeetRoom() {
   )
 }
 
-function PeerTile({ peer, spotlight = false, mini = false, speaking = false, pinned = false, onTogglePin }) {
-  const videoRef = useRef(null)
-  useEffect(() => {
-    if (videoRef.current && peer.stream) videoRef.current.srcObject = peer.stream
-  }, [peer.stream])
-  const videoOff = peer.video === false
-  const audioOff = peer.audio === false
-  const cls = ['tile']
-  if (peer.screen) cls.push('screen')
-  if (spotlight) cls.push('spotlight')
-  if (mini) cls.push('mini')
-  if (speaking) cls.push('speaking')
-  if (pinned) cls.push('pinned')
-
-  const tint = peer.color || '#7c8cff'
-  return (
-    <div className={cls.join(' ')} style={{ '--peer-tint': tint }}>
-      {!videoOff && peer.stream
-        ? <video ref={videoRef} autoPlay playsInline />
-        : <div className="tile-placeholder"><Avatar name={peer.name || '?'} color={tint} size={mini ? 'sm' : 'lg'} /></div>}
-      {peer.hand && <div className="tile-hand" title="Hand raised"><Icon name="hand" size={16} /></div>}
-      {onTogglePin && (
-        <button
-          className={'tile-pin-btn' + (pinned ? ' active' : '')}
-          onClick={(e) => { e.stopPropagation(); onTogglePin() }}
-          title={pinned ? 'Unpin' : 'Pin to main view'}
-        >
-          <Icon name="pin" size={mini ? 12 : 14} />
-        </button>
-      )}
-      <div className="tile-name">
-        <span>{peer.name || '...'}{peer.screen ? ' · sharing' : ''}</span>
-        {peer.role === 'host' && <span className="tile-role-badge host">Host</span>}
-        {peer.role === 'co_host' && <span className="tile-role-badge cohost">Co-host</span>}
-      </div>
-      {audioOff && <div className="tile-muted" title="Muted"><Icon name="micOff" size={mini ? 12 : 14} /></div>}
-    </div>
-  )
-}
+// PeerTile is now imported from ../components/meeting/PeerTile

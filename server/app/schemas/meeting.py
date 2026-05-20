@@ -103,3 +103,37 @@ class RecordingShareOut(BaseModel):
     created_at: datetime
     meeting_title: str | None = None
     recorder_name: str | None = None
+
+
+# ── Meeting intelligence ───────────────────────────────────────────────────
+
+class IntelligenceGenerateIn(BaseModel):
+    # Optional inline chat log (oldest-first). If omitted the server falls back
+    # to the latest recording's chat_log file for this meeting.
+    chat_log: list[dict] | None = None
+    # Optional roster snapshot for richer speaker analytics.
+    participants: list[dict] | None = None
+    # Force a fresh generation even if a recent ready record exists.
+    force: bool = False
+
+
+class MeetingIntelligenceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    meeting_id: int
+    recording_id: int | None = None
+    requested_by_id: int | None = None
+    status: str
+    source: str
+    model_used: str | None = None
+    tldr: str | None = None
+    payload: dict | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    latency_ms: int | None = None
+    error_message: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+    meeting_code: str | None = None
+    meeting_title: str | None = None

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, ForeignKey, Boolean, Integer, Text
+from sqlalchemy import String, DateTime, ForeignKey, Boolean, Integer, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -106,3 +106,68 @@ class MeetingRecording(Base):
 
     meeting: Mapped[Meeting] = relationship()
     user: Mapped["User"] = relationship()
+
+
+# ── Meeting Intelligence (structured AI summary) ───────────────────────────
+
+# Lifecycle of a generated intelligence record.
+INTEL_STATUS_PENDING = "pending"      # row exists, generation not started
+INTEL_STATUS_GENERATING = "generating"
+INTEL_STATUS_READY = "ready"
+INTEL_STATUS_FAILED = "failed"
+
+# Where the source text came from. We currently feed chat transcripts; the
+# `transcript` and `hybrid` values are reserved so future audio-derived
+# transcripts can populate the same table without a schema change.
+INTEL_SOURCE_CHAT = "chat"
+INTEL_SOURCE_TRANSCRIPT = "transcript"
+INTEL_SOURCE_HYBRID = "hybrid"
+
+
+class MeetingIntelligence(Base):
+    """Structured AI insights for a meeting.
+
+    A meeting can have multiple intelligence rows over time (each `generate`
+    inserts a new one); clients always read the most recent `ready` row.
+    """
+
+    __tablename__ = "meeting_intelligence"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    meeting_id: Mapped[int] = mapped_column(
+        ForeignKey("meetings.id", ondelete="CASCADE"), index=True
+    )
+    # Optional link to the recording whose chat log seeded this run.
+    recording_id: Mapped[int | None] = mapped_column(
+        ForeignKey("meeting_recordings.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # User who triggered generation (host or any participant w/ access).
+    requested_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    status: Mapped[str] = mapped_column(String(24), default=INTEL_STATUS_PENDING)
+    source: Mapped[str] = mapped_column(String(24), default=INTEL_SOURCE_CHAT)
+    model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Short headline summary; duplicated out of `payload` for cheap list views.
+    tldr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Full structured analysis. Schema is described in core/ai.py;
+    # treated as opaque JSON at the DB layer so new keys don't need migrations.
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Token + latency telemetry the UI can show.
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    meeting: Mapped[Meeting] = relationship()
