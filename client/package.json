@@ -17,9 +17,9 @@
     "electron:dev": "concurrently -k -n VITE,ELECTRON -c magenta,cyan \"vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .\"",
     "electron:attach": "wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .",
     "electron:start": "electron .",
-    "electron:build": "vite build && electron-builder",
-    "electron:dist": "vite build && electron-builder --publish always",
-    "electron:pack": "vite build && electron-builder --dir"
+    "electron:build": "cross-env VITE_BASE=./ vite build && electron-builder",
+    "electron:dist": "cross-env VITE_BASE=./ vite build && electron-builder --publish always",
+    "electron:pack": "cross-env VITE_BASE=./ vite build && electron-builder --dir"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",

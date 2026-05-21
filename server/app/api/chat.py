@@ -4,7 +4,7 @@ from datetime import datetime, timezone as tz
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, or_, and_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -40,74 +40,17 @@ def _membership(db: Session, channel_id: int, user_id: int) -> ChannelMember | N
     )
 
 
-def _channel_out(db: Session, channel: Channel, user_id: int | None = None) -> ChannelOut:
-    member_users = db.scalars(
-        select(User)
-        .join(ChannelMember, ChannelMember.user_id == User.id)
-        .where(ChannelMember.channel_id == channel.id)
-    ).all()
-    last = db.scalar(
-        select(Message)
-        .where(Message.channel_id == channel.id, Message.deleted_at.is_(None))
-        .order_by(desc(Message.created_at))
-        .limit(1)
-    )
-    unread = 0
-    if user_id and last:
-        receipt = db.scalar(
-            select(MessageReadReceipt).where(
-                MessageReadReceipt.channel_id == channel.id,
-                MessageReadReceipt.user_id == user_id,
-            )
-        )
-        if receipt:
-            unread = db.scalar(
-                select(func.count(Message.id)).where(
-                    Message.channel_id == channel.id,
-                    Message.id > receipt.last_read_message_id,
-                    Message.deleted_at.is_(None),
-                )
-            ) or 0
-        else:
-            unread = db.scalar(
-                select(func.count(Message.id)).where(
-                    Message.channel_id == channel.id,
-                    Message.deleted_at.is_(None),
-                )
-            ) or 0
+# Serializers are intentionally split from loaders so list endpoints cannot
+# accidentally re-introduce N+1 query patterns. _serialize_* takes pure data;
+# anything needing DB access lives in _load_*_ctx and must accept a batch.
 
-    return ChannelOut(
-        id=channel.id,
-        name=channel.name,
-        is_direct=channel.is_direct,
-        created_at=channel.created_at,
-        members=[ChannelMemberOut.model_validate(u) for u in member_users],
-        last_message_preview=(last.body[:120] if last else None),
-        last_message_at=last.created_at if last else None,
-        unread_count=unread,
-    )
-
-
-def _message_out(msg: Message, sender: User, db: Session) -> MessageOut:
-    reactions_raw = db.scalars(
-        select(MessageReaction).where(MessageReaction.message_id == msg.id)
-    ).all()
-    reaction_users = {}
-    if reactions_raw:
-        uids = {r.user_id for r in reactions_raw}
-        reaction_users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(uids))).all()}
-
-    reactions = [
-        ReactionOut(emoji=r.emoji, user_id=r.user_id, user_name=reaction_users.get(r.user_id, sender).name)
-        for r in reactions_raw
-    ]
-
-    reply_preview = None
-    if msg.reply_to_id:
-        parent = db.get(Message, msg.reply_to_id)
-        if parent and not parent.deleted_at:
-            reply_preview = parent.body[:120]
-
+def _serialize_message(
+    msg: Message,
+    sender: User,
+    reactions: list[MessageReaction],
+    reaction_users: dict[int, User],
+    reply_preview: str | None,
+) -> MessageOut:
     return MessageOut(
         id=msg.id,
         channel_id=msg.channel_id,
@@ -123,8 +66,158 @@ def _message_out(msg: Message, sender: User, db: Session) -> MessageOut:
         file_name=msg.file_name,
         file_type=msg.file_type,
         file_size=msg.file_size,
-        reactions=reactions,
+        reactions=[
+            ReactionOut(
+                emoji=r.emoji,
+                user_id=r.user_id,
+                user_name=reaction_users.get(r.user_id, sender).name,
+            )
+            for r in reactions
+        ],
     )
+
+
+def _load_message_ctx(
+    db: Session, messages: list[Message]
+) -> tuple[dict[int, list[MessageReaction]], dict[int, User], dict[int, str]]:
+    """Batch-fetch reactions, reaction users, and reply previews for a list of
+    messages in 3 queries total — replaces the per-message fetches that turned
+    list_messages into 100+ sequential round-trips."""
+    if not messages:
+        return {}, {}, {}
+
+    msg_ids = [m.id for m in messages]
+    reactions_raw = db.scalars(
+        select(MessageReaction).where(MessageReaction.message_id.in_(msg_ids))
+    ).all()
+    reactions_by_msg: dict[int, list[MessageReaction]] = {}
+    for r in reactions_raw:
+        reactions_by_msg.setdefault(r.message_id, []).append(r)
+
+    reaction_user_ids = {r.user_id for r in reactions_raw}
+    reaction_users: dict[int, User] = {}
+    if reaction_user_ids:
+        reaction_users = {
+            u.id: u
+            for u in db.scalars(select(User).where(User.id.in_(reaction_user_ids))).all()
+        }
+
+    reply_ids = {m.reply_to_id for m in messages if m.reply_to_id}
+    reply_previews: dict[int, str] = {}
+    if reply_ids:
+        parents = db.scalars(select(Message).where(Message.id.in_(reply_ids))).all()
+        for p in parents:
+            if not p.deleted_at:
+                reply_previews[p.id] = p.body[:120]
+
+    return reactions_by_msg, reaction_users, reply_previews
+
+
+def _serialize_single_message(db: Session, msg: Message, sender: User) -> MessageOut:
+    """For endpoints that return exactly one message (post_message, upload_file).
+    Wraps the bulk loader so single-message paths stay one-call."""
+    reactions_by_msg, reaction_users, reply_previews = _load_message_ctx(db, [msg])
+    return _serialize_message(
+        msg,
+        sender,
+        reactions_by_msg.get(msg.id, []),
+        reaction_users,
+        reply_previews.get(msg.reply_to_id) if msg.reply_to_id else None,
+    )
+
+
+def _serialize_single_channel(db: Session, channel: Channel, user_id: int) -> ChannelOut:
+    """For endpoints that return exactly one channel. Wraps the bulk loader."""
+    members_by_channel, last_msg_by_channel, unread_by_channel = _load_channels_ctx(
+        db, [channel], user_id
+    )
+    return _serialize_channel(
+        channel,
+        members_by_channel.get(channel.id, []),
+        last_msg_by_channel.get(channel.id),
+        unread_by_channel.get(channel.id, 0),
+    )
+
+
+def _serialize_channel(
+    channel: Channel,
+    members: list[User],
+    last_message: Message | None,
+    unread_count: int,
+) -> ChannelOut:
+    return ChannelOut(
+        id=channel.id,
+        name=channel.name,
+        is_direct=channel.is_direct,
+        created_at=channel.created_at,
+        members=[ChannelMemberOut.model_validate(u) for u in members],
+        last_message_preview=(last_message.body[:120] if last_message else None),
+        last_message_at=last_message.created_at if last_message else None,
+        unread_count=unread_count,
+    )
+
+
+def _load_channels_ctx(
+    db: Session, channels: list[Channel], user_id: int
+) -> tuple[dict[int, list[User]], dict[int, Message], dict[int, int]]:
+    """Batch-fetch members, last messages, and unread counts for a list of
+    channels — replaces the 3-queries-per-channel pattern in list_my_channels."""
+    if not channels:
+        return {}, {}, {}
+    channel_ids = [c.id for c in channels]
+
+    # Members per channel: single join, group in Python.
+    member_rows = db.execute(
+        select(ChannelMember.channel_id, User)
+        .join(User, User.id == ChannelMember.user_id)
+        .where(ChannelMember.channel_id.in_(channel_ids))
+    ).all()
+    members_by_channel: dict[int, list[User]] = {}
+    for cid, u in member_rows:
+        members_by_channel.setdefault(cid, []).append(u)
+
+    # Last message per channel via correlated subquery on max(id), one round trip.
+    last_id_subq = (
+        select(Message.channel_id, func.max(Message.id).label("max_id"))
+        .where(Message.channel_id.in_(channel_ids), Message.deleted_at.is_(None))
+        .group_by(Message.channel_id)
+        .subquery()
+    )
+    last_msgs = db.scalars(
+        select(Message).join(last_id_subq, Message.id == last_id_subq.c.max_id)
+    ).all()
+    last_msg_by_channel = {m.channel_id: m for m in last_msgs}
+
+    # Receipts for this user across all channels in one query.
+    receipts = db.scalars(
+        select(MessageReadReceipt).where(
+            MessageReadReceipt.channel_id.in_(channel_ids),
+            MessageReadReceipt.user_id == user_id,
+        )
+    ).all()
+    receipt_by_channel = {r.channel_id: r.last_read_message_id for r in receipts}
+
+    # Single query for all unread counts: per-channel "id > last_read_id" if a
+    # receipt exists, else count-all. The OR-of-AND-pairs lets PG do this in
+    # one indexed scan instead of N round-trips.
+    conditions = []
+    for cid in channel_ids:
+        last_read = receipt_by_channel.get(cid)
+        if last_read is None:
+            conditions.append(Message.channel_id == cid)
+        else:
+            conditions.append(and_(Message.channel_id == cid, Message.id > last_read))
+
+    unread_rows = db.execute(
+        select(Message.channel_id, func.count(Message.id))
+        .where(Message.deleted_at.is_(None), or_(*conditions))
+        .group_by(Message.channel_id)
+    ).all()
+    unread_by_channel: dict[int, int] = {cid: 0 for cid in channel_ids}
+    for cid, cnt in unread_rows:
+        unread_by_channel[cid] = cnt
+
+    return members_by_channel, last_msg_by_channel, unread_by_channel
 
 
 # ── Channels ────────────────────────────────────────────────────────────
@@ -138,10 +231,21 @@ def list_my_channels(
     ).all()
     if not channel_ids:
         return []
-    channels = db.scalars(
+    channels = list(db.scalars(
         select(Channel).where(Channel.id.in_(channel_ids)).order_by(desc(Channel.created_at))
-    ).all()
-    results = [_channel_out(db, c, user.id) for c in channels]
+    ).all())
+    members_by_channel, last_msg_by_channel, unread_by_channel = _load_channels_ctx(
+        db, channels, user.id
+    )
+    results = [
+        _serialize_channel(
+            c,
+            members_by_channel.get(c.id, []),
+            last_msg_by_channel.get(c.id),
+            unread_by_channel.get(c.id, 0),
+        )
+        for c in channels
+    ]
     results.sort(key=lambda c: c.last_message_at or c.created_at, reverse=True)
     return results
 
@@ -167,7 +271,7 @@ def create_channel(
         for c in candidates:
             member_set = {m.user_id for m in c.members}
             if member_set == {user.id, other_id}:
-                return _channel_out(db, c, user.id)
+                return _serialize_single_channel(db, c, user.id)
 
     channel = Channel(name=data.name.strip(), is_direct=data.is_direct, created_by=user.id)
     db.add(channel)
@@ -176,7 +280,7 @@ def create_channel(
         db.add(ChannelMember(channel_id=channel.id, user_id=uid))
     db.commit()
     db.refresh(channel)
-    return _channel_out(db, channel, user.id)
+    return _serialize_single_channel(db, channel, user.id)
 
 
 # ── Messages ────────────────────────────────────────────────────────────
@@ -202,7 +306,17 @@ def list_messages(
     messages.reverse()
     sender_ids = {m.sender_id for m in messages}
     senders = {u.id: u for u in db.scalars(select(User).where(User.id.in_(sender_ids))).all()}
-    return [_message_out(m, senders[m.sender_id], db) for m in messages]
+    reactions_by_msg, reaction_users, reply_previews = _load_message_ctx(db, messages)
+    return [
+        _serialize_message(
+            m,
+            senders[m.sender_id],
+            reactions_by_msg.get(m.id, []),
+            reaction_users,
+            reply_previews.get(m.reply_to_id) if m.reply_to_id else None,
+        )
+        for m in messages
+    ]
 
 
 @router.post("/{channel_id}/messages", response_model=MessageOut, status_code=201)
@@ -232,7 +346,7 @@ def post_message(
     db.add(msg)
     db.commit()
     db.refresh(msg)
-    return _message_out(msg, user, db)
+    return _serialize_single_message(db, msg, user)
 
 
 @router.delete("/{channel_id}/messages/{message_id}", status_code=200)
@@ -355,7 +469,7 @@ async def upload_file(
     db.add(msg)
     db.commit()
     db.refresh(msg)
-    return _message_out(msg, user, db)
+    return _serialize_single_message(db, msg, user)
 
 
 # ── Read Receipts ───────────────────────────────────────────────────────
