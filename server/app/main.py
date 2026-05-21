@@ -5,9 +5,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+from starlette.types import Scope
 
 from app.core.config import get_settings
 from app.core.database import engine, init_db
@@ -58,8 +60,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Compress JSON / HTML / JS / CSS bodies above 1KB. Cloud Run doesn't add gzip
+# at the edge, so without this the SPA bundle and chat history payloads ship
+# uncompressed over the wire.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware, max_requests=10, window=60)
+
+
+class _ImmutableStaticFiles(StaticFiles):
+    """StaticFiles that stamps long-lived cache headers on hashed Vite assets.
+
+    Vite emits content-hashed filenames (e.g. index-6HPNC4rZ.js); they never
+    change for a given hash, so a 1y immutable cache eliminates revalidation
+    on repeat visits. index.html is served separately and stays uncached.
+    """
+
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
 
 @app.get("/api/health")
@@ -133,7 +154,7 @@ _dist_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist")
 if os.path.isdir(_dist_dir):
     _assets_dir = os.path.join(_dist_dir, "assets")
     if os.path.isdir(_assets_dir):
-        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+        app.mount("/assets", _ImmutableStaticFiles(directory=_assets_dir), name="assets")
 
     _index_html = os.path.join(_dist_dir, "index.html")
 

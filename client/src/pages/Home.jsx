@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight, ArrowUpRight, Bot, Calendar, CalendarPlus, Clock, Download,
-  Lock, MessageSquareText, Mic, Radio, Share2, Sparkles, Trash2, Users2,
+  Lock, MessageSquareText, Mic, Pencil, Radio, Share2, Sparkles, Trash2, Users2,
   Video, Zap,
 } from 'lucide-react'
 import { api, getApiBase } from '../api/client'
@@ -111,6 +111,16 @@ export default function Home() {
   const [schedPassword, setSchedPassword] = useState('')
   const [schedInvites, setSchedInvites] = useState('')
   const [scheduling, setScheduling] = useState(false)
+  // Edit-meeting modal state. Host-only via row gate, additionally enforced
+  // server-side by PATCH /api/meetings/{code} (returns 403 for non-hosts).
+  const [editMeeting, setEditMeeting] = useState(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editDate, setEditDate] = useState('')
+  const [editTime, setEditTime] = useState('')
+  const [editTz, setEditTz] = useState('UTC')
+  const [editWaiting, setEditWaiting] = useState(true)
+  const [editLocked, setEditLocked] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   useEffect(() => {
     api('/api/meetings/recent').then(setRecent).catch(() => {})
@@ -163,6 +173,50 @@ export default function Home() {
       toast({ variant: 'error', title: 'Could not schedule', description: e.message })
     } finally {
       setScheduling(false)
+    }
+  }
+
+  const openEdit = (m) => {
+    setEditMeeting(m)
+    setEditTitle(m.title || '')
+    if (m.scheduled_at) {
+      // Pull the host's own scheduled instant in their local clock for the
+      // date+time inputs; <input type="date|time"> are naïve and don't carry tz.
+      const d = new Date(m.scheduled_at)
+      const pad = (n) => String(n).padStart(2, '0')
+      setEditDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`)
+      setEditTime(`${pad(d.getHours())}:${pad(d.getMinutes())}`)
+    } else {
+      setEditDate(''); setEditTime('')
+    }
+    setEditTz(m.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone)
+    setEditWaiting(m.waiting_room_enabled !== false)
+    setEditLocked(!!m.locked)
+  }
+
+  const saveEdit = async () => {
+    if (!editMeeting) return
+    setEditing(true)
+    try {
+      const body = {
+        title: editTitle.trim() || editMeeting.title,
+        waiting_room_enabled: editWaiting,
+        locked: editLocked,
+        timezone_name: editTz,
+      }
+      if (editDate && editTime) {
+        body.scheduled_at = new Date(`${editDate}T${editTime}`).toISOString()
+      } else if (!editDate && !editTime) {
+        body.scheduled_at = null
+      }
+      const updated = await api(`/api/meetings/${editMeeting.code}`, { method: 'PATCH', body })
+      setRecent((prev) => prev.map((r) => (r.code === updated.code ? { ...r, ...updated } : r)))
+      toast({ variant: 'success', title: 'Meeting updated' })
+      setEditMeeting(null)
+    } catch (e) {
+      toast({ variant: 'error', title: 'Could not update', description: e.message })
+    } finally {
+      setEditing(false)
     }
   }
 
@@ -434,45 +488,78 @@ export default function Home() {
         ) : (
           <ul className="divide-y divide-[var(--c-line)] overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-surface)]">
             <AnimatePresence initial={false}>
-              {recent.slice(0, 6).map((m, i) => (
-                <motion.li
-                  key={m.id}
-                  layout
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0, transition: { delay: i * 0.04 } }}
-                  exit={{ opacity: 0, y: -6 }}
-                >
-                  <button
-                    onClick={() => navigate(`/meet/${m.code}`)}
-                    className="group/row flex w-full items-center gap-4 px-4 py-3 text-left transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)]"
+              {recent.slice(0, 6).map((m, i) => {
+                const isHost = user?.id && m.host_id === user.id
+                const isScheduled = !!m.scheduled_at
+                const downloadIcs = () => {
+                  const token = localStorage.getItem('zoiko_token') || ''
+                  // .ics download must hit the same Cloud Run host; getApiBase()
+                  // is '' for same-origin (default), absolute for env-overridden.
+                  const url = `${getApiBase()}/api/meetings/${m.code}/calendar`
+                  fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+                    .then((r) => r.ok ? r.blob() : Promise.reject(r))
+                    .then((blob) => {
+                      const a = document.createElement('a')
+                      a.href = URL.createObjectURL(blob)
+                      a.download = `${m.title || m.code}.ics`
+                      a.click()
+                      URL.revokeObjectURL(a.href)
+                    })
+                    .catch(() => toast({ variant: 'error', title: 'Could not download .ics' }))
+                }
+                return (
+                  <motion.li
+                    key={m.id}
+                    layout
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0, transition: { delay: i * 0.04 } }}
+                    exit={{ opacity: 0, y: -6 }}
+                    className="group/row flex w-full items-center gap-4 px-4 py-3 transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)]"
                   >
-                    <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--c-bg-3)] text-[var(--c-fg-dim)] transition-all duration-200 group-hover/row:scale-110 group-hover/row:bg-[var(--c-accent-soft)] group-hover/row:text-[var(--c-accent)]">
-                      <Video className="h-5 w-5" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-[13.5px] font-semibold tracking-tight transition-colors group-hover/row:text-[var(--c-accent)]">{m.title}</span>
-                        {m.password_protected && <Lock className="h-3 w-3 text-[var(--c-fg-muted)]" />}
+                    <button
+                      onClick={() => navigate(`/meet/${m.code}`)}
+                      className="flex min-w-0 flex-1 items-center gap-4 text-left"
+                    >
+                      <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--c-bg-3)] text-[var(--c-fg-dim)] transition-all duration-200 group-hover/row:scale-110 group-hover/row:bg-[var(--c-accent-soft)] group-hover/row:text-[var(--c-accent)]">
+                        <Video className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-[13.5px] font-semibold tracking-tight transition-colors group-hover/row:text-[var(--c-accent)]">{m.title}</span>
+                          {m.password_protected && <Lock className="h-3 w-3 text-[var(--c-fg-muted)]" />}
+                        </div>
+                        <div className="mono text-[11px] text-[var(--c-fg-muted)]">{m.code}</div>
                       </div>
-                      <div className="mono text-[11px] text-[var(--c-fg-muted)]">{m.code}</div>
-                    </div>
-                    <div className="hidden items-center gap-1.5 text-[12px] text-[var(--c-fg-muted)] sm:flex">
-                      {m.scheduled_at ? (
-                        <>
-                          <Calendar className="h-3.5 w-3.5" />
-                          <span>{new Date(m.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
-                        </>
-                      ) : (
-                        <>
-                          <Clock className="h-3.5 w-3.5" />
-                          <span>{timeAgo(m.created_at)}</span>
-                        </>
+                      <div className="hidden items-center gap-1.5 text-[12px] text-[var(--c-fg-muted)] sm:flex">
+                        {isScheduled ? (
+                          <>
+                            <Calendar className="h-3.5 w-3.5" />
+                            <span>{new Date(m.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Clock className="h-3.5 w-3.5" />
+                            <span>{timeAgo(m.created_at)}</span>
+                          </>
+                        )}
+                      </div>
+                    </button>
+                    <div className="flex items-center gap-1">
+                      {isScheduled && (
+                        <IconButton variant="ghost" size="sm" label="Download .ics" onClick={downloadIcs}>
+                          <Download />
+                        </IconButton>
                       )}
+                      {isHost && (
+                        <IconButton variant="ghost" size="sm" label="Edit meeting" onClick={() => openEdit(m)}>
+                          <Pencil />
+                        </IconButton>
+                      )}
+                      <ArrowRight className="ml-1 h-4 w-4 text-[var(--c-fg-muted)] opacity-0 transition-all duration-200 group-hover/row:opacity-100 group-hover/row:text-[var(--c-accent)]" />
                     </div>
-                    <ArrowRight className="h-4 w-4 -translate-x-1 text-[var(--c-fg-muted)] opacity-0 transition-all duration-200 group-hover/row:translate-x-0 group-hover/row:opacity-100 group-hover/row:text-[var(--c-accent)]" />
-                  </button>
-                </motion.li>
-              ))}
+                  </motion.li>
+                )
+              })}
             </AnimatePresence>
           </ul>
         )}
@@ -619,6 +706,82 @@ export default function Home() {
             <div className="flex-1">
               <div className="text-[13px] font-semibold">Enable waiting room</div>
               <div className="text-[11.5px] text-[var(--c-fg-muted)]">Approve attendees one-by-one before they join.</div>
+            </div>
+          </label>
+        </div>
+      </Modal>
+
+      {/* ============ Edit meeting modal ============ */}
+      <Modal
+        open={!!editMeeting}
+        onClose={() => setEditMeeting(null)}
+        title="Edit meeting"
+        description="Update the title, schedule, or host controls. Saves to the server immediately."
+        size="md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setEditMeeting(null)}>Cancel</Button>
+            <Button
+              onClick={saveEdit}
+              loading={editing}
+              disabled={!editTitle.trim()}
+              leftIcon={!editing && <Pencil className="h-4 w-4" />}
+              asMotion
+            >
+              {editing ? 'Saving…' : 'Save changes'}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Field label="Meeting title" required>
+            <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Date" hint="Leave both blank to convert to instant">
+              <Input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+            </Field>
+            <Field label="Time">
+              <Input type="time" value={editTime} onChange={(e) => setEditTime(e.target.value)} />
+            </Field>
+          </div>
+          <Field label="Timezone">
+            <select
+              value={editTz}
+              onChange={(e) => setEditTz(e.target.value)}
+              className="h-11 w-full rounded-xl border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] px-3.5 text-[14px] text-[var(--c-fg)] outline-none transition focus:border-[var(--c-accent)] focus:shadow-[0_0_0_4px_var(--c-accent-ring)]"
+            >
+              {[
+                'America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
+                'Europe/London','Europe/Paris','Europe/Berlin','Asia/Kolkata','Asia/Tokyo',
+                'Asia/Shanghai','Australia/Sydney','Pacific/Auckland', editTz,
+              ].filter((v, i, arr) => arr.indexOf(v) === i).map((tz) => (
+                <option key={tz} value={tz}>{tz.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+          </Field>
+          <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)] p-3 transition-colors hover:border-[var(--c-line-strong)] hover:bg-[var(--c-bg-2)]/80">
+            <input
+              type="checkbox"
+              checked={editWaiting}
+              onChange={(e) => setEditWaiting(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--c-accent)]"
+            />
+            <div className="flex-1">
+              <div className="text-[13px] font-semibold">Waiting room</div>
+              <div className="text-[11.5px] text-[var(--c-fg-muted)]">Approve attendees before they join.</div>
+            </div>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)] p-3 transition-colors hover:border-[var(--c-line-strong)] hover:bg-[var(--c-bg-2)]/80">
+            <input
+              type="checkbox"
+              checked={editLocked}
+              onChange={(e) => setEditLocked(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--c-accent)]"
+            />
+            <div className="flex-1">
+              <div className="text-[13px] font-semibold">Lock meeting</div>
+              <div className="text-[11.5px] text-[var(--c-fg-muted)]">No new joiners. Existing attendees keep their seats.</div>
             </div>
           </label>
         </div>

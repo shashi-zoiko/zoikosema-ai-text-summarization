@@ -104,22 +104,31 @@ def list_users(
         )
     stmt = stmt.order_by(desc(User.created_at)).offset(offset).limit(limit)
     users = db.scalars(stmt).all()
+    if not users:
+        return []
 
-    result = []
-    for u in users:
-        meeting_count = db.scalar(
-            select(func.count()).where(Meeting.host_id == u.id)
-        ) or 0
-        result.append({
+    # Single GROUP BY instead of N "count meetings hosted by user X" round-trips.
+    user_ids = [u.id for u in users]
+    counts = dict(
+        db.execute(
+            select(Meeting.host_id, func.count(Meeting.id))
+            .where(Meeting.host_id.in_(user_ids))
+            .group_by(Meeting.host_id)
+        ).all()
+    )
+
+    return [
+        {
             "id": u.id,
             "email": u.email,
             "name": u.name,
             "avatar_color": u.avatar_color,
             "created_at": u.created_at.isoformat() if u.created_at else None,
-            "meeting_count": meeting_count,
+            "meeting_count": counts.get(u.id, 0),
             "is_admin": u.id in ADMIN_USER_IDS,
-        })
-    return result
+        }
+        for u in users
+    ]
 
 
 @router.delete("/users/{user_id}", status_code=204)
@@ -155,29 +164,42 @@ def list_meetings(
         stmt = stmt.where(Meeting.is_active == True)  # noqa: E712
     stmt = stmt.order_by(desc(Meeting.created_at)).offset(offset).limit(limit)
     meetings = db.scalars(stmt).all()
+    if not meetings:
+        return []
 
-    result = []
-    for m in meetings:
-        host = db.get(User, m.host_id)
-        p_count = db.scalar(
-            select(func.count()).where(MeetingParticipant.meeting_id == m.id)
-        ) or 0
-        result.append({
+    # Batch the host + participant-count lookups so each list row is constant
+    # work in Python instead of two extra round-trips to the DB.
+    host_ids = {m.host_id for m in meetings}
+    meeting_ids = [m.id for m in meetings]
+    hosts = {
+        u.id: u for u in db.scalars(select(User).where(User.id.in_(host_ids))).all()
+    }
+    p_counts = dict(
+        db.execute(
+            select(MeetingParticipant.meeting_id, func.count(MeetingParticipant.id))
+            .where(MeetingParticipant.meeting_id.in_(meeting_ids))
+            .group_by(MeetingParticipant.meeting_id)
+        ).all()
+    )
+
+    return [
+        {
             "id": m.id,
             "code": m.code,
             "title": m.title,
-            "host_name": host.name if host else "Unknown",
-            "host_email": host.email if host else "",
+            "host_name": hosts[m.host_id].name if m.host_id in hosts else "Unknown",
+            "host_email": hosts[m.host_id].email if m.host_id in hosts else "",
             "is_active": m.is_active,
             "locked": m.locked,
             "password_protected": m.password_hash is not None,
             "waiting_room_enabled": m.waiting_room_enabled,
-            "participant_count": p_count,
+            "participant_count": p_counts.get(m.id, 0),
             "scheduled_at": m.scheduled_at.isoformat() if m.scheduled_at else None,
             "created_at": m.created_at.isoformat() if m.created_at else None,
             "ended_at": m.ended_at.isoformat() if m.ended_at else None,
-        })
-    return result
+        }
+        for m in meetings
+    ]
 
 
 # ── Activity feed ─────────────────────────────────────────────────────────
@@ -200,6 +222,14 @@ def activity_feed(
         select(Meeting).order_by(desc(Meeting.created_at)).limit(limit)
     ).all()
 
+    # Batch the host lookups across all recent meetings (was N round-trips).
+    host_ids = {m.host_id for m in recent_meetings}
+    hosts = (
+        {u.id: u for u in db.scalars(select(User).where(User.id.in_(host_ids))).all()}
+        if host_ids
+        else {}
+    )
+
     events = []
     for u in recent_users:
         events.append({
@@ -209,7 +239,7 @@ def activity_feed(
             "timestamp": u.created_at.isoformat() if u.created_at else None,
         })
     for m in recent_meetings:
-        host = db.get(User, m.host_id)
+        host = hosts.get(m.host_id)
         events.append({
             "type": "meeting_created",
             "message": f"{host.name if host else 'Unknown'} created \"{m.title}\"",

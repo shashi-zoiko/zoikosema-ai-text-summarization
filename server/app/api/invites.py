@@ -18,6 +18,7 @@ from app.models.organization import (
     Notification,
     INVITE_PENDING,
     INVITE_ACCEPTED,
+    INVITE_DECLINED,
     NOTIF_MEETING_INVITE,
 )
 from app.schemas.organization import MeetingInviteIn, MeetingInviteOut
@@ -138,11 +139,16 @@ def list_meeting_invites(
         .where(MeetingInvite.meeting_id == meeting.id)
         .order_by(desc(MeetingInvite.created_at))
     ).all()
+    if not invites:
+        return []
 
-    result = []
-    for inv in invites:
-        inviter = db.get(User, inv.inviter_id)
-        result.append({
+    inviter_ids = {inv.inviter_id for inv in invites}
+    inviters = {
+        u.id: u for u in db.scalars(select(User).where(User.id.in_(inviter_ids))).all()
+    }
+
+    return [
+        {
             "id": inv.id,
             "meeting_id": inv.meeting_id,
             "inviter_id": inv.inviter_id,
@@ -151,9 +157,10 @@ def list_meeting_invites(
             "created_at": inv.created_at,
             "meeting_code": meeting.code,
             "meeting_title": meeting.title,
-            "inviter_name": inviter.name if inviter else None,
-        })
-    return result
+            "inviter_name": inviters[inv.inviter_id].name if inv.inviter_id in inviters else None,
+        }
+        for inv in invites
+    ]
 
 
 # ── User's pending invites ────────────────────────────────────────────────
@@ -171,23 +178,32 @@ def my_invites(
         )
         .order_by(desc(MeetingInvite.created_at))
     ).all()
+    if not invites:
+        return []
 
-    result = []
-    for inv in invites:
-        meeting = db.get(Meeting, inv.meeting_id)
-        inviter = db.get(User, inv.inviter_id)
-        result.append({
+    meeting_ids = {inv.meeting_id for inv in invites}
+    inviter_ids = {inv.inviter_id for inv in invites}
+    meetings = {
+        m.id: m for m in db.scalars(select(Meeting).where(Meeting.id.in_(meeting_ids))).all()
+    }
+    inviters = {
+        u.id: u for u in db.scalars(select(User).where(User.id.in_(inviter_ids))).all()
+    }
+
+    return [
+        {
             "id": inv.id,
             "meeting_id": inv.meeting_id,
             "inviter_id": inv.inviter_id,
             "invitee_email": inv.invitee_email,
             "status": inv.status,
             "created_at": inv.created_at,
-            "meeting_code": meeting.code if meeting else None,
-            "meeting_title": meeting.title if meeting else None,
-            "inviter_name": inviter.name if inviter else None,
-        })
-    return result
+            "meeting_code": meetings[inv.meeting_id].code if inv.meeting_id in meetings else None,
+            "meeting_title": meetings[inv.meeting_id].title if inv.meeting_id in meetings else None,
+            "inviter_name": inviters[inv.inviter_id].name if inv.inviter_id in inviters else None,
+        }
+        for inv in invites
+    ]
 
 
 # ── Accept invite ─────────────────────────────────────────────────────────
@@ -210,6 +226,25 @@ def accept_invite(
     db.commit()
     meeting = db.get(Meeting, invite.meeting_id)
     return {"detail": "Invite accepted", "meeting_code": meeting.code if meeting else None}
+
+
+@router.post("/invites/{invite_id}/decline")
+def decline_invite(
+    invite_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    invite = db.scalar(
+        select(MeetingInvite).where(
+            MeetingInvite.id == invite_id,
+            MeetingInvite.invitee_user_id == user.id,
+        )
+    )
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    invite.status = INVITE_DECLINED
+    db.commit()
+    return {"detail": "Invite declined"}
 
 
 # ── Download .ics for a meeting ───────────────────────────────────────────

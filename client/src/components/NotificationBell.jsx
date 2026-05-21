@@ -34,6 +34,10 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false)
   const [notifications, setNotifications] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
+  // Pending meeting invites keyed by meeting_code so we can render an inline
+  // Accept/Decline pair next to the matching notification without a second
+  // round-trip per row.
+  const [invitesByCode, setInvitesByCode] = useState({})
   const dropdownRef = useRef(null)
   const wsRef = useRef(null)
 
@@ -41,13 +45,19 @@ export default function NotificationBell() {
     let cancelled = false
     const load = async () => {
       try {
-        const [notifs, countData] = await Promise.all([
+        const [notifs, countData, invites] = await Promise.all([
           api('/api/notifications?limit=20'),
           api('/api/notifications/unread-count'),
+          api('/api/meetings/invites/mine').catch(() => []),
         ])
         if (cancelled) return
         setNotifications(notifs)
         setUnreadCount(countData.count)
+        const map = {}
+        for (const inv of invites) {
+          if (inv.meeting_code) map[inv.meeting_code] = inv
+        }
+        setInvitesByCode(map)
       } catch { /* best-effort fetch */ }
     }
     load()
@@ -128,6 +138,41 @@ export default function NotificationBell() {
     } catch {}
   }
 
+  const parseData = (notif) => {
+    try { return notif.data ? JSON.parse(notif.data) : {} } catch { return {} }
+  }
+
+  // Accept / decline use stopPropagation so the click doesn't also bubble to
+  // the parent button which would navigate to the meeting before the request
+  // resolves. The accept flow does navigate on success — that's the desired UX.
+  const acceptInvite = async (e, notif, invite) => {
+    e.stopPropagation()
+    try {
+      await api(`/api/meetings/invites/${invite.id}/accept`, { method: 'POST' })
+      setInvitesByCode(prev => {
+        const next = { ...prev }
+        delete next[invite.meeting_code]
+        return next
+      })
+      if (!notif.is_read) markRead(notif.id)
+      navigate(`/meet/${invite.meeting_code}`)
+      setOpen(false)
+    } catch {}
+  }
+
+  const declineInvite = async (e, notif, invite) => {
+    e.stopPropagation()
+    try {
+      await api(`/api/meetings/invites/${invite.id}/decline`, { method: 'POST' })
+      setInvitesByCode(prev => {
+        const next = { ...prev }
+        delete next[invite.meeting_code]
+        return next
+      })
+      if (!notif.is_read) markRead(notif.id)
+    } catch {}
+  }
+
   return (
     <div className="notif-bell" ref={dropdownRef}>
       <button
@@ -159,23 +204,47 @@ export default function NotificationBell() {
                 <span>No notifications yet</span>
               </div>
             ) : (
-              notifications.map((n) => (
-                <button
-                  key={n.id}
-                  className={'notif-item' + (n.is_read ? '' : ' unread')}
-                  onClick={() => handleClick(n)}
-                >
-                  <div className="notif-item-icon">
-                    <Icon name={NOTIF_ICONS[n.type] || 'bell'} size={16} />
-                  </div>
-                  <div className="notif-item-body">
-                    <div className="notif-item-title">{n.title}</div>
-                    {n.body && <div className="notif-item-text">{n.body}</div>}
-                    <div className="notif-item-time">{timeAgo(n.created_at)}</div>
-                  </div>
-                  {!n.is_read && <span className="notif-item-dot" />}
-                </button>
-              ))
+              notifications.map((n) => {
+                const data = parseData(n)
+                const invite = n.type === 'meeting_invite' && data.meeting_code
+                  ? invitesByCode[data.meeting_code]
+                  : null
+                return (
+                  <button
+                    key={n.id}
+                    className={'notif-item' + (n.is_read ? '' : ' unread')}
+                    onClick={() => handleClick(n)}
+                  >
+                    <div className="notif-item-icon">
+                      <Icon name={NOTIF_ICONS[n.type] || 'bell'} size={16} />
+                    </div>
+                    <div className="notif-item-body">
+                      <div className="notif-item-title">{n.title}</div>
+                      {n.body && <div className="notif-item-text">{n.body}</div>}
+                      <div className="notif-item-time">{timeAgo(n.created_at)}</div>
+                      {invite && (
+                        <div className="notif-item-actions">
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            className="notif-action accept"
+                            onClick={(e) => acceptInvite(e, n, invite)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') acceptInvite(e, n, invite) }}
+                          >Accept</span>
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            className="notif-action decline"
+                            onClick={(e) => declineInvite(e, n, invite)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') declineInvite(e, n, invite) }}
+                          >Decline</span>
+                        </div>
+                      )}
+                    </div>
+                    {!n.is_read && <span className="notif-item-dot" />}
+                  </button>
+                )
+              })
             )}
           </div>
         </div>
