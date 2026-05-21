@@ -19,14 +19,22 @@ _FALLBACK_URL = "sqlite:///:memory:"
 _db_url = (settings.database_url or "").strip() or _FALLBACK_URL
 
 _connect_args: dict = {}
+_engine_kwargs: dict = {"pool_pre_ping": True, "connect_args": _connect_args}
 if _db_url.startswith(("postgresql", "postgres")):
     # connect_timeout caps psycopg2 TCP wait so a misrouted host (e.g. the
     # IPv6-only direct Supabase host on Cloud Run) fails fast instead of
     # hanging past the port-bind deadline.
     _connect_args["connect_timeout"] = 10
+    # Default pool (size=5, overflow=10) starved under WebSocket load — each
+    # active chat tab used to hold one connection for its lifetime. Even after
+    # switching to short-lived sessions, the chat list + bulk loaders fan out
+    # ~6 concurrent queries on a busy request, so 5 isn't enough headroom.
+    # pool_recycle keeps the Supabase Session Pooler from killing idle conns
+    # under us (it disconnects after ~30 min of inactivity).
+    _engine_kwargs.update(pool_size=20, max_overflow=10, pool_recycle=1800)
 
 try:
-    engine = create_engine(_db_url, pool_pre_ping=True, connect_args=_connect_args)
+    engine = create_engine(_db_url, **_engine_kwargs)
 except ArgumentError:
     log.exception(
         "DATABASE_URL could not be parsed (value=%r); falling back to in-memory "

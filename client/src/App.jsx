@@ -22,6 +22,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
 const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx'))
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
+const SharedRecording = lazy(() => import('./pages/SharedRecording.jsx'))
 
 function PageFallback() {
   return (
@@ -74,6 +75,8 @@ export default function App() {
             </RedirectIfAuthed>
           }
         />
+        {/* Public share playback — no auth so the link works for anyone. */}
+        <Route path="/recording/:token" element={<SharedRecording />} />
         <Route
           path="/meet/:code"
           element={

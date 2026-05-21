@@ -65,3 +65,17 @@ jobs:
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
             FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+          # min-instances=1 eliminates cold starts on the first request after
+          # idle (default is 0 → ~5-10s pull+boot on each idle wake). 2 CPU
+          # + 1Gi memory is the smallest tier that comfortably runs uvicorn +
+          # active WebSocket fanout without GC churn. concurrency=40 keeps
+          # any single instance from hoarding DB pool connections (pool_size
+          # is 20, so >40 concurrent requests would queue on the pool).
+          flags: |
+            --min-instances=1
+            --max-instances=10
+            --cpu=2
+            --memory=1Gi
+            --concurrency=40
+            --timeout=300
+            --cpu-boost

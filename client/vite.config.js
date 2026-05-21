@@ -2,11 +2,15 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// Electron loads the built app from the filesystem (file://), so asset URLs
-// must be relative. For the web/docker build, relative paths still resolve
-// correctly under the nginx root.
+// Web build needs absolute '/' so assets resolve at /assets/* regardless of
+// the SPA deep-link path (e.g. /meet/<code>, /chat/<id>). With './', the
+// browser resolves ./assets/foo.js against /meet/<code> → /meet/assets/foo.js,
+// which the FastAPI catch-all serves as index.html and the browser then
+// rejects with a MIME-type error, leaving a blank page.
+// Electron loads from file:// and needs './', so the electron:* scripts set
+// VITE_BASE=./ before invoking vite build.
 export default defineConfig({
-  base: './',
+  base: process.env.VITE_BASE || '/',
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
