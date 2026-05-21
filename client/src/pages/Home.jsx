@@ -228,14 +228,33 @@ export default function Home() {
     } catch {}
   }
 
-  const shareRecording = async (id) => {
+  const shareRecording = async (rec) => {
     try {
-      const rec = await api(`/api/recordings/${id}/share`, { method: 'POST' })
-      setRecordings((prev) => prev.map((r) => (r.id === id ? { ...r, share_token: rec.share_token } : r)))
-      const shareUrl = `${window.location.origin}/recording/${rec.share_token}`
+      // If a share token already exists, just copy the link — don't re-mint
+      // a new token (would silently invalidate previously-distributed links).
+      let token = rec.share_token
+      if (!token) {
+        const updated = await api(`/api/recordings/${rec.id}/share`, { method: 'POST' })
+        token = updated.share_token
+        setRecordings((prev) => prev.map((r) => (r.id === rec.id ? { ...r, share_token: token } : r)))
+      }
+      const shareUrl = `${window.location.origin}/recording/${token}`
       await navigator.clipboard.writeText(shareUrl)
       toast({ variant: 'success', title: 'Share link copied' })
-    } catch {}
+    } catch (e) {
+      toast({ variant: 'error', title: 'Could not share', description: e.message })
+    }
+  }
+
+  const unshareRecording = async (id) => {
+    if (!window.confirm('Revoke the share link? Anyone with the URL will lose access.')) return
+    try {
+      await api(`/api/recordings/${id}/share`, { method: 'DELETE' })
+      setRecordings((prev) => prev.map((r) => (r.id === id ? { ...r, share_token: null } : r)))
+      toast({ variant: 'success', title: 'Share link revoked' })
+    } catch (e) {
+      toast({ variant: 'error', title: 'Could not revoke', description: e.message })
+    }
   }
 
   const downloadRecording = (rec) => {
@@ -617,9 +636,14 @@ export default function Home() {
                     <IconButton variant="ghost" size="sm" label="Download" onClick={() => downloadRecording(rec)}>
                       <Download />
                     </IconButton>
-                    <IconButton variant="ghost" size="sm" label={rec.share_token ? 'Copy share link' : 'Create share link'} onClick={() => shareRecording(rec.id)}>
+                    <IconButton variant="ghost" size="sm" label={rec.share_token ? 'Copy share link' : 'Create share link'} onClick={() => shareRecording(rec)}>
                       <Share2 />
                     </IconButton>
+                    {rec.share_token && (
+                      <IconButton variant="ghost" size="sm" label="Revoke share link" onClick={() => unshareRecording(rec.id)}>
+                        <Lock />
+                      </IconButton>
+                    )}
                     <IconButton variant="ghost" size="sm" label="Delete" onClick={() => deleteRecording(rec.id)}>
                       <Trash2 />
                     </IconButton>

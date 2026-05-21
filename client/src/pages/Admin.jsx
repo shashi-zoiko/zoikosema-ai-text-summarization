@@ -53,6 +53,29 @@ export default function Admin() {
     }
   }
 
+  const purgeRecordings = async () => {
+    const days = window.prompt(
+      'Purge recordings older than how many days? (Leave blank for the configured retention)',
+      ''
+    )
+    if (days === null) return
+    const parsed = days.trim() === '' ? null : parseInt(days, 10)
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 1)) {
+      window.alert('Days must be a positive integer')
+      return
+    }
+    if (!window.confirm(parsed ? `Purge recordings older than ${parsed} days?` : 'Purge expired recordings using server retention?')) return
+    try {
+      const qs = parsed ? `?days=${parsed}` : ''
+      const res = await api(`/api/admin/recordings/purge${qs}`, { method: 'POST' })
+      window.alert(`Purged ${res.purged} recording${res.purged === 1 ? '' : 's'} (retention ${res.retention_days}d).`)
+      // Refresh the stat card so the counter reflects the purge.
+      try { setStats(await api('/api/admin/stats')) } catch {}
+    } catch (e) {
+      window.alert(`Purge failed: ${e.message}`)
+    }
+  }
+
   if (loading) {
     return (
       <div className="admin">
@@ -108,6 +131,12 @@ export default function Admin() {
 
       {/* Overview */}
       {tab === 'overview' && stats && (
+        <>
+        <div className="admin-actions" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '0 0 16px' }}>
+          <button className="ghost" onClick={purgeRecordings} title="Run the expired-recordings sweep now">
+            <Icon name="trash" size={14} /> Purge old recordings
+          </button>
+        </div>
         <div className="admin-stats">
           {[
             { label: 'Total users', value: stats.total_users, icon: 'users', accent: true },
@@ -129,6 +158,7 @@ export default function Admin() {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {/* Users */}
