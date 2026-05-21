@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -125,3 +125,24 @@ app.mount("/api/uploads", StaticFiles(directory=_upload_dir), name="uploads")
 _rec_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "recordings")
 os.makedirs(_rec_dir, exist_ok=True)
 app.mount("/api/recordings/files", StaticFiles(directory=_rec_dir), name="recordings")
+
+# Serve built frontend (single-service deploy). The Vite build output is copied
+# into the image at /app/dist by the Dockerfile; locally, drop the build at
+# server/dist/ to mirror the same layout.
+_dist_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist")
+if os.path.isdir(_dist_dir):
+    _assets_dir = os.path.join(_dist_dir, "assets")
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
+    _index_html = os.path.join(_dist_dir, "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        # Don't swallow unknown API/WS routes — let them 404 as JSON so the
+        # client sees a real error instead of an HTML page it can't parse.
+        if full_path.startswith(("api/", "ws/")):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        return FileResponse(_index_html)
+else:
+    log.warning("frontend dist not found at %s; SPA routes will 404", _dist_dir)
