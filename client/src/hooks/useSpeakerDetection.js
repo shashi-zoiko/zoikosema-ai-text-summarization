@@ -15,7 +15,24 @@ export default function useSpeakerDetection(onSpeaking, threshold = 0.015) {
 
   const getCtx = useCallback(() => {
     if (!ctxRef.current) {
-      ctxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      ctxRef.current = ctx
+      // Autoplay policy starts AudioContext in 'suspended' state when the
+      // page hasn't received a user gesture (typical deep-link join). The
+      // analyser silently reports zero level while suspended — speaker
+      // detection breaks, "who's talking" indicator never lights up. Arm a
+      // one-shot gesture listener to resume.
+      if (ctx.state === 'suspended') {
+        const resume = () => {
+          ctx.resume().catch(() => {})
+          window.removeEventListener('pointerdown', resume, true)
+          window.removeEventListener('keydown', resume, true)
+          window.removeEventListener('touchstart', resume, true)
+        }
+        window.addEventListener('pointerdown', resume, true)
+        window.addEventListener('keydown', resume, true)
+        window.addEventListener('touchstart', resume, true)
+      }
     }
     return ctxRef.current
   }, [])
@@ -26,7 +43,7 @@ export default function useSpeakerDetection(onSpeaking, threshold = 0.015) {
       // Detach previous if exists
       const prev = trackedRef.current[peerId]
       if (prev) {
-        cancelAnimationFrame(prev.rafId)
+        if (prev.intervalId) clearInterval(prev.intervalId)
         try { prev.source.disconnect() } catch {}
       }
 
@@ -40,8 +57,15 @@ export default function useSpeakerDetection(onSpeaking, threshold = 0.015) {
 
       const dataArray = new Float32Array(analyser.fftSize)
       let speaking = false
-      let silenceFrames = 0
+      let silentTicks = 0
 
+      // Throttled poll. rAF used to fire at display refresh (60–144 Hz)
+      // per peer; with 6 peers on a 144 Hz screen that's ~864 RMS computes
+      // per second across the call. 30 Hz is more than fast enough for
+      // speaker detection (33 ms latency, imperceptible) and roughly 4–5x
+      // cheaper. setInterval keeps running when the tab is hidden — that's
+      // intentional here since we want the speaking indicator state to be
+      // correct when the tab is restored without a fresh stream attach.
       function poll() {
         analyser.getFloatTimeDomainData(dataArray)
         let sum = 0
@@ -52,24 +76,23 @@ export default function useSpeakerDetection(onSpeaking, threshold = 0.015) {
         const nowSpeaking = rms > threshold
 
         if (nowSpeaking) {
-          silenceFrames = 0
+          silentTicks = 0
           if (!speaking) {
             speaking = true
             onSpeaking(peerId, true)
           }
         } else {
-          silenceFrames++
-          // Debounce: require ~20 frames of silence (~330ms at 60fps)
-          if (speaking && silenceFrames > 20) {
+          silentTicks++
+          // Debounce: ~10 ticks at 30 Hz ≈ 330 ms of silence before flipping.
+          if (speaking && silentTicks > 10) {
             speaking = false
             onSpeaking(peerId, false)
           }
         }
-
-        trackedRef.current[peerId].rafId = requestAnimationFrame(poll)
       }
 
-      trackedRef.current[peerId] = { source, analyser, rafId: requestAnimationFrame(poll), speaking }
+      const intervalId = setInterval(poll, 33)
+      trackedRef.current[peerId] = { source, analyser, intervalId, speaking }
     },
     [getCtx, onSpeaking, threshold]
   )
@@ -77,7 +100,7 @@ export default function useSpeakerDetection(onSpeaking, threshold = 0.015) {
   const detachStream = useCallback((peerId) => {
     const entry = trackedRef.current[peerId]
     if (entry) {
-      cancelAnimationFrame(entry.rafId)
+      if (entry.intervalId) clearInterval(entry.intervalId)
       try { entry.source.disconnect() } catch {}
       delete trackedRef.current[peerId]
     }
@@ -88,7 +111,7 @@ export default function useSpeakerDetection(onSpeaking, threshold = 0.015) {
     return () => {
       for (const peerId of Object.keys(trackedRef.current)) {
         const entry = trackedRef.current[peerId]
-        cancelAnimationFrame(entry.rafId)
+        if (entry.intervalId) clearInterval(entry.intervalId)
         try { entry.source.disconnect() } catch {}
       }
       trackedRef.current = {}

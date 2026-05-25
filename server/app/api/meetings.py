@@ -1,17 +1,23 @@
 import csv
 import io
+import logging
 import secrets
 import string
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select, desc, and_
 from sqlalchemy.orm import Session
 
+from app.connect.media_service import service as media
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.security import hash_password, verify_password
+
+log = logging.getLogger(__name__)
 from app.models.meeting import (
     Meeting,
     MeetingParticipant,
@@ -64,6 +70,7 @@ def _meeting_out(meeting: Meeting) -> dict:
         "chat_enabled": meeting.chat_enabled,
         "screenshare_enabled": meeting.screenshare_enabled,
         "password_protected": meeting.password_hash is not None,
+        "media_provider": meeting.media_provider or "mesh",
         "created_at": meeting.created_at,
         "ended_at": meeting.ended_at,
     }
@@ -106,6 +113,11 @@ def create_meeting(
             break
     else:
         raise HTTPException(status_code=500, detail="Could not allocate meeting code")
+    # Default the per-meeting media plane to the global setting at create time.
+    # Existing meetings remain on whatever they were last set to (e.g. "mesh"
+    # for everything pre-migration). Future per-meeting overrides can be added
+    # to the create schema if/when we expose a UI toggle.
+    default_provider = (get_settings().media_provider or "mesh").lower()
     meeting = Meeting(
         code=code,
         title=data.title or "Instant meeting",
@@ -114,6 +126,7 @@ def create_meeting(
         timezone_name=data.timezone_name,
         waiting_room_enabled=data.waiting_room_enabled,
         password_hash=hash_password(data.password) if data.password else None,
+        media_provider=default_provider if default_provider in ("mesh", "livekit") else "mesh",
     )
     db.add(meeting)
     db.commit()
@@ -166,7 +179,7 @@ def update_meeting(
 # ── End ─────────────────────────────────────────────────────────────────────
 
 @router.post("/{code}/end", response_model=MeetingOut)
-def end_meeting(
+async def end_meeting(
     code: str,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -176,9 +189,219 @@ def end_meeting(
         raise HTTPException(status_code=403, detail="Only host can end the meeting")
     meeting.is_active = False
     meeting.ended_at = datetime.now(timezone.utc)
+
+    # Tear down the LiveKit room so any zombie participants are disconnected
+    # and the SFU reclaims the slot immediately. We swallow errors — the DB
+    # is the source of truth for "meeting ended"; LiveKit will GC anyway.
+    room_ref = meeting.media_room_ref
+    meeting.media_room_ref = None
     db.commit()
     db.refresh(meeting)
+
+    if room_ref:
+        try:
+            await media.release_media_room(room_ref)
+        except Exception:
+            log.exception("release_media_room failed for %s", room_ref)
+
     return _meeting_out(meeting)
+
+
+# ── Media token (LiveKit join) ──────────────────────────────────────────────
+
+class MediaTokenOut(BaseModel):
+    access_token: str
+    ws_url: str
+    room: str
+    identity: str
+    expires_at: int
+
+
+@router.post("/{code}/media-token", response_model=MediaTokenOut)
+async def issue_media_token(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Issue a short-lived LiveKit JWT for the caller.
+
+    Caller must already be an ADMITTED participant (created by POST /join).
+    Lazy-provisions the LiveKit room on first call.
+    """
+    settings = get_settings()
+    if settings.media_provider.lower() != "livekit":
+        raise HTTPException(
+            status_code=503,
+            detail=f"Media provider '{settings.media_provider}' does not issue real tokens",
+        )
+
+    meeting = _get_meeting_or_404(code, db)
+    if not meeting.is_active:
+        raise HTTPException(status_code=410, detail="Meeting has ended")
+
+    participant = db.scalar(
+        select(MeetingParticipant).where(
+            MeetingParticipant.meeting_id == meeting.id,
+            MeetingParticipant.user_id == user.id,
+        )
+    )
+    if not participant:
+        raise HTTPException(status_code=403, detail="Call POST /join first")
+    if participant.status != STATUS_ADMITTED:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Participant status is '{participant.status}', not 'admitted'",
+        )
+
+    # Lazy-allocate the LiveKit room ref + create on SFU
+    if not meeting.media_room_ref:
+        # tenant_id is the host's user id for now; switch to org_id when
+        # multi-org meetings ship.
+        ref = await media.create_media_room(
+            session_id=meeting.code, tenant_id=str(meeting.host_id)
+        )
+        meeting.media_room_ref = ref
+        db.commit()
+        db.refresh(meeting)
+
+    await media.ensure_media_room(meeting.media_room_ref)
+
+    token = await media.generate_token(
+        media_room_ref=meeting.media_room_ref,
+        user_id=user.id,
+        display_name=user.name,
+        role=participant.role,
+    )
+
+    # Public WS URL the browser dials. server-side LIVEKIT_WS_URL points at
+    # the container (ws://livekit:7880); the browser needs the host URL.
+    public_ws = (
+        getattr(settings, "livekit_public_ws_url", None)
+        or settings.livekit_ws_url.replace("livekit:7880", "localhost:7880")
+    )
+
+    return MediaTokenOut(
+        access_token=token.access_token,
+        ws_url=public_ws,
+        room=token.room_name,
+        identity=token.identity,
+        expires_at=token.expires_at,
+    )
+
+
+# ── Recording (LiveKit Egress) ──────────────────────────────────────────────
+
+class RecordingStateOut(BaseModel):
+    recording: bool
+    recording_id: int | None
+    egress_id: str | None
+
+
+def _active_recording(meeting: Meeting, db: Session):
+    from app.models.meeting import MeetingRecording, REC_STATUS_RECORDING
+    return db.scalar(
+        select(MeetingRecording).where(
+            MeetingRecording.meeting_id == meeting.id,
+            MeetingRecording.status == REC_STATUS_RECORDING,
+            MeetingRecording.egress_id.is_not(None),
+        )
+    )
+
+
+@router.get("/{code}/recording", response_model=RecordingStateOut)
+def recording_state(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    meeting = _get_meeting_or_404(code, db)
+    rec = _active_recording(meeting, db)
+    if rec is None:
+        return RecordingStateOut(recording=False, recording_id=None, egress_id=None)
+    return RecordingStateOut(recording=True, recording_id=rec.id, egress_id=rec.egress_id)
+
+
+@router.post("/{code}/recording/start", response_model=RecordingStateOut)
+async def recording_start(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Host kicks off a RoomCompositeEgress writing to /out/<code>-<uuid>.mp4
+    inside the LiveKit egress container. The file ends up on the shared
+    zoiko_recordings volume so the FastAPI side can serve it after egress
+    finishes (see webhooks.py / egress_ended)."""
+    import uuid as _uuid
+
+    settings = get_settings()
+    if settings.media_provider.lower() != "livekit":
+        raise HTTPException(status_code=503, detail="recording requires livekit provider")
+
+    meeting = _get_meeting_or_404(code, db)
+    if meeting.host_id != user.id:
+        raise HTTPException(status_code=403, detail="Only the host can start recording")
+    if not meeting.media_room_ref:
+        raise HTTPException(status_code=409, detail="Meeting has no active media room")
+
+    if _active_recording(meeting, db):
+        raise HTTPException(status_code=409, detail="Recording already in progress")
+
+    from app.models.meeting import MeetingRecording, REC_STATUS_RECORDING
+
+    # Egress runs inside the livekit-egress container which mounts the same
+    # /out volume that FastAPI mounts at /app/recordings — so a path of
+    # /out/foo.mp4 in egress is /app/recordings/foo.mp4 to us.
+    fname = f"{meeting.code}-{_uuid.uuid4().hex[:10]}.mp4"
+    egress_path = f"/out/{fname}"
+    file_url = f"/api/recordings/files/{fname}"
+
+    try:
+        egress_id = await media.start_recording(
+            media_room_ref=meeting.media_room_ref,
+            file_path=egress_path,
+        )
+    except Exception as e:
+        log.exception("egress start failed")
+        raise HTTPException(status_code=502, detail=f"egress start failed: {e}") from e
+
+    rec = MeetingRecording(
+        meeting_id=meeting.id,
+        user_id=user.id,
+        file_url=file_url,
+        file_name=fname,
+        status=REC_STATUS_RECORDING,
+        egress_id=egress_id,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    return RecordingStateOut(recording=True, recording_id=rec.id, egress_id=rec.egress_id)
+
+
+@router.post("/{code}/recording/stop", response_model=RecordingStateOut)
+async def recording_stop(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    meeting = _get_meeting_or_404(code, db)
+    if meeting.host_id != user.id:
+        raise HTTPException(status_code=403, detail="Only the host can stop recording")
+
+    rec = _active_recording(meeting, db)
+    if rec is None:
+        return RecordingStateOut(recording=False, recording_id=None, egress_id=None)
+
+    try:
+        await media.stop_recording(rec.egress_id)
+    except Exception as e:
+        log.exception("egress stop failed")
+        raise HTTPException(status_code=502, detail=f"egress stop failed: {e}") from e
+
+    # Status is flipped to READY by the egress_ended webhook once the file is
+    # finalized on disk. We don't touch it here — the egress process is still
+    # writing the moov atom.
+    return RecordingStateOut(recording=True, recording_id=rec.id, egress_id=rec.egress_id)
 
 
 # ── Join (waiting-room aware) ───────────────────────────────────────────────

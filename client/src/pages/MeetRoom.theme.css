@@ -1,384 +1,79 @@
 /* =====================================================================
-   MeetRoom — theme-aware overlay
-   Adds futuristic ambient background + new top-bar pills, and overrides
-   the legacy Meet.css hard-coded dark colors to follow the active theme
-   so light mode actually looks like a light meeting room.
+   MeetRoom — minimal CSS supplement.
+   Everything visual now lives in Tailwind utilities; this file only
+   defines the reaction-rise keyframe that Tailwind can't express
+   inline, and a few global resets the room relies on.
    ===================================================================== */
 
-.room.room-themed {
-  background:
-    radial-gradient(1400px 700px at 50% -10%, color-mix(in srgb, var(--c-accent) 14%, transparent), transparent 60%),
-    var(--c-bg);
-  color: var(--c-fg);
-  isolation: isolate;
-  position: relative;
+/* Reaction emoji float */
+@keyframes zk-reaction-rise {
+  0%   { transform: translateY(0) scale(1);    opacity: 0; }
+  10%  { opacity: 1; }
+  100% { transform: translateY(-80vh) scale(1.4); opacity: 0; }
+}
+.zk-reaction-rise {
+  animation: zk-reaction-rise 2.4s ease-out forwards;
+  will-change: transform, opacity;
 }
 
-/* ----- Ambient mesh ----- */
-.room-ambient {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-  z-index: 0;
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .zk-reaction-rise { animation-duration: 0.6s; }
 }
-.room-ambient-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(to right,
-      color-mix(in srgb, var(--c-fg) 4%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom,
-      color-mix(in srgb, var(--c-fg) 4%, transparent) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: radial-gradient(ellipse at center, #000 25%, transparent 78%);
-  -webkit-mask-image: radial-gradient(ellipse at center, #000 25%, transparent 78%);
-  opacity: 0.55;
-}
-.room-ambient-orb {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(60px);
-  opacity: 0.40;
-  will-change: transform;
-}
-.room-ambient-orb-a {
-  width: 520px; height: 520px;
-  top: -160px; left: -180px;
-  background: radial-gradient(closest-side, var(--c-accent), transparent);
-  animation: zk-orb-a 22s ease-in-out infinite alternate;
-}
-.room-ambient-orb-b {
-  width: 480px; height: 480px;
-  bottom: -180px; right: -120px;
-  background: radial-gradient(closest-side, var(--c-accent-3), transparent);
-  animation: zk-orb-b 28s ease-in-out infinite alternate;
-}
-.room-ambient-orb-c {
-  width: 360px; height: 360px;
-  top: 30%; right: 18%;
-  background: radial-gradient(closest-side, var(--c-accent-2), transparent);
-  opacity: 0.22;
-  animation: zk-orb-c 26s ease-in-out infinite alternate;
-}
-@keyframes zk-orb-a {
-  from { transform: translate3d(0,0,0) scale(1); }
-  to   { transform: translate3d(80px, 40px, 0) scale(1.08); }
-}
-@keyframes zk-orb-b {
-  from { transform: translate3d(0,0,0) scale(1); }
-  to   { transform: translate3d(-60px, -60px, 0) scale(1.10); }
-}
-@keyframes zk-orb-c {
-  from { transform: translate3d(0,0,0) scale(1); }
-  to   { transform: translate3d(-40px, 30px, 0) scale(0.92); }
-}
-
-/* Reduce ambient strength in light theme so it doesn't wash out */
-[data-theme="light"] .room-ambient-orb { opacity: 0.20; }
-[data-theme="light"] .room-ambient-grid { opacity: 0.35; }
-
-/* Bring meeting content above the ambient layer */
-.room.room-themed > *:not(.room-ambient) {
-  position: relative;
-  z-index: 1;
-}
-
-/* ----- New glass top bar ----- */
-.room-topbar-glass {
-  background: color-mix(in srgb, var(--c-surface) 50%, transparent);
-  border-bottom: 1px solid var(--c-line);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  backdrop-filter: blur(18px) saturate(160%);
-  padding: 14px 22px;
-  gap: 14px;
-}
-
-.room-topbar-pill {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--c-accent-soft);
-  color: var(--c-accent);
-  border: 1px solid color-mix(in srgb, var(--c-accent) 30%, transparent);
-}
-
-.room-code-pill {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 5px 12px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--c-fg) 6%, transparent);
-  color: var(--c-fg-dim);
-  border: 1px solid var(--c-line);
-  letter-spacing: 0.02em;
-  transition: background 180ms ease, color 180ms ease, transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 220ms ease;
-}
-.room-code-pill:hover {
-  background: var(--c-accent-soft);
-  color: var(--c-accent);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 14px -8px var(--c-accent-ring);
-}
-
-.room-copy-pill {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--c-fg-dim);
-  background: color-mix(in srgb, var(--c-surface) 60%, transparent);
-  border: 1px solid var(--c-line);
-  border-radius: 999px;
-  cursor: pointer;
-  overflow: hidden;
-  transition:
-    color 180ms ease,
-    background 180ms ease,
-    border-color 180ms ease,
-    transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 220ms ease;
-}
-.room-copy-pill::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, transparent 30%, color-mix(in srgb, var(--c-accent) 32%, transparent) 50%, transparent 70%);
-  transform: translateX(-110%);
-  transition: transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
-  pointer-events: none;
-  border-radius: inherit;
-}
-.room-copy-pill:hover {
-  color: var(--c-accent);
-  background: var(--c-accent-soft);
-  border-color: color-mix(in srgb, var(--c-accent) 50%, transparent);
-  transform: translateY(-1px);
-  box-shadow: 0 10px 22px -10px var(--c-accent-ring);
-}
-.room-copy-pill:hover::after { transform: translateX(110%); }
-.room-copy-pill:active { transform: translateY(0) scale(0.97); }
-
-
-/* ----- Theme-aware tile overrides ----- */
-/* Override the hard-coded dark background and border so light mode reads
-   correctly. Speaking state uses peer-tint as before. */
-.room.room-themed .tile {
-  background: color-mix(in srgb, var(--peer-tint, var(--c-accent)) 18%, var(--c-surface) 82%);
-  border-radius: 22px;
-  border: 1px solid var(--c-line);
-}
-.room.room-themed .tile.screen video { background: #000; }
-.room.room-themed .tile-placeholder {
-  background:
-    radial-gradient(ellipse at center,
-      color-mix(in srgb, var(--peer-tint, var(--c-accent)) 32%, var(--c-surface) 68%) 0%,
-      color-mix(in srgb, var(--peer-tint, var(--c-accent)) 14%, var(--c-bg) 86%) 75%);
-}
-
-/* Centered avatar inside tile placeholder */
-.room.room-themed .tile-placeholder .avatar {
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-  text-align: center;
-  font-feature-settings: "tnum";
-  box-shadow:
-    inset 0 0 0 2px rgba(255,255,255,0.14),
-    0 18px 40px -10px rgba(0,0,0,0.55);
-}
-.room.room-themed .tile-placeholder .avatar::after {
-  content: "";
-  position: absolute;
-  inset: -6px;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--peer-tint, var(--c-accent)) 60%, transparent), transparent 70%);
-  z-index: -1;
-  filter: blur(8px);
-  opacity: 0.5;
-}
-
-/* Theme-aware tile name pill */
-.room.room-themed .tile-name {
-  background: color-mix(in srgb, var(--c-bg) 65%, transparent);
-  color: var(--c-fg);
-  border: 1px solid var(--c-line);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-}
-
-/* Speaking aura ring */
-.room.room-themed .tile.speaking {
-  border-color: var(--peer-tint, var(--c-accent));
-  box-shadow:
-    0 0 0 1px var(--peer-tint, var(--c-accent)),
-    0 0 36px -2px color-mix(in srgb, var(--peer-tint, var(--c-accent)) 65%, transparent);
-}
-
-/* Theme-aware room main / stage */
-.room.room-themed .room-main { background: transparent; }
-.room.room-themed .room-stage { background: transparent; }
-
-/* Sidebars use theme surface */
-.room.room-themed .room-sidebar {
-  background: color-mix(in srgb, var(--c-surface) 88%, transparent);
-  border-left: 1px solid var(--c-line);
-  -webkit-backdrop-filter: blur(20px);
-  backdrop-filter: blur(20px);
-  color: var(--c-fg);
-}
-.room.room-themed .room-sidebar-tabs {
-  background: color-mix(in srgb, var(--c-bg-2) 70%, transparent);
-  border-bottom: 1px solid var(--c-line);
-}
-.room.room-themed .room-sidebar-tab { color: var(--c-fg-muted); }
-.room.room-themed .room-sidebar-tab:hover {
-  color: var(--c-fg);
-  background: color-mix(in srgb, var(--c-fg) 6%, transparent);
-}
-.room.room-themed .room-sidebar-tab.active {
-  color: var(--c-accent);
-  background: var(--c-accent-soft);
-}
-
-/* Hide the legacy bottom dock if it ever renders alongside the new one */
-.room-controls { display: none !important; }
 
 /* =====================================================================
-   New PeerTile — speaking ring, ambient aura, idle grain.
-   The component file owns layout; this file owns the slow-CSS / pseudo-
-   element effects that are easier expressed in stylesheets.
+   Layout morphing — runs when the stage wrapper's React key changes
+   (grid → speaker → present). The fade is short and subtle so it
+   reads as polish, not motion. Wrapper key swap is what guarantees
+   the animation fires only on layout transitions, not on every render.
    ===================================================================== */
-
-/* Tile spacing so the bigger 28px radius reads as floating cards */
-.room.room-themed .room-stage {
-  padding: 22px;
-  gap: 18px;
+@keyframes zk-stage-fade {
+  0%   { opacity: 0; transform: translateY(4px) scale(0.995); }
+  100% { opacity: 1; transform: translateY(0)   scale(1);     }
 }
-
-/* Override legacy .tile styling when our new .peer-tile is on the page */
-.peer-tile {
-  background: color-mix(in srgb, var(--peer-mid, var(--c-accent)) 14%, var(--c-surface) 86%);
-  border: 1px solid var(--c-line);
-  transition:
-    transform 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 280ms ease,
-    border-color 200ms ease;
-  box-shadow:
-    0 1px 0 0 rgba(255,255,255,0.04) inset,
-    0 18px 40px -16px rgba(0,0,0,0.45);
+.zk-stage-fade {
+  animation: zk-stage-fade 220ms ease-out both;
+  display: flex;
+  height: 100%;
+  min-height: 0;
 }
-.peer-tile:hover {
-  border-color: color-mix(in srgb, var(--peer-glow, var(--c-accent)) 50%, var(--c-line));
-  box-shadow:
-    0 1px 0 0 rgba(255,255,255,0.06) inset,
-    0 0 0 1px color-mix(in srgb, var(--peer-glow, var(--c-accent)) 22%, transparent),
-    0 24px 60px -16px rgba(0,0,0,0.55);
+.zk-stage-fade > * { width: 100%; height: 100%; min-height: 0; }
+
+/* Hero panel inside the presentation stage gets a soft elevation. */
+.zk-stage-hero {
+  box-shadow: 0 12px 40px -16px rgba(0, 0, 0, 0.55);
+  transition: box-shadow 220ms ease;
 }
 
-/* ---- Speaking aura (soft halo *outside* the tile) ---- */
-.peer-tile-aura {
-  position: absolute;
-  inset: -8px;
-  z-index: -1;
-  border-radius: inherit;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--peer-glow, var(--c-accent)) 60%, transparent), transparent 75%);
-  filter: blur(12px);
-  animation: zk-peer-aura 2.4s ease-in-out infinite;
+/* Filmstrip scroller — thin, calm scrollbar that matches the dark
+   surface. Hidden when not needed; never overlaps the rail tiles. */
+.zk-filmstrip {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
 }
-@keyframes zk-peer-aura {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50%      { opacity: 0.95; transform: scale(1.04); }
+.zk-filmstrip::-webkit-scrollbar { width: 6px; height: 6px; }
+.zk-filmstrip::-webkit-scrollbar-track { background: transparent; }
+.zk-filmstrip::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: 999px;
 }
-
-/* ---- Speaking ring (animated conic gradient border) ---- */
-@property --zk-ring-angle {
-  syntax: "<angle>";
-  initial-value: 0deg;
-  inherits: false;
-}
-.peer-tile-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  /* Mask off the inside so we only see a 2px ring at the edge */
-  padding: 2px;
-  background:
-    conic-gradient(
-      from var(--zk-ring-angle, 0deg),
-      transparent 0deg,
-      var(--peer-glow, #6366f1) 90deg,
-      var(--peer-to, #c084fc) 160deg,
-      transparent 220deg,
-      transparent 360deg
-    );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
-  animation: zk-peer-ring-spin 3.4s linear infinite;
-}
-@keyframes zk-peer-ring-spin {
-  to { --zk-ring-angle: 360deg; }
+.zk-filmstrip::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 
-/* Fallback when @property isn't supported (Safari old) — fade pulse instead */
-@supports not (background: conic-gradient(from 0deg, red, red)) {
-  .peer-tile-ring {
-    background: var(--peer-glow, #6366f1);
-    animation: zk-peer-ring-fade 2.4s ease-in-out infinite;
-  }
-  @keyframes zk-peer-ring-fade {
-    0%, 100% { opacity: 0.4; }
-    50%      { opacity: 1; }
-  }
+/* Strip tiles morph in from 0 → full size when the layout switches.
+   Subtle enough to feel like a layout settle, not a flashy reveal. */
+.zk-strip-tile {
+  animation: zk-strip-tile-in 240ms ease-out both;
+  will-change: transform, opacity;
+}
+@keyframes zk-strip-tile-in {
+  0%   { opacity: 0; transform: scale(0.96); }
+  100% { opacity: 1; transform: scale(1);    }
 }
 
-/* ---- Fine grain noise overlay for placeholders (gives depth) ---- */
-.peer-tile-grain {
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-  background-size: 160px 160px;
-}
-
-/* Mini tile (used in sidebar / strip) — denser */
-.peer-tile-mini {
-  aspect-ratio: 1 / 1;
-}
-.peer-tile-mini .peer-tile-aura,
-.peer-tile-mini .peer-tile-ring {
-  display: none; /* Reserve the heavy effects for full-size tiles */
-}
-
-/* Spotlight tile gets extra elevation */
-.peer-tile-spotlight {
-  box-shadow:
-    0 1px 0 0 rgba(255,255,255,0.06) inset,
-    0 32px 80px -24px rgba(0,0,0,0.55);
-}
-
-/* Pinned tile gets a thin accent border */
-.peer-tile-pinned {
-  border-color: color-mix(in srgb, var(--c-accent) 55%, var(--c-line));
-}
-
-/* Screen share tile keeps content visible — no padding around video */
-.peer-tile-screen {
-  background: #050608;
-}
-
-/* Reduced motion respect */
 @media (prefers-reduced-motion: reduce) {
-  .peer-tile, .peer-tile * { animation: none !important; }
-  .peer-tile-aura { animation: none !important; opacity: 0.6; }
-  .peer-tile-ring { animation: none !important; opacity: 0.7; }
+  .zk-stage-fade,
+  .zk-strip-tile { animation-duration: 0ms; }
+  .zk-stage-hero { transition: none; }
 }

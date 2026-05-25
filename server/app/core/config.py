@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     recording_retention_days: int = 30
     recording_cleanup_interval_seconds: int = 3600
 
+    # Media plane (LiveKit)
+    media_provider: str = "null"          # "livekit" | "null"
+    livekit_api_key: str = ""
+    livekit_api_secret: str = ""
+    livekit_ws_url: str = ""               # e.g. ws://livekit:7880 (server-side, container DNS)
+    livekit_public_ws_url: str = ""        # e.g. ws://localhost:7880 (browser-visible)
+    livekit_token_ttl_seconds: int = 900   # 15 min — clients reconnect with fresh token
+
+    # Redis (control-plane fanout + idempotency cache)
+    redis_url: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

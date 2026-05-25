@@ -1,24 +1,26 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { motion } from 'framer-motion'
+import { memo, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { Crown, Hand, MicOff, Pin, ShieldCheck } from 'lucide-react'
-import { peerGradient, gradientCss, gradientCssRadial } from '../../lib/peerGradient'
-import { cn } from '../../lib/cn'
 
 /**
- * Futuristic participant tile.
+ * Google Meet–style participant tile.
  *
- * Behaviour:
- *  - Drives a per-peer "aurora" gradient placeholder when video is off,
- *    based on a stable hash of (name + tint color).
- *  - Speaking state turns on a rotating conic gradient ring + a pulsing
- *    neon halo behind the tile.
- *  - Idle tiles have a very slow vertical float animation so they feel
- *    "alive" instead of static.
- *  - Hover lifts the tile and reveals a soft sheen along the top edge.
+ * Calm by design: no ambient orbs, no idle float, no animated rings. Speaking
+ * state is a thin colored border. Video off shows a solid dark tile with a
+ * circular avatar in the center, matching Meet's behavior.
  *
- * Props are identical to the legacy PeerTile so it can be swapped in place.
+ * Memoized so toggling unrelated peer state on another tile doesn't force
+ * every tile to re-render and re-attach its <video> element.
+ *
+ * AUDIO ARCHITECTURE — read before touching:
+ *   Remote audio is rendered through a **dedicated** <audio> element that is
+ *   always mounted, independent of the camera state. The <video> element is
+ *   `muted` so the same stream's audio tracks don't double-play through it.
+ *   Older revisions relied on the <video> element to play audio; that broke
+ *   the moment a peer turned off their camera (the <video> unmounted and the
+ *   audio sink went with it — peer became inaudible). DO NOT remove the
+ *   <audio> element or remove `muted` from the <video>.
  */
-export default function PeerTile({
+function PeerTile({
   peer,
   spotlight = false,
   mini = false,
@@ -27,133 +29,159 @@ export default function PeerTile({
   onTogglePin,
 }) {
   const videoRef = useRef(null)
+  const audioRef = useRef(null)
 
-  useEffect(() => {
-    if (videoRef.current && peer.stream) videoRef.current.srcObject = peer.stream
+  // Track-level mute / end is the WebRTC-native fallback to `peer.video`.
+  // When the remote side stops sending frames the receiver's track fires
+  // `mute`. Catching this means the tile clears the moment frames stop —
+  // even if the `media-state` WS event is delayed. Otherwise Chromium keeps
+  // the last decoded frame painted forever (the "ghost face" bug).
+  const subscribeTrack = useCallback((callback) => {
+    if (!peer.stream) return () => {}
+    const vt = peer.stream.getVideoTracks()[0]
+    if (!vt) return () => {}
+    vt.addEventListener('mute', callback)
+    vt.addEventListener('unmute', callback)
+    vt.addEventListener('ended', callback)
+    return () => {
+      vt.removeEventListener('mute', callback)
+      vt.removeEventListener('unmute', callback)
+      vt.removeEventListener('ended', callback)
+    }
   }, [peer.stream])
 
-  const videoOff = peer.video === false
+  const getTrackInactive = useCallback(() => {
+    if (!peer.stream) return false
+    const vt = peer.stream.getVideoTracks()[0]
+    if (!vt) return true
+    return vt.muted || vt.readyState === 'ended'
+  }, [peer.stream])
+
+  const trackInactive = useSyncExternalStore(subscribeTrack, getTrackInactive, getTrackInactive)
+
+  // Attach remote audio. ALWAYS mounted — independent of videoOff. This is
+  // the canonical audio sink for the peer; the <video> stays muted.
+  useEffect(() => {
+    const el = audioRef.current
+    if (!el) return
+    if (el.srcObject !== peer.stream) {
+      el.srcObject = null
+      if (peer.stream) el.srcObject = peer.stream
+    }
+    if (!peer.stream) return
+    el.volume = 1.0
+    el.muted = false
+    // Browser autoplay policy can reject the initial .play() on a freshly
+    // attached MediaStream when the user has not yet gestured on the page
+    // (typical deep-link / new-tab join). Retry on the next user gesture.
+    const tryPlay = () => {
+      const p = el.play()
+      if (!p) return
+      p.catch(() => {
+        const resume = () => {
+          el.play().catch(() => {})
+          window.removeEventListener('pointerdown', resume, true)
+          window.removeEventListener('keydown', resume, true)
+          window.removeEventListener('touchstart', resume, true)
+        }
+        window.addEventListener('pointerdown', resume, true)
+        window.addEventListener('keydown', resume, true)
+        window.addEventListener('touchstart', resume, true)
+      })
+    }
+    tryPlay()
+    // If the element is ever paused by the browser (tab throttle, sleep,
+    // bluetooth reroute), kick it back into playback automatically.
+    const onPause = () => { if (el.srcObject) el.play().catch(() => {}) }
+    el.addEventListener('pause', onPause)
+    return () => {
+      el.removeEventListener('pause', onPause)
+      if (el) el.srcObject = null
+    }
+  }, [peer.stream])
+
+  useEffect(() => {
+    const el = videoRef.current
+    if (!el) return
+    // Null first so Chromium tears down the previous audio/video decoders
+    // before the new stream attaches. Skipping this is the root cause of
+    // the "audio doubles for a beat after rejoin" symptom.
+    if (el.srcObject !== peer.stream) {
+      el.srcObject = null
+      if (peer.stream) el.srcObject = peer.stream
+    }
+    return () => {
+      if (el) el.srcObject = null
+    }
+  }, [peer.stream])
+
+  const videoOff = peer.video === false || trackInactive
   const audioOff = peer.audio === false
   const isScreen = !!peer.screen
 
-  const grad = useMemo(() => peerGradient(peer.name, peer.color), [peer.name, peer.color])
-  const initials = useMemo(() => {
+  const initial = useMemo(() => {
     const n = (peer.name || '?').trim()
-    if (!n) return '?'
-    const parts = n.split(/\s+/)
-    if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase()
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    return n ? n.charAt(0).toUpperCase() : '?'
   }, [peer.name])
 
-  // Subtle perpetual float — keeps the grid "alive" without being distracting.
-  const idleFloat = !mini && !speaking
-    ? {
-        y: [0, -3, 0],
-        transition: { duration: 6.5, repeat: Infinity, ease: 'easeInOut' },
-      }
-    : {}
+  const avatarColor = peer.color || '#3a6ff3'
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, scale: 0.94 }}
-      animate={{ opacity: 1, scale: 1, ...idleFloat }}
-      exit={{ opacity: 0, scale: 0.96 }}
-      transition={{ type: 'spring', stiffness: 280, damping: 28, mass: 0.7 }}
-      whileHover={mini ? undefined : { y: -2, transition: { duration: 0.2 } }}
-      style={{
-        '--peer-from': grad.from,
-        '--peer-mid':  grad.mid,
-        '--peer-to':   grad.to,
-        '--peer-glow': grad.glow,
-        '--peer-tint': grad.glow,
-      }}
-      className={cn(
-        'peer-tile group relative isolate overflow-hidden',
-        mini ? 'peer-tile-mini rounded-2xl' : 'rounded-[28px]',
-        spotlight && 'peer-tile-spotlight',
-        speaking && 'peer-tile-speaking',
-        pinned && 'peer-tile-pinned',
-        isScreen && 'peer-tile-screen',
-        !mini && 'aspect-[16/9]'
-      )}
+    <div
+      className={
+        'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#202124] ' +
+        (speaking ? 'ring-2 ring-[#8ab4f8]' : 'ring-1 ring-white/5') +
+        (spotlight ? ' shadow-lg shadow-black/40' : '')
+      }
     >
-      {/* ----- Speaking aura (only when speaking) ----- */}
-      {speaking && (
-        <>
-          <span aria-hidden className="peer-tile-aura" />
-          <span aria-hidden className="peer-tile-ring" />
-        </>
-      )}
+      {/* Dedicated audio sink — ALWAYS mounted regardless of camera state.
+          This is what keeps the peer audible after they turn their camera
+          off. Do not move into the conditional below. */}
+      <audio ref={audioRef} autoPlay playsInline />
 
-      {/* ----- Content: video or gradient placeholder ----- */}
       {!videoOff && peer.stream ? (
         <video
           ref={videoRef}
           autoPlay
           playsInline
-          className={cn(
-            'absolute inset-0 h-full w-full',
-            isScreen ? 'object-contain bg-black' : 'object-cover'
-          )}
+          muted
+          className={
+            'absolute inset-0 h-full w-full ' +
+            (isScreen ? 'object-contain bg-black' : 'object-cover')
+          }
         />
       ) : (
-        <GradientPlaceholder
-          grad={grad}
-          initials={initials}
-          mini={mini}
-        />
+        <div className="absolute inset-0 grid place-items-center bg-[#202124]">
+          <div
+            className={
+              'grid place-items-center rounded-full font-semibold text-white ' +
+              (spotlight ? 'h-28 w-28 text-4xl' : mini ? 'h-10 w-10 text-base' : 'h-20 w-20 text-2xl')
+            }
+            style={{ backgroundColor: avatarColor }}
+          >{initial}</div>
+        </div>
       )}
 
-      {/* ----- Subtle inner border for depth ----- */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 rounded-[inherit] ring-1 ring-inset ring-white/8"
-      />
-
-      {/* ----- Hover sheen ----- */}
-      {!mini && (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-1/2 rounded-[inherit] opacity-0 transition-opacity duration-300 group-hover:opacity-60"
-          style={{
-            background:
-              'linear-gradient(180deg, rgba(255,255,255,0.10), transparent 80%)',
-          }}
-        />
-      )}
-
-      {/* ----- Hand raised (top-left) ----- */}
-      {peer.hand && (
-        <motion.div
-          initial={{ scale: 0, rotate: -30 }}
-          animate={{
-            scale: 1,
-            rotate: [-8, 12, -8],
-            transition: { rotate: { duration: 0.9, repeat: Infinity, ease: 'easeInOut' } },
-          }}
-          className={cn(
-            'absolute z-10 flex items-center justify-center rounded-full text-[#fbbf24]',
-            'border border-[#fbbf24]/40 bg-[#fbbf24]/15 shadow-[0_8px_22px_-6px_rgba(251,191,36,0.45)]',
-            mini ? 'top-2 left-2 h-6 w-6' : 'top-3.5 left-3.5 h-9 w-9'
-          )}
+      {/* Hand raised (top-left) */}
+      {peer.hand && !mini && (
+        <div
+          className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow"
           title="Hand raised"
         >
-          <Hand className={mini ? 'h-3 w-3' : 'h-4 w-4'} />
-        </motion.div>
+          <Hand className="h-4 w-4" />
+        </div>
       )}
 
-      {/* ----- Pin button (top-right, on hover) ----- */}
+      {/* Pin button (top-right, hover-revealed) */}
       {onTogglePin && !mini && (
         <button
-          onClick={(e) => { e.stopPropagation(); onTogglePin() }}
-          className={cn(
-            'absolute top-3.5 right-3.5 z-10 flex h-9 w-9 items-center justify-center rounded-full',
-            'border backdrop-blur-md transition-all duration-200',
-            pinned
-              ? 'border-[var(--c-accent)] bg-[var(--c-accent-soft)] text-[var(--c-accent)] opacity-100'
-              : 'border-white/12 bg-black/45 text-white/80 opacity-0 group-hover:opacity-100 hover:bg-black/65 hover:text-white'
-          )}
+          onClick={(e) => { e.stopPropagation(); onTogglePin(peer.peer_id) }}
+          className={
+            'absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full transition ' +
+            (pinned
+              ? 'bg-[#8ab4f8]/20 text-[#8ab4f8] opacity-100'
+              : 'bg-black/55 text-white/85 opacity-0 backdrop-blur hover:bg-black/70 group-hover/tile:opacity-100')
+          }
           title={pinned ? 'Unpin' : 'Pin to main view'}
           aria-label={pinned ? 'Unpin' : 'Pin to main view'}
         >
@@ -161,137 +189,31 @@ export default function PeerTile({
         </button>
       )}
 
-      {/* ----- Bottom name pill (and muted indicator) ----- */}
-      <div
-        className={cn(
-          'pointer-events-none absolute inset-x-0 bottom-0 z-10 flex items-end justify-between gap-2',
-          mini ? 'p-2' : 'p-3.5'
-        )}
-      >
-        <div
-          className={cn(
-            'pointer-events-auto flex items-center gap-2 rounded-full border text-white',
-            'border-white/10 bg-black/55 backdrop-blur-md',
-            mini ? 'px-2 py-1 text-[10.5px]' : 'px-3 py-1.5 text-[12px]'
-          )}
-        >
-          {speaking && (
-            <span className="flex items-center gap-0.5" aria-hidden>
-              {[0, 1, 2].map((i) => (
-                <motion.span
-                  key={i}
-                  className="block w-0.5 rounded-full bg-[var(--peer-glow)]"
-                  style={{ height: '6px' }}
-                  animate={{ scaleY: [0.4, 1.4, 0.6, 1.2, 0.5] }}
-                  transition={{ duration: 0.9, repeat: Infinity, ease: 'easeInOut', delay: i * 0.12 }}
-                />
-              ))}
-            </span>
-          )}
-          <span className="truncate font-semibold tracking-tight">
-            {peer.name || '…'}{isScreen ? ' · sharing' : ''}
-          </span>
-          {peer.role === 'host' && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/18 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wider text-amber-300 ring-1 ring-amber-300/30">
-              <Crown className="h-2.5 w-2.5" /> Host
-            </span>
-          )}
-          {peer.role === 'co_host' && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-cyan-400/18 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wider text-cyan-300 ring-1 ring-cyan-300/30">
-              <ShieldCheck className="h-2.5 w-2.5" /> Co-host
-            </span>
-          )}
+      {/* Bottom name bar */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
+        <div className={
+          'flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 font-medium text-white backdrop-blur-sm ' +
+          (mini ? 'text-[11px]' : 'text-xs')
+        }>
+          <span className="truncate">{peer.name || '…'}{isScreen ? ' · Presenting' : ''}</span>
+          {peer.role === 'host' && <Crown className="h-3 w-3 shrink-0 text-amber-300" />}
+          {peer.role === 'co_host' && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-300" />}
         </div>
 
         {audioOff && (
           <div
-            className={cn(
-              'pointer-events-auto flex items-center justify-center rounded-full',
-              'bg-[#ef4444] text-white shadow-[0_6px_18px_-4px_rgba(239,68,68,0.55)] ring-2 ring-white/10',
-              mini ? 'h-6 w-6' : 'h-8 w-8'
-            )}
+            className={
+              'grid place-items-center rounded-full bg-[#ea4335] text-white shadow ' +
+              (mini ? 'h-6 w-6' : 'h-7 w-7')
+            }
             title="Muted"
           >
             <MicOff className={mini ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
           </div>
         )}
       </div>
-    </motion.div>
-  )
-}
-
-/**
- * Gradient placeholder with the peer's initials when video is off.
- * Adds: an animated soft particle (the gradient orb subtly drifts),
- * a glowing ring around the avatar, and a noise texture for depth.
- */
-function GradientPlaceholder({ grad, initials, mini }) {
-  return (
-    <div
-      className="absolute inset-0 flex items-center justify-center overflow-hidden"
-      style={{ background: gradientCssRadial(grad) }}
-    >
-      {/* drifting orb */}
-      <motion.div
-        aria-hidden
-        className="absolute -inset-10 rounded-full opacity-50 blur-3xl"
-        style={{ background: `radial-gradient(closest-side, ${grad.to}, transparent)` }}
-        animate={{ x: [-30, 40, -20, 30, -30], y: [-20, 20, -10, 30, -20] }}
-        transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      {/* fine grain overlay */}
-      <span aria-hidden className="absolute inset-0 opacity-25 mix-blend-overlay peer-tile-grain" />
-
-      {/* initials */}
-      <div className="relative flex flex-col items-center gap-2">
-        <motion.div
-          className={cn(
-            'relative flex aspect-square items-center justify-center rounded-full font-bold text-white',
-            mini ? 'h-12 text-[18px]' : 'h-32 text-[56px] xl:h-40 xl:text-[68px]'
-          )}
-          style={{
-            background: gradientCss(grad),
-            boxShadow:
-              `inset 0 0 0 2px rgba(255,255,255,0.22), 0 24px 60px -16px ${grad.glow}aa`,
-          }}
-          animate={!mini ? { scale: [1, 1.02, 1] } : undefined}
-          transition={!mini ? { duration: 4, repeat: Infinity, ease: 'easeInOut' } : undefined}
-        >
-          {/* glowing ring */}
-          {!mini && (
-            <span
-              aria-hidden
-              className="absolute -inset-3 rounded-full opacity-60 blur-2xl"
-              style={{ background: `radial-gradient(closest-side, ${grad.glow}, transparent 70%)` }}
-            />
-          )}
-          {/* inner shine */}
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-0 rounded-full"
-            style={{
-              background:
-                'radial-gradient(120% 80% at 30% 22%, rgba(255,255,255,0.30), transparent 50%)',
-            }}
-          />
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-0 rounded-full"
-            style={{
-              background:
-                'radial-gradient(120% 80% at 70% 80%, rgba(0,0,0,0.20), transparent 55%)',
-            }}
-          />
-          <span
-            className="relative"
-            style={{
-              textShadow: '0 2px 12px rgba(0,0,0,0.30), 0 0 1px rgba(255,255,255,0.20)',
-            }}
-          >
-            {initials}
-          </span>
-        </motion.div>
-      </div>
     </div>
   )
 }
+
+export default memo(PeerTile)

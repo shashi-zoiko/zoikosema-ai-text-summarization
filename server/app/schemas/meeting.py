@@ -35,6 +35,7 @@ class MeetingOut(BaseModel):
     chat_enabled: bool = True
     screenshare_enabled: bool = True
     password_protected: bool = False
+    media_provider: str = "mesh"   # "mesh" | "livekit"
     created_at: datetime
     ended_at: datetime | None = None
 
@@ -118,7 +119,10 @@ class IntelligenceGenerateIn(BaseModel):
 
 
 class MeetingIntelligenceOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    # `model_used` field clashes with pydantic v2's reserved `model_` prefix
+    # for namespace methods. Disabling the warning since renaming the column
+    # would break the existing UI contract.
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
     id: int
     meeting_id: int

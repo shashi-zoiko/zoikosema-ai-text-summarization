@@ -15,7 +15,7 @@ from app.core.config import get_settings
 from app.core.database import engine, init_db
 from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.core.recording_cleanup import recording_cleanup_loop
-from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence
+from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence, webhooks
 from app.websocket import chat as chat_ws, signaling as meeting_ws
 from app.connect import router as connect_router
 
@@ -132,6 +132,7 @@ app.include_router(admin.router)
 app.include_router(calls.router)
 app.include_router(chat_ws.router)
 app.include_router(meeting_ws.router)
+app.include_router(webhooks.router)
 
 # Zoiko Connect v3 — new bounded services mounted alongside legacy routers.
 # Strangler-fig: legacy paths keep working; new features consume /api/connect/*.

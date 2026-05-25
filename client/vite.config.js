@@ -14,8 +14,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/api': { target: 'http://localhost:8080', changeOrigin: true },
-      '/ws': { target: 'ws://localhost:8080', ws: true, changeOrigin: true },
+      '/api': { target: 'http://localhost:8001', changeOrigin: true },
+      '/ws': { target: 'ws://localhost:8001', ws: true, changeOrigin: true },
     },
   },
   build: {
@@ -32,6 +32,7 @@ export default defineConfig({
           if (!id.includes('node_modules')) return
           if (id.includes('framer-motion')) return 'vendor-motion'
           if (id.includes('lucide-react')) return 'vendor-icons'
+          if (id.includes('livekit-client') || id.includes('@livekit/')) return 'vendor-livekit'
           if (
             id.includes('/react/') ||
             id.includes('/react-dom/') ||

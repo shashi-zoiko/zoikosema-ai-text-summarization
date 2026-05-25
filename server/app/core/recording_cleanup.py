@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError, OperationalError
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -73,6 +74,11 @@ async def recording_cleanup_loop() -> None:
                 log.info("recording cleanup purged %d expired recordings", purged)
         except asyncio.CancelledError:
             raise
+        except (ProgrammingError, OperationalError) as exc:
+            # Cold start: init_db (running in another worker thread) may not
+            # have created meeting_recordings yet. Wait for it on the next tick
+            # rather than spamming a stack trace.
+            log.info("recording cleanup: tables not ready yet (%s); will retry", exc.__class__.__name__)
         except Exception:
             log.exception("recording cleanup sweep failed")
         try:
