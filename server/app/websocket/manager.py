@@ -28,14 +28,31 @@ class RoomManager:
 
     async def broadcast(
         self, room: str, payload: dict[str, Any], exclude: WebSocket | None = None
-    ) -> None:
+    ) -> list[WebSocket]:
+        """Send to every member except *exclude*. Drop any ws whose send
+        fails — the connection is dead from our point of view, and leaving
+        it in the room set would cause it to keep showing up as a phantom
+        member in future welcome messages until TCP keepalive eventually
+        notices. Returns the dead sockets so callers can broadcast a
+        peer-left for them.
+        """
+        dead: list[WebSocket] = []
         for ws in list(self._rooms.get(room, set())):
             if ws is exclude:
                 continue
             try:
                 await ws.send_json(payload)
             except Exception:
-                pass
+                dead.append(ws)
+        if dead:
+            async with self._lock:
+                bucket = self._rooms.get(room)
+                if bucket is not None:
+                    for ws in dead:
+                        bucket.discard(ws)
+                    if not bucket:
+                        self._rooms.pop(room, None)
+        return dead
 
 
 chat_manager = RoomManager()

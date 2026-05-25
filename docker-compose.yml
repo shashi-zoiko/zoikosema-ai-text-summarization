@@ -17,6 +17,57 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: zoiko-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  livekit:
+    image: livekit/livekit-server:v1.12.0
+    container_name: zoiko-livekit
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "7880:7880"            # HTTP/WS signaling
+      - "7881:7881"            # TCP fallback for ICE
+      - "7882:7882/udp"        # primary UDP media
+    volumes:
+      - ./infra/livekit/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7880/"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  livekit-egress:
+    image: livekit/egress:v1.12.0
+    container_name: zoiko-livekit-egress
+    restart: unless-stopped
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    depends_on:
+      livekit:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Chromium inside the container needs SYS_ADMIN to launch the sandbox.
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - ./infra/livekit/egress.yaml:/etc/egress.yaml:ro
+      - zoiko_recordings:/out   # shared with the server so it can serve files
+
   server:
     build:
       context: ./server
@@ -39,14 +90,33 @@ services:
       # AI
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-claude-sonnet-4-20250514}
+      # LiveKit
+      MEDIA_PROVIDER: ${MEDIA_PROVIDER:-livekit}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecretdevsecretdevsecretdevsecret}
+      LIVEKIT_WS_URL: ${LIVEKIT_WS_URL:-ws://livekit:7880}
+      LIVEKIT_PUBLIC_WS_URL: ${LIVEKIT_PUBLIC_WS_URL:-ws://localhost:7880}
+      # Redis (used by livekit clustering + control plane fanout)
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       db:
         condition: service_healthy
+      livekit:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8001:8080"
     volumes:
       - zoiko_uploads:/app/uploads
       - zoiko_recordings:/app/recordings
 
   client:
+    # Production-style nginx serving the built React bundle. In dev you should
+    # `npm run dev` from ./client (Vite at :5173 with proxy to :8001) — this
+    # container is gated behind the `prod-like` profile so `docker compose up`
+    # doesn't try to bind :8080 in the dev workflow.
+    profiles: ["prod-like"]
     build:
       context: ./client
     container_name: zoiko-client

@@ -15,5 +15,5 @@ anthropic>=0.39.0
 # --- Zoiko Connect v3 -------------------------------------------------------
 redis[hiredis]>=5.0.1     # pub/sub + presence + idempotency cache
 tenacity>=8.2.3           # retry policies for outbox dispatcher
-# livekit-api>=0.6.0      # uncomment when MEDIA_PROVIDER=livekit
+livekit-api>=0.8.0        # AccessToken + room admin (server-side only)
 

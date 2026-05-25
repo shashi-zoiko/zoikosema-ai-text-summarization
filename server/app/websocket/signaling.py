@@ -151,6 +151,33 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
 
         host_or_cohost = _is_host_or_cohost(meeting, user.id, db)
 
+        # If the same user already has a live WS in this meeting (extra tab,
+        # stale connection that never sent a close frame, reconnect race),
+        # evict the old one before registering the new one. Without this,
+        # every reload/extra-tab paints a duplicate tile for the same user.
+        prior_ws = _user_ws.get((meeting.id, user.id))
+        if prior_ws is not None and prior_ws is not websocket:
+            prior_info = _conn_info.pop(prior_ws, None)
+            await meet_manager.leave(room, prior_ws)
+            # Order matters: broadcast peer-left *before* closing the old WS.
+            # Peers tear down their PC to the ghost on receiving peer-left,
+            # which stops them rendering audio from the old session. If we
+            # close first, the old client's onclose handler races with the
+            # peer-left broadcast over the network — peers can keep playing
+            # audio from the ghost PC for the duration of that round trip.
+            if prior_info:
+                await meet_manager.broadcast(
+                    room,
+                    {"type": "peer-left", "peer_id": prior_info["peer_id"]},
+                )
+            try:
+                # 4001 = "superseded by a newer session" (see client onclose).
+                # Distinct code so the old tab shows a clear message and does
+                # not auto-reconnect, which would ping-pong with this tab.
+                await prior_ws.close(code=4001, reason="superseded")
+            except Exception:
+                pass
+
         # Register reverse lookup
         _user_ws[(meeting.id, user.id)] = websocket
 
@@ -195,13 +222,15 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                         await websocket.close(code=4403)
                         await meet_manager.leave(room, websocket)
                         _conn_info.pop(websocket, None)
-                        _user_ws.pop((meeting.id, user.id), None)
+                        if _user_ws.get((meeting.id, user.id)) is websocket:
+                            _user_ws.pop((meeting.id, user.id), None)
                         await _send_waiting_list(room, meeting, db)
                         return
             except WebSocketDisconnect:
                 await meet_manager.leave(room, websocket)
                 _conn_info.pop(websocket, None)
-                _user_ws.pop((meeting.id, user.id), None)
+                if _user_ws.get((meeting.id, user.id)) is websocket:
+                    _user_ws.pop((meeting.id, user.id), None)
                 await _send_waiting_list(room, meeting, db)
                 return
 
@@ -209,7 +238,8 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
             if participant.status == STATUS_LEFT:
                 await meet_manager.leave(room, websocket)
                 _conn_info.pop(websocket, None)
-                _user_ws.pop((meeting.id, user.id), None)
+                if _user_ws.get((meeting.id, user.id)) is websocket:
+                    _user_ws.pop((meeting.id, user.id), None)
                 await _send_waiting_list(room, meeting, db)
                 return
 
@@ -238,18 +268,73 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
             "is_host_or_cohost": host_or_cohost,
             "role": participant.role,
             "status": STATUS_ADMITTED,
+            # Optimistic default for peer-joined / welcome — the joining
+            # client will send its real media-state milliseconds later, but
+            # this keeps existing keys in shape so consumers can rely on
+            # peer.audio / peer.video always being defined.
+            "audio": True,
+            "video": True,
+            "screen": False,
         }
 
         existing = []
+        seen_user_ids: set[int] = set()
+        stale_to_drop: list[WebSocket] = []
         for member_ws in meet_manager.members(room):
             info = _conn_info.get(member_ws)
-            if info and info.get("status") == STATUS_ADMITTED and member_ws is not websocket:
-                existing.append({
-                    "peer_id": info["peer_id"],
-                    "user_id": info["user_id"],
-                    "name": info["name"],
-                    "color": info["color"],
-                })
+            if not info or info.get("status") != STATUS_ADMITTED:
+                continue
+            if member_ws is websocket:
+                continue
+            uid = info.get("user_id")
+            # `_user_ws` holds the single live ws per user (the dedup at join
+            # guarantees this). Any other ws in the room set with the same
+            # user_id is a ghost — a previous tab that died without a clean
+            # close. Skip it and clean it up so it doesn't reach the welcome
+            # peer list of any future joiner either.
+            if uid is not None and _user_ws.get((meeting.id, uid)) is not member_ws:
+                stale_to_drop.append(member_ws)
+                continue
+            # Belt-and-suspenders: even if _user_ws lookup somehow failed, do
+            # not emit two peer entries for the same user_id.
+            if uid in seen_user_ids:
+                stale_to_drop.append(member_ws)
+                continue
+            seen_user_ids.add(uid)
+            # Include current screen-share state so a late joiner shows the
+            # correct "sharing" badge immediately, instead of waiting for
+            # the next screen-share-started broadcast (which they missed).
+            existing.append({
+                "peer_id": info["peer_id"],
+                "user_id": info["user_id"],
+                "name": info["name"],
+                "color": info["color"],
+                "role": info.get("role", "participant"),
+                # Include mic/camera state so the late joiner doesn't render
+                # a <video> over a peer whose camera is actually off — that
+                # element would freeze on whatever single frame happened to
+                # arrive first (or stay black) until the next media-state
+                # broadcast. Default to True for backwards compat with peers
+                # that haven't sent a media-state yet.
+                "audio": bool(info.get("audio", True)),
+                "video": bool(info.get("video", True)),
+                "screen": bool(info.get("screen", False)),
+                "share_mode": info.get("share_mode"),
+            })
+
+        # Reap the ghosts we filtered out so they stop showing up everywhere.
+        for ghost in stale_to_drop:
+            ghost_info = _conn_info.pop(ghost, None)
+            await meet_manager.leave(room, ghost)
+            try:
+                await ghost.close(code=4001, reason="superseded")
+            except Exception:
+                pass
+            if ghost_info:
+                await meet_manager.broadcast(
+                    room,
+                    {"type": "peer-left", "peer_id": ghost_info["peer_id"]},
+                )
 
         await websocket.send_json({
             "type": "welcome",
@@ -303,14 +388,31 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                             break
 
                 elif kind == "media-state":
+                    audio_state = bool(data.get("audio", True))
+                    video_state = bool(data.get("video", True))
+                    screen_state = bool(data.get("screen", False))
+                    # Persist on this connection's record so the next user to
+                    # join sees the correct mic/camera state immediately via
+                    # the welcome packet (existing-peers list). Without this,
+                    # late joiners default to assuming every existing peer's
+                    # camera is on and render an empty/frozen <video> until
+                    # the next media-state message — the root cause of the
+                    # "ghost face for new arrivals" half of the bug.
+                    info = _conn_info.get(websocket)
+                    if info is not None:
+                        info["audio"] = audio_state
+                        info["video"] = video_state
+                        # Screen is tracked separately via screen-share-*
+                        # events, but mirror it here for completeness.
+                        info["screen"] = screen_state
                     await meet_manager.broadcast(
                         room,
                         {
                             "type": "media-state",
                             "peer_id": peer_id,
-                            "audio": bool(data.get("audio", True)),
-                            "video": bool(data.get("video", True)),
-                            "screen": bool(data.get("screen", False)),
+                            "audio": audio_state,
+                            "video": video_state,
+                            "screen": screen_state,
                         },
                         exclude=websocket,
                     )
@@ -347,6 +449,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                         {
                             "type": "reaction",
                             "peer_id": peer_id,
+                            "user_id": user.id,
                             "name": user.name,
                             "emoji": (data.get("emoji") or "\U0001f44d")[:8],
                         },
@@ -358,6 +461,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                         {
                             "type": "raise-hand",
                             "peer_id": peer_id,
+                            "user_id": user.id,
                             "name": user.name,
                             "raised": bool(data.get("raised", True)),
                         },
@@ -432,6 +536,12 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                             "reason": "Screen sharing is disabled by the host.",
                         })
                         continue
+                    # Record the active share so late joiners get it via welcome.
+                    share_mode = data.get("share_mode", "screen")
+                    info = _conn_info.get(websocket)
+                    if info is not None:
+                        info["screen"] = True
+                        info["share_mode"] = share_mode
                     # Broadcast that a user started sharing (multi-presenter)
                     await meet_manager.broadcast(
                         room,
@@ -439,12 +549,16 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                             "type": "screen-share-started",
                             "peer_id": peer_id,
                             "name": user.name,
-                            "share_mode": data.get("share_mode", "screen"),
+                            "share_mode": share_mode,
                         },
                         exclude=websocket,
                     )
 
                 elif kind == "screen-share-stopped":
+                    info = _conn_info.get(websocket)
+                    if info is not None:
+                        info["screen"] = False
+                        info.pop("share_mode", None)
                     await meet_manager.broadcast(
                         room,
                         {
@@ -595,7 +709,11 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
         finally:
             await meet_manager.leave(room, websocket)
             leaving = _conn_info.pop(websocket, None)
-            _user_ws.pop((meeting.id, user.id), None)
+            # Only clear the reverse-lookup if it still points to *this* WS —
+            # a newer session of the same user may have already replaced it
+            # via the dedup at join, and we don't want to evict it.
+            if _user_ws.get((meeting.id, user.id)) is websocket:
+                _user_ws.pop((meeting.id, user.id), None)
 
             if leaving:
                 await meet_manager.broadcast(

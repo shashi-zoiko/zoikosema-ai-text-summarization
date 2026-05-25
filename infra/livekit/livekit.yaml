@@ -1,0 +1,42 @@
+port: 7880
+bind_addresses:
+  - ""
+
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: false
+  # Local dev: clients connect from the host so 127.0.0.1 is what they see.
+  # In staging/prod, set use_external_ip: true and drop these.
+  node_ip: 127.0.0.1
+  # ── Docker Desktop on Windows ───────────────────────────────────────────
+  # vpnkit's UDP NAT drops idle sessions after ~30s, causing PC churn. If you
+  # hit reconnect storms on a Windows dev box, override locally (DO NOT COMMIT)
+  # to your machine's LAN IP and force TCP-only media:
+  #   node_ip: 192.168.x.x     # your Windows LAN IP
+  #   udp_port: 0              # disables UDP, all media flows over tcp_port
+
+redis:
+  address: redis:6379
+  db: 1
+
+keys:
+  devkey: devsecretdevsecretdevsecretdevsecret
+
+room:
+  auto_create: false
+  empty_timeout: 300
+  departure_timeout: 20
+  max_participants: 200
+
+logging:
+  level: info
+  json: false
+
+turn:
+  enabled: false
+
+webhook:
+  api_key: devkey
+  urls:
+    - http://server:8080/api/webhooks/livekit

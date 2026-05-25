@@ -1,20 +1,20 @@
-"""Media Orchestration Service — everyone calls these two functions.
+"""Media Orchestration Service — single entrypoint for all media operations.
 
-Provider is chosen by `MEDIA_PROVIDER` env var (`livekit` | `null`). The
-rest of the app (session service, gateway, api) never imports a provider
-class directly — they call `create_media_room` / `generate_token`.
+Provider is chosen by settings.media_provider (`livekit` | `null`). The rest
+of the app calls `create_media_room` / `generate_token` / `release_media_room`
+and never imports a provider class directly.
 """
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 from app.connect.media_service.provider import MediaProvider, MediaToken
+from app.core.config import get_settings
 
 
 @lru_cache(maxsize=1)
 def _provider() -> MediaProvider:
-    kind = os.getenv("MEDIA_PROVIDER", "null").lower()
+    kind = (get_settings().media_provider or "null").lower()
     if kind == "livekit":
         from app.connect.media_service.livekit_provider import LiveKitMediaProvider
         return LiveKitMediaProvider()
@@ -37,3 +37,29 @@ async def generate_token(
 
 async def release_media_room(media_room_ref: str | None) -> None:
     await _provider().release_room(media_room_ref)
+
+
+async def ensure_media_room(media_room_ref: str) -> None:
+    """Idempotent CreateRoom on the SFU. No-op for providers without it
+    (the null provider, etc.)."""
+    p = _provider()
+    fn = getattr(p, "ensure_room", None)
+    if fn is not None:
+        await fn(media_room_ref=media_room_ref)
+
+
+async def start_recording(*, media_room_ref: str, file_path: str) -> str:
+    """Start a room-composite egress; returns the egress id."""
+    p = _provider()
+    fn = getattr(p, "start_room_composite_egress", None)
+    if fn is None:
+        raise RuntimeError("media provider does not support recording")
+    return await fn(media_room_ref=media_room_ref, file_path=file_path)
+
+
+async def stop_recording(egress_id: str) -> None:
+    p = _provider()
+    fn = getattr(p, "stop_egress", None)
+    if fn is None:
+        raise RuntimeError("media provider does not support recording")
+    await fn(egress_id)

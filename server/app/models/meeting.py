@@ -41,6 +41,16 @@ class Meeting(Base):
     # Meeting password (bcrypt hash, nullable = no password)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # LiveKit room handle. Lazy-allocated on first /media-token request so meetings
+    # that are never joined never consume an SFU room slot. Cleared on end_meeting
+    # via release_media_room().
+    media_room_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Which media plane this meeting uses. Strangler-fig flag: per-meeting cutover
+    # from raw-WebRTC mesh ("mesh") to LiveKit SFU ("livekit"). Defaults to the
+    # global MEDIA_PROVIDER setting at create time.
+    media_provider: Mapped[str] = mapped_column(String(16), default="mesh")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -99,6 +109,10 @@ class MeetingRecording(Base):
     chat_log_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(24), default=REC_STATUS_RECORDING)
     share_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+
+    # LiveKit Egress handle. Populated when the recording was produced by the
+    # SFU's RoomCompositeEgress rather than a browser MediaRecorder upload.
+    egress_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

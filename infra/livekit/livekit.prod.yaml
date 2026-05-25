@@ -1,0 +1,58 @@
+# Production LiveKit config — copy to a secrets store and template the values
+# marked ${VAR}. Do NOT commit a copy with real keys.
+
+port: 7880
+bind_addresses:
+  - ""
+
+rtc:
+  tcp_port: 7881
+  # In prod, expose a *range* and let LiveKit allocate per-PC ports. UDP is
+  # mandatory for low latency; only the TCP fallback should traverse your
+  # load balancer.
+  port_range_start: 50000
+  port_range_end: 60000
+  # Required: LiveKit must advertise its public IP in ICE candidates so
+  # browsers can punch through NAT. Either:
+  #   (a) set use_external_ip: true + open egress to the metadata service, or
+  #   (b) hard-code the EIP / NLB public IP here.
+  use_external_ip: true
+
+redis:
+  address: ${REDIS_HOST}:${REDIS_PORT}
+  username: ${REDIS_USERNAME}
+  password: ${REDIS_PASSWORD}
+  db: 0
+  use_tls: true
+
+keys:
+  ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
+
+room:
+  auto_create: false
+  empty_timeout: 300
+  departure_timeout: 20
+  max_participants: 200
+
+logging:
+  level: info
+  json: true       # one line per record — ship to your log aggregator
+
+turn:
+  enabled: true
+  domain: turn.${PUBLIC_DOMAIN}
+  tls_port: 443    # browsers on locked-down networks only egress 443/tcp
+  cert_file: /etc/livekit/tls/fullchain.pem
+  key_file:  /etc/livekit/tls/privkey.pem
+  external_tls: true   # set true if the TLS terminator is in front (NLB+ACM)
+
+webhook:
+  api_key: ${LIVEKIT_API_KEY}
+  urls:
+    - https://api.${PUBLIC_DOMAIN}/api/webhooks/livekit
+
+# Node-pinning hint for clustered deploys — when 2+ livekit-server nodes share
+# Redis, you may want to pin specific rooms by region. Leave commented for
+# single-region setups.
+# node_selector:
+#   region: us-east-1

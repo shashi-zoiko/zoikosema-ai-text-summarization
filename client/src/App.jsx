@@ -4,6 +4,7 @@ import Layout from './components/Layout.jsx'
 import UpdateToast from './components/UpdateToast.jsx'
 import CallOverlay from './components/CallOverlay.jsx'
 import Spinner from './components/ui/Spinner.jsx'
+import RoomErrorBoundary from './features/meeting/components/RoomErrorBoundary.jsx'
 import { useAuth } from './context/AuthContext.jsx'
 
 // Auth pages are tiny and on the critical path for unauthed users — keep eager.
@@ -18,6 +19,7 @@ const Chat = lazy(() => import('./pages/Chat.jsx'))
 const Meet = lazy(() => import('./pages/Meet.jsx'))
 const MeetLobby = lazy(() => import('./pages/MeetLobby.jsx'))
 const MeetRoom = lazy(() => import('./pages/MeetRoom.jsx'))
+const MeetRoomLivekit = lazy(() => import('./features/meeting/MeetRoomLivekit.jsx'))
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
 const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx'))
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
@@ -90,6 +92,19 @@ export default function App() {
           element={
             <RequireAuth>
               <MeetRoom />
+            </RequireAuth>
+          }
+        />
+        {/* Strangler-fig route for the LiveKit migration. Selected by appending
+            ?lk=1 in the lobby (or globally via VITE_USE_LIVEKIT=1). Will replace
+            /meet/:code/room once dogfooded. */}
+        <Route
+          path="/meet/:code/room-lk"
+          element={
+            <RequireAuth>
+              <RoomErrorBoundary>
+                <MeetRoomLivekit />
+              </RoomErrorBoundary>
             </RequireAuth>
           }
         />

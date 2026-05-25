@@ -1,0 +1,20 @@
+# LiveKit Egress (recording) — local dev config.
+# Egress is a separate process from the SFU; it joins rooms as a headless
+# Chrome instance, composites tracks, and writes MP4 files.
+
+log_level: info
+api_key: devkey
+api_secret: devsecretdevsecretdevsecretdevsecret
+ws_url: ws://livekit:7880
+
+redis:
+  address: redis:6379
+  db: 2
+
+# Required by the Chrome compositor. The egress container ships with Chromium
+# preinstalled; this just enables it.
+template_base: ""
+
+# Where mixed recordings are written. The compose file mounts the shared
+# zoiko_recordings volume at /out so FastAPI can serve the files.
+output_directory: /out
