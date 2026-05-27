@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc, and_
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.connect.media_service import service as media
@@ -230,21 +231,35 @@ async def issue_media_token(
     """
     settings = get_settings()
     if settings.media_provider.lower() != "livekit":
+        # The lobby falls back to the mesh room when this 503s and the
+        # meeting's media_provider is not 'livekit'; this only fires when
+        # someone deep-links /room-lk on a deployment that hasn't enabled
+        # the SFU yet. Keep the detail actionable so the failure mode
+        # surfaces in admin/support tickets instead of a generic 500.
         raise HTTPException(
             status_code=503,
-            detail=f"Media provider '{settings.media_provider}' does not issue real tokens",
+            detail=(
+                "LiveKit is not enabled in this environment. "
+                "Set MEDIA_PROVIDER=livekit + LIVEKIT_* credentials on the "
+                "server (see infra/livekit/README.md) to enable the SFU room."
+            ),
         )
 
     meeting = _get_meeting_or_404(code, db)
     if not meeting.is_active:
         raise HTTPException(status_code=410, detail="Meeting has ended")
 
-    participant = db.scalar(
-        select(MeetingParticipant).where(
+    # `.scalars().first()` not `.scalar()` — see join_meeting for context:
+    # the table has no UNIQUE(meeting_id, user_id) constraint, and a
+    # historical duplicate row would otherwise raise MultipleResultsFound.
+    participant = db.scalars(
+        select(MeetingParticipant)
+        .where(
             MeetingParticipant.meeting_id == meeting.id,
             MeetingParticipant.user_id == user.id,
         )
-    )
+        .order_by(desc(MeetingParticipant.id))
+    ).first()
     if not participant:
         raise HTTPException(status_code=403, detail="Call POST /join first")
     if participant.status != STATUS_ADMITTED:
@@ -413,65 +428,101 @@ def join_meeting(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    meeting = _get_meeting_or_404(code, db)
+    try:
+        meeting = _get_meeting_or_404(code, db)
 
-    if not meeting.is_active:
-        raise HTTPException(status_code=410, detail="Meeting has ended")
+        if not meeting.is_active:
+            raise HTTPException(status_code=410, detail="Meeting has ended")
 
-    if meeting.locked and meeting.host_id != user.id:
-        raise HTTPException(status_code=403, detail="Meeting is locked")
+        if meeting.locked and meeting.host_id != user.id:
+            raise HTTPException(status_code=403, detail="Meeting is locked")
 
-    # Meeting password check (host is exempt)
-    if meeting.password_hash and meeting.host_id != user.id:
-        provided = data.password if data else None
-        if not provided or not verify_password(provided, meeting.password_hash):
-            raise HTTPException(status_code=403, detail="Incorrect meeting password")
+        # Meeting password check (host is exempt)
+        if meeting.password_hash and meeting.host_id != user.id:
+            provided = data.password if data else None
+            if not provided or not verify_password(provided, meeting.password_hash):
+                raise HTTPException(status_code=403, detail="Incorrect meeting password")
 
-    # Check for existing participant row (reconnection)
-    existing = db.scalar(
-        select(MeetingParticipant).where(
-            MeetingParticipant.meeting_id == meeting.id,
-            MeetingParticipant.user_id == user.id,
+        # Check for existing participant row (reconnection). Use `.first()`
+        # instead of `.scalar()` because the table has no UNIQUE
+        # (meeting_id, user_id) constraint — historical duplicate rows
+        # (race on first join, or pre-fix data) would otherwise raise
+        # MultipleResultsFound and bubble up as an opaque 500.
+        existing = db.scalars(
+            select(MeetingParticipant)
+            .where(
+                MeetingParticipant.meeting_id == meeting.id,
+                MeetingParticipant.user_id == user.id,
+            )
+            .order_by(desc(MeetingParticipant.id))
+        ).first()
+
+        if existing:
+            if existing.status in (STATUS_DENIED, STATUS_KICKED):
+                raise HTTPException(status_code=403, detail="You have been removed from this meeting")
+            if existing.status in (STATUS_ADMITTED, STATUS_DISCONNECTED):
+                # Reconnect: mark admitted again
+                existing.status = STATUS_ADMITTED
+                existing.last_seen_at = datetime.now(timezone.utc)
+                existing.left_at = None
+                db.commit()
+                db.refresh(existing)
+                return existing
+            if existing.status == STATUS_LEFT:
+                # Re-joining after voluntarily leaving — treat like new join
+                existing.status = STATUS_PENDING if meeting.waiting_room_enabled and meeting.host_id != user.id else STATUS_ADMITTED
+                existing.last_seen_at = datetime.now(timezone.utc)
+                existing.left_at = None
+                db.commit()
+                db.refresh(existing)
+                return existing
+            # STATUS_PENDING — still waiting
+            return existing
+
+        # New participant
+        is_host = meeting.host_id == user.id
+        status = STATUS_ADMITTED if is_host or not meeting.waiting_room_enabled else STATUS_PENDING
+        role = ROLE_HOST if is_host else ROLE_PARTICIPANT
+
+        participant = MeetingParticipant(
+            meeting_id=meeting.id,
+            user_id=user.id,
+            role=role,
+            status=status,
         )
-    )
-
-    if existing:
-        if existing.status in (STATUS_DENIED, STATUS_KICKED):
-            raise HTTPException(status_code=403, detail="You have been removed from this meeting")
-        if existing.status in (STATUS_ADMITTED, STATUS_DISCONNECTED):
-            # Reconnect: mark admitted again
-            existing.status = STATUS_ADMITTED
-            existing.last_seen_at = datetime.now(timezone.utc)
-            existing.left_at = None
+        db.add(participant)
+        try:
             db.commit()
-            db.refresh(existing)
-            return existing
-        if existing.status == STATUS_LEFT:
-            # Re-joining after voluntarily leaving — treat like new join
-            existing.status = STATUS_PENDING if meeting.waiting_room_enabled and meeting.host_id != user.id else STATUS_ADMITTED
-            existing.last_seen_at = datetime.now(timezone.utc)
-            existing.left_at = None
-            db.commit()
-            db.refresh(existing)
-            return existing
-        # STATUS_PENDING — still waiting
-        return existing
-
-    # New participant
-    is_host = meeting.host_id == user.id
-    status = STATUS_ADMITTED if is_host or not meeting.waiting_room_enabled else STATUS_PENDING
-    role = ROLE_HOST if is_host else ROLE_PARTICIPANT
-
-    participant = MeetingParticipant(
-        meeting_id=meeting.id,
-        user_id=user.id,
-        role=role,
-        status=status,
-    )
-    db.add(participant)
-    db.commit()
-    db.refresh(participant)
-    return participant
+        except IntegrityError:
+            # Concurrent first-join from the same user (double-click on
+            # "Join now", or a fast lobby retry) can race two INSERTs. The
+            # loser's commit fails; recover by reading the winner's row.
+            db.rollback()
+            participant = db.scalars(
+                select(MeetingParticipant)
+                .where(
+                    MeetingParticipant.meeting_id == meeting.id,
+                    MeetingParticipant.user_id == user.id,
+                )
+                .order_by(desc(MeetingParticipant.id))
+            ).first()
+            if participant is None:
+                raise HTTPException(status_code=500, detail="Could not join meeting")
+            return participant
+        db.refresh(participant)
+        return participant
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        # Surface DB problems with a logged traceback so future 500s on this
+        # path show up in Cloud Run logs instead of an opaque "HTTP 500" chip
+        # on the lobby.
+        log.exception("join_meeting DB error (code=%s user=%s)", code, getattr(user, "id", None))
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Could not join meeting — please retry")
+    except Exception:
+        log.exception("join_meeting unexpected error (code=%s user=%s)", code, getattr(user, "id", None))
+        raise HTTPException(status_code=500, detail="Could not join meeting — please retry")
 
 
 # ── Roster (participants list) ──────────────────────────────────────────────

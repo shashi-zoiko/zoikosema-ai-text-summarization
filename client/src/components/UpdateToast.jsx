@@ -1,8 +1,37 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon'
-import './UpdateToast.css'
+import { cn } from '../lib/cn'
 
 const AUTO_DISMISS_MS = 4500
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * UpdateToast — Electron auto-updater status pill.
+ * Companion UpdateToast.css gone; everything's Tailwind reading off the
+ * design tokens. Logic unchanged.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+const TONE_BORDER = {
+  ok:    'border-[color-mix(in_srgb,#10b981_35%,transparent)]',
+  ready: 'border-[color-mix(in_srgb,#8a7bff_35%,transparent)]',
+  err:   'border-[color-mix(in_srgb,#ef4444_35%,transparent)]',
+  info:  'border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)]',
+}
+
+const TONE_ICON_BG = {
+  ok:    'linear-gradient(135deg, #10b981, #059669)',
+  ready: 'linear-gradient(135deg, #8a7bff, #d670ff)',
+  err:   'linear-gradient(135deg, #ef4444, #dc2626)',
+  info:  'var(--accent-gradient)',
+  '':    'var(--accent-gradient)',
+}
+
+const TONE_ICON_SHADOW = {
+  ok:    '0 6px 18px -6px rgba(16,185,129,0.45)',
+  ready: '0 6px 18px -6px rgba(214,112,255,0.45)',
+  err:   '0 6px 18px -6px var(--danger-glow)',
+  info:  '0 6px 18px -6px var(--accent-glow)',
+  '':    '0 6px 18px -6px var(--accent-glow)',
+}
 
 export default function UpdateToast() {
   const [state, setState] = useState(null)
@@ -45,19 +74,16 @@ export default function UpdateToast() {
     title = 'Checking for updates'
     sub = 'Looking for a newer version of ZoikoSema…'
   } else if (status === 'available') {
-    iconName = 'sparkle'
-    tone = 'info'
+    iconName = 'sparkle'; tone = 'info'
     title = 'Update available'
     sub = `Downloading ZoikoSema ${payload?.version || ''}`.trim() + '…'
   } else if (status === 'progress') {
-    iconName = 'bolt'
-    tone = 'info'
+    iconName = 'bolt'; tone = 'info'
     title = 'Downloading update'
     sub = payload?.percent != null ? `${payload.percent}% complete` : null
     progress = payload?.percent || 0
   } else if (status === 'downloaded') {
-    iconName = 'check'
-    tone = 'ready'
+    iconName = 'check'; tone = 'ready'
     title = 'Update ready'
     sub = `ZoikoSema ${payload?.version || ''} will install on restart.`
     action = (
@@ -66,13 +92,11 @@ export default function UpdateToast() {
       </button>
     )
   } else if (status === 'not-available') {
-    iconName = 'check'
-    tone = 'ok'
+    iconName = 'check'; tone = 'ok'
     title = 'You’re up to date'
     sub = 'Running the latest version of ZoikoSema.'
   } else if (status === 'error') {
-    iconName = 'shield'
-    tone = 'err'
+    iconName = 'shield'; tone = 'err'
     title = 'Update check failed'
     sub = payload?.message || 'Please try again later.'
   } else {
@@ -80,19 +104,42 @@ export default function UpdateToast() {
   }
 
   return (
-    <div className={`upd-toast ${tone ? 'upd-' + tone : ''}`} role="status" aria-live="polite">
-      <div className="upd-toast-icon"><Icon name={iconName} size={16} /></div>
-      <div className="upd-toast-body">
-        <div className="upd-toast-title">{title}</div>
-        {sub && <div className="upd-toast-sub">{sub}</div>}
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        'fade-in-up fixed bottom-5 right-5 z-[1000] flex max-w-[340px] items-center gap-3',
+        'rounded-md border bg-white/92 py-3.5 pl-3.5 pr-[34px] text-fg shadow-xl backdrop-blur-md backdrop-saturate-150',
+        tone ? TONE_BORDER[tone] : 'border-line'
+      )}
+    >
+      <div
+        className="grid h-8 w-8 shrink-0 place-items-center rounded-sm text-white transition-[background,box-shadow] duration-200"
+        style={{
+          background: TONE_ICON_BG[tone],
+          boxShadow: TONE_ICON_SHADOW[tone],
+        }}
+      >
+        <Icon name={iconName} size={16} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-semibold tracking-[-0.01em]">{title}</div>
+        {sub && <div className="mt-0.5 text-[12px] text-fg-muted">{sub}</div>}
         {progress != null && (
-          <div className="upd-toast-progress">
-            <div className="upd-toast-progress-bar" style={{ width: `${progress}%` }} />
+          <div className="mt-1.5 h-1 overflow-hidden rounded-[2px] bg-bg-3">
+            <div
+              className="h-full transition-[width] duration-200"
+              style={{ width: `${progress}%`, background: 'var(--accent-gradient)' }}
+            />
           </div>
         )}
       </div>
       {action}
-      <button className="upd-toast-close" onClick={close} aria-label="Dismiss">
+      <button
+        onClick={close}
+        aria-label="Dismiss"
+        className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center !rounded-md !border-0 !bg-transparent !p-0 text-fg-muted !shadow-none transition hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)] hover:!text-fg"
+      >
         <Icon name="close" size={14} />
       </button>
     </div>

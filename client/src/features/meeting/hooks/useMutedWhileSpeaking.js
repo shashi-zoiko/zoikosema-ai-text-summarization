@@ -41,6 +41,7 @@ export default function useMutedWhileSpeaking() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
         if (cancelled) { stop(); return }
+        if (!stream.getAudioTracks()[0]) { stop(); return }
         ctx = new (window.AudioContext || window.webkitAudioContext)()
         const src = ctx.createMediaStreamSource(stream)
         const analyser = ctx.createAnalyser()

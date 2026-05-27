@@ -5,7 +5,9 @@ COPY client/package*.json ./
 RUN npm install
 COPY client/ .
 ARG VITE_API_BASE
-ENV VITE_API_BASE=$VITE_API_BASE
+ARG VITE_USE_LIVEKIT
+ENV VITE_API_BASE=$VITE_API_BASE \
+    VITE_USE_LIVEKIT=$VITE_USE_LIVEKIT
 RUN npm run build
 
 FROM python:3.12-slim

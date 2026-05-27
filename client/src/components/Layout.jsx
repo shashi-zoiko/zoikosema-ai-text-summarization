@@ -74,9 +74,9 @@ function ThemeMenu() {
                     className="h-8 w-8 shrink-0 rounded-lg border border-white/10"
                     style={{
                       background:
-                        t.id === 'midnight' ? 'linear-gradient(135deg, #0f121b, #6366f1)' :
-                        t.id === 'aurora'   ? 'linear-gradient(135deg, #110d23, #a78bfa, #f472b6)' :
-                                              'linear-gradient(135deg, #ffffff, #eef0ff)',
+                        t.id === 'midnight'
+                          ? 'linear-gradient(135deg, #0f121b, #6366f1)'
+                          : 'linear-gradient(135deg, #ffffff, #eef0ff)',
                     }}
                   />
                   <div className="min-w-0 flex-1">

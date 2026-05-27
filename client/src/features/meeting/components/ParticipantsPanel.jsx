@@ -1,7 +1,7 @@
 import { memo, useMemo } from 'react'
 import { useParticipants } from '@livekit/components-react'
 import { Track } from 'livekit-client'
-import { Crown, Hand, MicOff, Pin, PinOff, UserMinus, UserPlus, VideoOff, X } from 'lucide-react'
+import { Crown, Hand, MicOff, Pin, PinOff, ShieldCheck, UserMinus, UserPlus, VideoOff, X } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
 
 function identityToUserId(identity) {
@@ -11,11 +11,16 @@ function identityToUserId(identity) {
 }
 
 const ROLE_LABEL = {
-  host: 'Host',
+  host: 'Meeting host',
   co_host: 'Co-host',
-  participant: 'Participant',
+  participant: '',
 }
 
+/**
+ * Meet-style people panel. Rows are tap-friendly; pin/promote/kick controls
+ * fade in on hover so the rest line stays calm. Order is host → co-host →
+ * everyone else, with raised hands bubbling within their tier.
+ */
 export default function ParticipantsPanel({
   selfUserId,
   isHost,
@@ -30,13 +35,11 @@ export default function ParticipantsPanel({
   const raisedHands = useRoomStore((s) => s.raisedHands)
   const roles = useRoomStore((s) => s.roles)
 
-  // Sort: host → co_hosts → others; raised hands bubble up within their tier.
   const sorted = useMemo(() => {
     const rank = (p) => {
       const uid = identityToUserId(p.identity)
       const role = roles.get(uid) || 'participant'
       let base = role === 'host' ? 0 : role === 'co_host' ? 1 : 2
-      // raised hands beat non-raised within tier
       if (uid != null && raisedHands.has(uid)) base -= 0.5
       return base
     }
@@ -44,21 +47,21 @@ export default function ParticipantsPanel({
   }, [all, roles, raisedHands])
 
   return (
-    <aside className="w-80 max-w-[85vw] flex flex-col bg-zinc-900 border-l border-zinc-800 text-zinc-100">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-        <h2 className="text-sm font-semibold">
-          People <span className="text-zinc-400">({sorted.length})</span>
+    <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-[#2a2c2f] text-zinc-100 shadow-lg ring-1 ring-white/5">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-4">
+        <h2 className="text-[15px] font-medium">
+          People <span className="text-zinc-500">· {sorted.length}</span>
         </h2>
         <button
           onClick={onClose}
-          className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100"
-          title="Close"
+          aria-label="Close people panel"
+          className="grid h-8 w-8 place-items-center rounded-full text-zinc-400 transition hover:bg-white/5 hover:text-zinc-100"
         >
-          <X size={18} />
+          <X className="h-4 w-4" />
         </button>
       </header>
 
-      <ul className="flex-1 overflow-y-auto divide-y divide-zinc-800">
+      <ul className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {sorted.map((p) => (
           <ParticipantRow
             key={p.identity}
@@ -85,53 +88,65 @@ const ParticipantRow = memo(function ParticipantRow({
   const uid = identityToUserId(participant.identity)
   const isSelf = uid === selfUserId
   const isRowHost = role === 'host'
+  const isRowCohost = role === 'co_host'
 
   const micPub = participant.getTrackPublication(Track.Source.Microphone)
   const camPub = participant.getTrackPublication(Track.Source.Camera)
   const micMuted = !micPub || micPub.isMuted
   const camOff = !camPub || camPub.isMuted
 
-  const initials = (participant.name || participant.identity || '?').slice(0, 1).toUpperCase()
+  const name = participant.name || participant.identity || 'Guest'
+  const initial = name.slice(0, 1).toUpperCase()
+  const avatarColor = pickColor(participant.identity || name)
   const canKick = isHostOrCohost && !isSelf && !isRowHost
   const canPromote = isHost && !isSelf && !isRowHost
 
   return (
-    <li className="px-3 py-2 flex items-center gap-3">
-      <div className="w-9 h-9 rounded-full grid place-items-center text-sm font-semibold bg-zinc-700 text-zinc-200 shrink-0">
-        {initials}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-sm truncate">{participant.name || 'Guest'}{isSelf && ' (you)'}</span>
-          {isRowHost && <Crown size={12} className="text-amber-400 shrink-0" />}
-          {raised && <Hand size={12} className="text-amber-400 shrink-0" />}
+    <li className="group flex items-center gap-3 rounded-xl px-2 py-2 transition hover:bg-white/[0.04]">
+      <div
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[13px] font-semibold text-white"
+        style={{ backgroundColor: avatarColor }}
+      >{initial}</div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-zinc-100">
+          <span className="truncate">{name}{isSelf && ' (you)'}</span>
+          {isRowHost && <Crown className="h-3 w-3 shrink-0 text-amber-300" title="Host" />}
+          {isRowCohost && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-300" title="Co-host" />}
+          {raised && <Hand className="h-3 w-3 shrink-0 text-amber-300" title="Hand raised" />}
         </div>
-        <div className="text-[10px] text-zinc-500 flex items-center gap-2">
-          <span>{ROLE_LABEL[role] || role}</span>
-          {micMuted && <MicOff size={10} />}
-          {camOff && <VideoOff size={10} />}
-        </div>
+        {ROLE_LABEL[role] && (
+          <div className="text-[11px] text-zinc-500">{ROLE_LABEL[role]}</div>
+        )}
       </div>
-      <RowBtn onClick={onTogglePin} title={pinned ? 'Unpin' : 'Pin'}>
-        {pinned ? <PinOff size={12} /> : <Pin size={12} />}
-      </RowBtn>
-      {canPromote && (
-        <RowBtn
-          onClick={() => onPromote(uid)}
-          title={role === 'co_host' ? 'Demote' : 'Make co-host'}
-        >
-          <UserPlus size={12} />
+
+      <div className="flex items-center gap-1 text-zinc-400">
+        {micMuted && <MicOff className="h-3.5 w-3.5 text-zinc-500" />}
+        {camOff && <VideoOff className="h-3.5 w-3.5 text-zinc-500" />}
+      </div>
+
+      <div className="ml-1 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+        <RowBtn onClick={onTogglePin} title={pinned ? 'Unpin' : 'Pin to main view'}>
+          {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
         </RowBtn>
-      )}
-      {canKick && (
-        <RowBtn
-          onClick={() => onKick(uid, participant.name)}
-          title="Remove from meeting"
-          destructive
-        >
-          <UserMinus size={12} />
-        </RowBtn>
-      )}
+        {canPromote && (
+          <RowBtn
+            onClick={() => onPromote(uid)}
+            title={isRowCohost ? 'Demote' : 'Make co-host'}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+          </RowBtn>
+        )}
+        {canKick && (
+          <RowBtn
+            onClick={() => onKick(uid, participant.name)}
+            title="Remove from meeting"
+            destructive
+          >
+            <UserMinus className="h-3.5 w-3.5" />
+          </RowBtn>
+        )}
+      </div>
     </li>
   )
 })
@@ -141,14 +156,23 @@ function RowBtn({ onClick, title, destructive, children }) {
     <button
       onClick={onClick}
       title={title}
+      aria-label={title}
       className={
-        'p-1.5 rounded ' +
+        'grid h-7 w-7 place-items-center rounded-full transition ' +
         (destructive
-          ? 'bg-red-600/20 text-red-400 hover:bg-red-600/40'
-          : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700')
+          ? 'text-[#ea4335] hover:bg-[#ea4335]/15'
+          : 'text-zinc-300 hover:bg-white/[0.06] hover:text-zinc-100')
       }
     >
       {children}
     </button>
   )
+}
+
+const COLORS = ['#5b8def', '#a16cf4', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#f472b6']
+function pickColor(seed) {
+  if (!seed) return COLORS[0]
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
+  return COLORS[Math.abs(h) % COLORS.length]
 }

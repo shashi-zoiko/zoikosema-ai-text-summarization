@@ -11,8 +11,6 @@ import {
   X, Send, MessageSquare, Users, Settings as SettingsIcon, Clock,
   PhoneOff, Pin,
 } from 'lucide-react'
-import './Meet.css'
-import './MeetRoom.theme.css'
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -1558,7 +1556,7 @@ export default function MeetRoom() {
     return (
       <div
         className={
-          'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#202124] ' +
+          'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#3c4043] ' +
           (speaking ? 'ring-2 ring-[#8ab4f8]' : 'ring-1 ring-white/5')
         }
       >
@@ -1574,20 +1572,33 @@ export default function MeetRoom() {
             }
           />
         ) : (
-          <div className="absolute inset-0 grid place-items-center bg-[#202124]">
+          // Same colored-gradient treatment as PeerTile so self looks like
+          // any other tile when the camera is off.
+          <div
+            className="absolute inset-0 grid place-items-center"
+            style={{
+              background: `radial-gradient(circle at 50% 35%, ${selfBg} 0%, color-mix(in srgb, ${selfBg} 55%, #000) 100%)`,
+            }}
+          >
             <div
               className={
-                'grid place-items-center rounded-full font-semibold text-white ' +
-                (isSpotlight ? 'h-28 w-28 text-4xl' : isMini ? 'h-10 w-10 text-base' : 'h-20 w-20 text-2xl')
+                'grid place-items-center rounded-full font-semibold text-white ring-1 ring-white/15 backdrop-blur-sm bg-white/[0.08] ' +
+                (isSpotlight ? 'h-36 w-36 text-5xl' : isMini ? 'h-10 w-10 text-base' : 'h-24 w-24 text-3xl')
               }
-              style={{ backgroundColor: selfBg }}
             >{selfInitial}</div>
           </div>
         )}
 
         {handRaised && !isMini && (
-          <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow">
+          <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow-md">
             <Hand className="h-4 w-4" />
+          </div>
+        )}
+
+        {/* Self mic-off badge — top-right like Meet */}
+        {!audioOn && !isMini && (
+          <div className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm" title="You are muted">
+            <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />
           </div>
         )}
 
@@ -1770,9 +1781,12 @@ export default function MeetRoom() {
     : ''
 
   return (
-    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#0f1217] text-zinc-100">
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#202124] text-zinc-100">
       {/* ── Top bar ──────────────────────────────────────────────── */}
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-4">
+      {/* No border / no background — sits transparently over the stage like
+          Meet does. Recording / lock pills float on the left, code + copy
+          link float on the right. */}
+      <header className="flex h-14 shrink-0 items-center justify-between px-4">
         <div className="flex items-center gap-2.5 text-sm">
           {isRecording && (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-[#ea4335]/15 px-2.5 py-1 text-[11px] font-semibold text-[#ea4335]">
@@ -1818,7 +1832,7 @@ export default function MeetRoom() {
         </div>
 
         {sidebar && (
-          <aside className="flex h-full w-[340px] shrink-0 flex-col border-l border-white/5 bg-[#161a1f]">
+          <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-[#2a2c2f] shadow-lg ring-1 ring-white/5">
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-4">
               <h2 className="text-[15px] font-medium text-zinc-100">{sidebarTitle}</h2>
               <button
@@ -2037,8 +2051,32 @@ export default function MeetRoom() {
         code={code}
         audioOn={audioOn}
         toggleAudio={toggleAudio}
+        audioDeviceMenu={
+          devices.audio.length > 1
+            ? ({ close }) => (
+                <DockDeviceMenu
+                  title="Microphone"
+                  devices={devices.audio}
+                  current={audioDeviceId}
+                  onPick={async (id) => { await switchAudioDevice(id); close() }}
+                />
+              )
+            : null
+        }
         videoOn={videoOn}
         toggleVideo={toggleVideo}
+        videoDeviceMenu={
+          devices.video.length > 1
+            ? ({ close }) => (
+                <DockDeviceMenu
+                  title="Camera"
+                  devices={devices.video}
+                  current={videoDeviceId}
+                  onPick={async (id) => { await switchVideoDevice(id); close() }}
+                />
+              )
+            : null
+        }
         screenOn={screenOn}
         screenshareEnabled={screenshareEnabled}
         isHostOrCohost={isHostOrCohost}
@@ -2126,6 +2164,48 @@ function HostButton({ active, onClick, icon, label }) {
       <span className="grid h-8 w-8 place-items-center rounded-lg bg-white/[0.04]">{icon}</span>
       <span className="flex-1 truncate">{label}</span>
     </button>
+  )
+}
+
+/**
+ * Compact device-picker dropdown that hangs off the dock's mic/camera
+ * caret. The dock owns the popover positioning + outside-click handling;
+ * this component just renders the list. Returning early on a no-op pick
+ * keeps the menu from triggering an unnecessary `getUserMedia` (and the
+ * permission re-prompt that some Chromium builds throw on it).
+ */
+function DockDeviceMenu({ title, devices, current, onPick }) {
+  return (
+    <div className="py-1.5">
+      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+        {title}
+      </div>
+      <ul className="max-h-[260px] overflow-y-auto">
+        {devices.map((d) => {
+          const active = d.deviceId === current
+          return (
+            <li key={d.deviceId}>
+              <button
+                onClick={() => { if (!active) onPick(d.deviceId) }}
+                className={
+                  'flex w-full items-start gap-2.5 px-3 py-2 text-left text-[13px] transition ' +
+                  (active
+                    ? 'bg-[#8ab4f8]/12 text-[#8ab4f8]'
+                    : 'text-zinc-100 hover:bg-white/[0.06]')
+                }
+              >
+                <span className="mt-1 grid h-2 w-2 shrink-0 place-items-center">
+                  {active && <span className="h-2 w-2 rounded-full bg-current" />}
+                </span>
+                <span className="min-w-0 flex-1 truncate">
+                  {d.label || `${title} ${d.deviceId.slice(0, 6)}`}
+                </span>
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 

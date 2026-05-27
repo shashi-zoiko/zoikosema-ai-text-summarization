@@ -52,45 +52,17 @@ function relativeDay(iso) {
   return formatDate(iso)
 }
 
-/* ─────────────────────── action tile colors ─────────────────────── */
-/* Each tile uses a layered gradient + a soft hover shine like the reference image. */
+/* ─────────────────────── action tiles ───────────────────────
+ * Calm Linear/Vercel-style cards. Earlier revisions used a four-colour
+ * vivid gradient per tile + glow halos + shine sweeps; it read as
+ * "AI-generated landing page" rather than a product surface. Now each
+ * tile is a neutral card with a small accented icon chip — the colour
+ * lives on the icon, not the whole tile. */
 const ACTION_TILES = [
-  {
-    key: 'new',
-    label: 'New meeting',
-    sub: 'Instant room',
-    icon: <Video />,
-    to: '/meet',
-    bg: 'linear-gradient(160deg,#7B86FF 0%,#5B67F2 55%,#3F4ACB 100%)',
-    glow: 'rgba(91,103,242,0.55)',
-  },
-  {
-    key: 'schedule',
-    label: 'Schedule',
-    sub: 'Plan ahead',
-    icon: <Calendar />,
-    to: '/meet',
-    bg: 'linear-gradient(160deg,#7EE2C2 0%,#3FBF9B 55%,#1F9D7B 100%)',
-    glow: 'rgba(63,191,155,0.5)',
-  },
-  {
-    key: 'recordings',
-    label: 'Recordings',
-    sub: 'Replay & share',
-    icon: <Disc />,
-    to: '/meet',
-    bg: 'linear-gradient(160deg,#FFB877 0%,#F08A44 55%,#D86919 100%)',
-    glow: 'rgba(240,138,68,0.5)',
-  },
-  {
-    key: 'intel',
-    label: 'AI Intelligence',
-    sub: 'Recaps & action items',
-    icon: <Brain />,
-    to: '/meet',
-    bg: 'linear-gradient(160deg,#E07BFF 0%,#B658F0 55%,#7C3CC8 100%)',
-    glow: 'rgba(182,88,240,0.55)',
-  },
+  { key: 'new',        label: 'New meeting',    sub: 'Start an instant room',  icon: <Video />,    to: '/meet', tone: 'accent'  },
+  { key: 'schedule',   label: 'Schedule',       sub: 'Plan a meeting ahead',   icon: <Calendar />, to: '/meet', tone: 'success' },
+  { key: 'recordings', label: 'Recordings',     sub: 'Replay and share',       icon: <Disc />,     to: '/meet', tone: 'warn'    },
+  { key: 'intel',      label: 'AI Intelligence', sub: 'Recaps & action items', icon: <Brain />,    to: '/meet', tone: 'purple'  },
 ]
 
 /* ─────────────────────── stat strip ─────────────────────── */
@@ -191,18 +163,10 @@ export default function Dashboard() {
   if (loading) return <DashboardSkeleton />
 
   return (
-    <div className="relative isolate mx-auto w-full max-w-[1320px] px-4 py-6 sm:px-8 sm:py-10">
-      {/* ambient backdrop */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div
-          className="absolute -top-32 -left-24 h-[420px] w-[420px] rounded-full opacity-[0.18] blur-3xl"
-          style={{ background: 'radial-gradient(closest-side,#5b67f2,transparent 70%)' }}
-        />
-        <div
-          className="absolute -top-24 right-0 h-[460px] w-[460px] rounded-full opacity-[0.16] blur-3xl"
-          style={{ background: 'radial-gradient(closest-side,#d670ff,transparent 70%)' }}
-        />
-      </div>
+    <div className="relative mx-auto w-full max-w-[1320px] px-4 py-6 sm:px-8 sm:py-10">
+      {/* The earlier revision had two large radial-gradient blobs floating
+          behind the dashboard. Removing them — SaaS-grade dashboards keep
+          the canvas calm and let content carry the colour. */}
 
       {/* =============== Top bar: greeting + search + upgrade =============== */}
       <motion.div
@@ -260,9 +224,9 @@ export default function Dashboard() {
           </motion.div>
           <motion.h2
             variants={fadeUp}
-            className="mt-3 text-[36px] font-bold leading-[1.05] tracking-[-0.025em] sm:text-[44px]"
+            className="mt-3 text-[32px] font-semibold leading-[1.08] tracking-[-0.025em] text-[var(--c-fg)] sm:text-[38px]"
           >
-            {user?.name ? <>Welcome back, <span className="gradient-text">{user.name.split(' ')[0]}</span></> : <>Manage your <span className="gradient-text">meetings</span></>}
+            {user?.name ? <>Welcome back, {user.name.split(' ')[0]}.</> : <>Your meeting workspace.</>}
           </motion.h2>
           <motion.p
             variants={fadeUp}
@@ -299,8 +263,8 @@ export default function Dashboard() {
             <span className="mt-3 text-[12px] font-semibold tracking-tight">New room</span>
           </motion.button>
 
-          {ACTION_TILES.map((t, i) => (
-            <ActionTile key={t.key} tile={t} index={i + 1} onClick={() => navigate(t.to)} />
+          {ACTION_TILES.map((t) => (
+            <ActionTile key={t.key} tile={t} onClick={() => navigate(t.to)} />
           ))}
         </motion.div>
       </section>
@@ -587,44 +551,53 @@ export default function Dashboard() {
 
 /* ────────────────────────── pieces ────────────────────────── */
 
-function ActionTile({ tile, index, onClick }) {
+const ACTION_TONE = {
+  accent:  'bg-[var(--c-accent-soft)] text-[var(--c-accent)]',
+  success: 'bg-[var(--c-success-soft)] text-[var(--c-success)]',
+  warn:    'bg-[var(--c-warn-soft)] text-[var(--c-warn)]',
+  purple:  'bg-[color-mix(in_srgb,var(--c-accent-3)_18%,transparent)] text-[var(--c-accent-3)]',
+}
+
+/**
+ * SaaS-grade action card. Neutral surface with a small tinted icon chip;
+ * the only "splash" of colour lives on the icon. Hovering subtly lifts
+ * the card and brightens the icon ring — same micro-interaction Linear
+ * and Vercel use on their dashboard tiles.
+ */
+function ActionTile({ tile, onClick }) {
+  const toneClass = ACTION_TONE[tile.tone] || ACTION_TONE.accent
   return (
     <motion.button
       variants={fadeUp}
-      whileHover={{ y: -6 }}
-      whileTap={{ scale: 0.97 }}
-      transition={{ type: 'spring', stiffness: 320, damping: 22 }}
+      whileHover={{ y: -3 }}
+      whileTap={{ scale: 0.98 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 24 }}
       onClick={onClick}
-      className="group/tile relative isolate flex aspect-[3/4] flex-col justify-between overflow-hidden rounded-2xl p-4 text-left text-white outline-none focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)]"
-      style={{ background: tile.bg }}
+      className={cn(
+        'group/tile relative flex aspect-[3/4] flex-col justify-between rounded-2xl border p-4 text-left',
+        'border-[var(--c-line)] bg-[var(--c-surface)]',
+        'transition-[border-color,box-shadow] duration-200',
+        'hover:border-[var(--c-line-strong)] hover:shadow-[0_10px_30px_-12px_color-mix(in_srgb,var(--c-fg)_18%,transparent)]',
+        'outline-none focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)]'
+      )}
     >
-      {/* Soft hover halo */}
       <span
-        aria-hidden
-        className="pointer-events-none absolute -inset-4 -z-10 opacity-0 blur-2xl transition-opacity duration-300 group-hover/tile:opacity-80"
-        style={{ background: tile.glow }}
-      />
-      {/* Shine sweep */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -translate-x-full bg-[linear-gradient(120deg,transparent_30%,rgba(255,255,255,0.28)_50%,transparent_70%)] transition-transform duration-700 ease-out group-hover/tile:translate-x-full"
-      />
-      <div className="flex items-start justify-between">
-        <span className="text-[11px] font-bold tabular-nums tracking-[0.1em] text-white/70">
-          {String(index).padStart(2, '0')}
-        </span>
-        <span className="text-white/60 transition-transform duration-200 group-hover/tile:rotate-90">⋮</span>
-      </div>
+        className={cn(
+          'inline-flex h-10 w-10 items-center justify-center rounded-xl transition-transform duration-200',
+          'group-hover/tile:scale-[1.06] [&_svg]:h-[18px] [&_svg]:w-[18px]',
+          toneClass
+        )}
+      >
+        {tile.icon}
+      </span>
       <div>
-        <motion.span
-          whileHover={{ rotate: -8, scale: 1.05 }}
-          transition={{ type: 'spring', stiffness: 320, damping: 18 }}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur-sm [&_svg]:h-5 [&_svg]:w-5"
-        >
-          {tile.icon}
-        </motion.span>
-        <div className="mt-3 text-[14px] font-bold tracking-tight">{tile.label}</div>
-        <div className="text-[11px] font-medium text-white/75">{tile.sub}</div>
+        <div className="text-[14px] font-semibold tracking-tight text-[var(--c-fg)]">
+          {tile.label}
+        </div>
+        <div className="mt-0.5 text-[12px] text-[var(--c-fg-muted)]">{tile.sub}</div>
+        <span className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-medium text-[var(--c-fg-dim)] opacity-0 transition-opacity group-hover/tile:opacity-100">
+          Open <ArrowRight className="h-3 w-3" />
+        </span>
       </div>
     </motion.button>
   )

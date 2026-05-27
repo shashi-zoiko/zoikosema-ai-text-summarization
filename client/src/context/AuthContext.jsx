@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { api } from '../api/client'
+import { clearChatCache } from '../lib/chatCache'
 
 const AuthContext = createContext(null)
 
@@ -115,6 +116,9 @@ export function AuthProvider({ children }) {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
     localStorage.removeItem('zoiko_token')
     localStorage.removeItem('zoiko_refresh')
+    // Drop the module-level chat cache so the next user (in case of
+    // shared device) doesn't see the previous user's channels/messages.
+    clearChatCache()
     setUser(null)
   }, [])
 

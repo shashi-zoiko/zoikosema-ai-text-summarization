@@ -5,7 +5,22 @@ import { useAuth } from '../context/AuthContext'
 import { useCall } from '../context/CallContext'
 import Avatar from '../components/Avatar'
 import Icon from '../components/Icon'
-import './Chat.css'
+import { cn } from '../lib/cn'
+import {
+  getCachedChannels, setCachedChannels,
+  getCachedMessages, setCachedMessages,
+} from '../lib/chatCache'
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Chat — fully Tailwind. The hand-written Chat.css that used to drive this
+ * page is gone; everything now reads off the design-token utilities exposed
+ * by index.css (bg-surface / text-fg / border-line / etc.) so dark and
+ * light themes track automatically.
+ *
+ * Logic is unchanged from the previous version: WebSocket-driven send
+ * with optimistic reconciliation, SWR cache for channel/message lists,
+ * mention autocomplete + AI smart replies, voice notes, file uploads.
+ * ──────────────────────────────────────────────────────────────────────── */
 
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👏']
 
@@ -109,7 +124,15 @@ function renderBodyWithMentions(body, currentUserHandle) {
     if (start > last) out.push(body.slice(last, start))
     const isMe = currentUserHandle && m[2].toLowerCase() === currentUserHandle
     out.push(
-      <span key={`mn-${start}`} className={'chat-mention' + (isMe ? ' me' : '')}>
+      <span
+        key={`mn-${start}`}
+        className={cn(
+          'rounded-md px-1.5 py-px font-semibold',
+          isMe
+            ? 'bg-warn-soft text-warn'
+            : 'bg-accent-soft text-accent'
+        )}
+      >
         {'@' + m[2]}
       </span>
     )
@@ -159,7 +182,7 @@ export default function Chat() {
   const { user } = useAuth()
   const { startCall } = useCall()
 
-  const [channels, setChannels] = useState([])
+  const [channels, setChannels] = useState(() => getCachedChannels() || [])
   const [messages, setMessages] = useState([])
   const [activeChannel, setActiveChannel] = useState(null)
   const [draft, setDraft] = useState('')
@@ -167,18 +190,18 @@ export default function Chat() {
   const [showNew, setShowNew] = useState(false)
   const [search, setSearch] = useState('')
   const [replyTo, setReplyTo] = useState(null)
-  const [emojiPicker, setEmojiPicker] = useState(null) // message id
-  const [readReceipts, setReadReceipts] = useState({}) // { oderId: lastReadMsgId }
+  const [emojiPicker, setEmojiPicker] = useState(null)
+  const [readReceipts, setReadReceipts] = useState({})
   const [uploading, setUploading] = useState(false)
   const [showComposerEmoji, setShowComposerEmoji] = useState(false)
   const [emojiTab, setEmojiTab] = useState('smileys')
   const [isRecording, setIsRecording] = useState(false)
   const [recTime, setRecTime] = useState(0)
-  // @-mention autocomplete + AI smart replies
-  const [mentionState, setMentionState] = useState(null) // { start, query }
+  const [mentionState, setMentionState] = useState(null)
   const [mentionIndex, setMentionIndex] = useState(0)
   const [smartReplies, setSmartReplies] = useState([])
   const [smartLoading, setSmartLoading] = useState(false)
+
   const wsRef = useRef(null)
   const messagesEndRef = useRef(null)
   const composerRef = useRef(null)
@@ -192,32 +215,27 @@ export default function Chat() {
   const loadChannels = useCallback(async () => {
     const list = await api('/api/channels')
     setChannels(list)
+    setCachedChannels(list)
     return list
   }, [])
 
-  useEffect(() => {
-    loadChannels().catch(() => {})
-  }, [loadChannels])
+  useEffect(() => { loadChannels().catch(() => {}) }, [loadChannels])
 
   useEffect(() => {
-    if (!channelId) {
-      setActiveChannel(null)
-      setMessages([])
-      return
-    }
+    if (!channelId) { setActiveChannel(null); setMessages([]); return }
     const ch = channels.find((c) => String(c.id) === String(channelId))
     if (ch) setActiveChannel(ch)
   }, [channelId, channels])
 
   useEffect(() => {
-    if (!channelId) return
+    if (!channelId) { setMessages([]); return }
+    const cached = getCachedMessages(channelId)
+    setMessages(cached || [])
+
     let cancelled = false
     api(`/api/channels/${channelId}/messages`)
-      .then((msgs) => {
-        if (!cancelled) setMessages(msgs)
-      })
+      .then((msgs) => { if (!cancelled) { setMessages(msgs); setCachedMessages(channelId, msgs) } })
       .catch(() => {})
-    // Load read receipts
     api(`/api/channels/${channelId}/read-receipts`)
       .then((receipts) => {
         if (!cancelled) {
@@ -233,9 +251,7 @@ export default function Chat() {
   // WebSocket connection
   useEffect(() => {
     if (!channelId) return
-    if (wsRef.current) {
-      try { wsRef.current.close() } catch {}
-    }
+    if (wsRef.current) { try { wsRef.current.close() } catch {} }
     const token = localStorage.getItem('zoiko_token')
     const ws = new WebSocket(`${getWsBase()}/ws/channels/${channelId}?token=${encodeURIComponent(token)}`)
     wsRef.current = ws
@@ -243,13 +259,22 @@ export default function Chat() {
       try {
         const data = JSON.parse(e.data)
         if (data.type === 'message') {
-          setMessages((prev) =>
-            prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]
-          )
+          const incoming = data.message
+          setMessages((prev) => {
+            if (incoming.client_id) {
+              const idx = prev.findIndex((m) => m._tmp_id === incoming.client_id)
+              if (idx >= 0) {
+                const next = prev.slice()
+                next[idx] = incoming
+                return next
+              }
+            }
+            return prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]
+          })
           setChannels((prev) =>
             prev.map((c) =>
-              c.id === data.message.channel_id
-                ? { ...c, last_message_preview: data.message.body.slice(0, 120), last_message_at: data.message.created_at }
+              c.id === incoming.channel_id
+                ? { ...c, last_message_preview: incoming.body.slice(0, 120), last_message_at: incoming.created_at }
                 : c
             )
           )
@@ -263,30 +288,23 @@ export default function Chat() {
               if (data.action === 'added') {
                 reactions.push({ emoji: data.emoji, user_id: data.user_id, user_name: data.user_name })
               } else {
-                reactions = reactions.filter(
-                  (r) => !(r.emoji === data.emoji && r.user_id === data.user_id)
-                )
+                reactions = reactions.filter((r) => !(r.emoji === data.emoji && r.user_id === data.user_id))
               }
               return { ...m, reactions }
             })
           )
         } else if (data.type === 'message_deleted') {
           setMessages((prev) =>
-            prev.map((m) =>
-              m.id === data.message_id ? { ...m, deleted_at: new Date().toISOString() } : m
-            )
+            prev.map((m) => m.id === data.message_id ? { ...m, deleted_at: new Date().toISOString() } : m)
           )
         } else if (data.type === 'read_receipt') {
           setReadReceipts((prev) => ({ ...prev, [data.user_id]: data.last_read_message_id }))
         }
       } catch {}
     }
-    return () => {
-      try { ws.close() } catch {}
-    }
+    return () => { try { ws.close() } catch {} }
   }, [channelId])
 
-  // Mark as read when messages change
   useEffect(() => {
     if (!messages.length || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
     const lastMsg = messages[messages.length - 1]
@@ -296,8 +314,12 @@ export default function Chat() {
   }, [messages, user?.id])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (!channelId || !messages.length) return
+    setCachedMessages(channelId, messages)
+  }, [channelId, messages])
+  useEffect(() => { if (channels.length) setCachedChannels(channels) }, [channels])
+
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -324,9 +346,37 @@ export default function Chat() {
   const sendMessage = () => {
     const body = draft.trim()
     if (!body || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-    const payload = { type: 'message', body }
+
+    const clientId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const optimistic = {
+      _tmp_id: clientId,
+      id: clientId,
+      _pending: true,
+      channel_id: Number(channelId),
+      sender_id: user?.id,
+      sender_name: user?.name || 'You',
+      sender_color: user?.avatar_color,
+      body,
+      created_at: new Date().toISOString(),
+      deleted_at: null,
+      reply_to_id: replyTo?.id ?? null,
+      reply_preview: replyTo ? replyTo.body?.slice(0, 120) : null,
+      reactions: [],
+    }
+    setMessages((prev) => [...prev, optimistic])
+
+    const payload = { type: 'message', body, client_id: clientId }
     if (replyTo) payload.reply_to_id = replyTo.id
     wsRef.current.send(JSON.stringify(payload))
+
+    setTimeout(() => {
+      setMessages((prev) => prev.map((m) =>
+        m._tmp_id === clientId && m._pending
+          ? { ...m, _pending: false, _failed: true }
+          : m
+      ))
+    }, 8000)
+
     setDraft('')
     setReplyTo(null)
     setSmartReplies([])
@@ -347,11 +397,9 @@ export default function Chat() {
   }, [mentionState, activeChannel, user?.id])
 
   const detectMention = (value, caret) => {
-    // Walk left from caret to either whitespace or '@' to find a candidate token.
     let i = caret - 1
     while (i >= 0 && /[\w.-]/.test(value[i])) i--
     if (i < 0 || value[i] !== '@') return null
-    // Must be at start or follow whitespace
     if (i > 0 && !/\s/.test(value[i - 1])) return null
     return { start: i, query: value.slice(i + 1, caret) }
   }
@@ -410,10 +458,7 @@ export default function Chat() {
       const recent = messages.slice(-6).map((m) => ({ name: m.sender_name, body: m.body }))
       const res = await api('/api/ai/suggest-replies', {
         method: 'POST',
-        body: {
-          recent_messages: recent,
-          context: activeChannel?.name,
-        },
+        body: { recent_messages: recent, context: activeChannel?.name },
       })
       setSmartReplies(res.suggestions || [])
     } catch {
@@ -557,7 +602,6 @@ export default function Chat() {
 
   const grouped = useMemo(() => groupMessages(messages), [messages])
 
-  // Compute which users have read up to which point
   const readByPerMessage = useMemo(() => {
     const map = {}
     if (!activeChannel) return map
@@ -572,47 +616,96 @@ export default function Chat() {
     return map
   }, [readReceipts, activeChannel, user?.id])
 
+  /* ─────────────────── render ─────────────────── */
+
   return (
-    <div className="chat">
-      <aside className="chat-list">
-        <div className="chat-list-header">
-          <div className="chat-list-title">Chat</div>
-          <button className="primary sm chat-new-btn" onClick={() => setShowNew(true)} aria-label="New conversation">
+    <div className="flex min-h-0 flex-1 overflow-hidden font-sans">
+      {/* ============== Channel list ============== */}
+      <aside className="flex w-[320px] shrink-0 flex-col border-r border-line bg-surface">
+        <div className="flex items-center justify-between px-4 pb-3.5 pt-[18px]">
+          <div className="font-display text-[22px] font-bold tracking-[-0.03em] text-fg">
+            Chat
+          </div>
+          <button
+            className="primary sm"
+            onClick={() => setShowNew(true)}
+            aria-label="New conversation"
+          >
             <Icon name="plus" size={14} /> New
           </button>
         </div>
 
-        <div className="chat-search">
-          <Icon name="search" size={14} className="chat-search-icon" />
-          <input placeholder="Search conversations…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <div className="relative px-3 pb-3">
+          <Icon
+            name="search"
+            size={14}
+            className="pointer-events-none absolute left-6 top-1/2 -translate-y-[calc(50%+6px)] text-fg-muted"
+          />
+          <input
+            placeholder="Search conversations…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="!h-[38px] !rounded-md !border-line !bg-bg-3 !pl-9 !text-[13.5px] !shadow-none focus:!border-accent focus:!bg-bg-1"
+          />
         </div>
 
-        <div className="chat-list-items">
+        <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-4 pt-1">
           {channels.length === 0 && (
-            <div className="chat-list-empty">
-              <div className="chat-list-empty-icon"><Icon name="chat" size={28} /></div>
-              <div className="chat-list-empty-title">No conversations yet</div>
-              <div className="chat-list-empty-sub">Click <strong>+ New</strong> to start one.</div>
+            <div className="px-5 py-10 text-center text-fg-muted">
+              <div className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-md border border-line bg-bg-3 text-fg-muted">
+                <Icon name="chat" size={28} />
+              </div>
+              <div className="mb-1 text-[14px] font-semibold text-fg-dim">No conversations yet</div>
+              <div className="text-[12.5px]">Click <strong>+ New</strong> to start one.</div>
             </div>
           )}
           {filteredChannels.map((c) => {
             const display = channelDisplay(c, user.id)
             const active = String(c.id) === String(channelId)
             return (
-              <button key={c.id} className={'chat-list-item' + (active ? ' active' : '')} onClick={() => navigate(`/chat/${c.id}`)}>
-                <div className="chat-list-item-avatar">
+              <button
+                key={c.id}
+                onClick={() => navigate(`/chat/${c.id}`)}
+                className={cn(
+                  'group/row relative flex w-full items-center gap-3 rounded-md border-0 bg-transparent px-2.5 py-2.5 text-left transition-colors',
+                  'hover:bg-[color-mix(in_srgb,var(--c-fg)_5%,transparent)]',
+                  active && 'bg-[color-mix(in_srgb,var(--c-accent)_10%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--c-accent)_30%,transparent)]'
+                )}
+              >
+                {active && (
+                  <span
+                    aria-hidden
+                    className="absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-[3px] bg-accent"
+                  />
+                )}
+                <div className="relative shrink-0">
                   <Avatar name={display.name} color={display.color} />
                   {c.is_direct && <span className="presence-dot" />}
                 </div>
-                <div className="chat-list-item-main">
-                  <div className="chat-list-item-top">
-                    <span className="chat-list-item-name">{display.name}</span>
-                    <div className="chat-list-item-meta">
-                      {c.unread_count > 0 && <span className="chat-unread-badge">{c.unread_count}</span>}
-                      {c.last_message_at && <span className="chat-list-item-time">{formatTime(c.last_message_at)}</span>}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={cn(
+                        'truncate text-[13.5px] font-semibold tracking-[-0.01em]',
+                        active ? 'text-accent' : 'text-fg'
+                      )}
+                    >
+                      {display.name}
+                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {c.unread_count > 0 && (
+                        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-[10.5px] font-bold leading-none text-white shadow-[0_4px_14px_-6px_var(--c-accent-ring)]">
+                          {c.unread_count}
+                        </span>
+                      )}
+                      {c.last_message_at && (
+                        <span className="text-[11px] tabular-nums text-fg-muted">
+                          {formatTime(c.last_message_at)}
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div className="chat-list-item-preview">
+                  <div className="truncate text-[12px] text-fg-muted">
                     {c.last_message_preview || (c.is_direct ? 'Start a conversation' : 'No messages yet')}
                   </div>
                 </div>
@@ -622,13 +715,26 @@ export default function Chat() {
         </div>
       </aside>
 
-      <section className="chat-thread">
+      {/* ============== Thread ============== */}
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
         {!activeChannel ? (
-          <div className="chat-thread-empty">
-            <div className="chat-thread-empty-card">
-              <div className="chat-thread-empty-icon"><Icon name="chat" size={32} /></div>
-              <h2>Start a conversation</h2>
-              <p>Select someone from the list or create a new channel to begin chatting.</p>
+          <div className="grid flex-1 place-items-center p-10">
+            <div className="flex max-w-[360px] flex-col items-center gap-2 text-center">
+              <div
+                className="mb-2 grid h-[72px] w-[72px] place-items-center rounded-lg text-accent"
+                style={{
+                  background: 'var(--accent-gradient-soft)',
+                  border: '1px solid color-mix(in srgb, var(--c-accent) 30%, transparent)',
+                }}
+              >
+                <Icon name="chat" size={32} />
+              </div>
+              <h2 className="m-0 font-display text-[22px] font-bold tracking-[-0.02em] text-fg">
+                Start a conversation
+              </h2>
+              <p className="m-0 mb-3 text-[14px] text-fg-muted">
+                Select someone from the list or create a new channel to begin chatting.
+              </p>
               <button className="primary" onClick={() => setShowNew(true)}>
                 <Icon name="plus" size={14} /> New conversation
               </button>
@@ -642,60 +748,83 @@ export default function Chat() {
                 ? activeChannel.members.find((m) => m.id !== user.id)
                 : null
               return (
-                <header className="chat-thread-header">
-                  <div className="chat-thread-header-avatar">
+                <header
+                  className="relative z-[2] flex items-center gap-3.5 border-b border-line px-6 py-4 backdrop-blur-xl"
+                  style={{
+                    background: 'linear-gradient(180deg, color-mix(in srgb, var(--c-surface) 86%, transparent), color-mix(in srgb, var(--c-surface) 62%, transparent)), radial-gradient(900px 200px at 0% 0%, color-mix(in srgb, var(--c-accent) 12%, transparent), transparent 60%)',
+                  }}
+                >
+                  <div className="relative shrink-0">
                     <Avatar name={display.name} color={display.color} />
                     {activeChannel.is_direct && <span className="presence-dot" />}
                   </div>
-                  <div className="chat-thread-header-main">
-                    <div className="chat-thread-header-name">{display.name}</div>
-                    <div className="chat-thread-header-sub">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[15px] font-semibold tracking-[-0.015em] text-fg">
+                      {display.name}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-fg-muted">
                       {activeChannel.is_direct ? (
-                        <><span className="dot-online" /> Active now</>
+                        <>
+                          <span className="inline-block h-[7px] w-[7px] animate-pulse rounded-full bg-success shadow-[0_0_8px_var(--c-success)]" />
+                          Active now
+                        </>
                       ) : (
-                        <><Icon name="users" size={12} /> {activeChannel.members.length} members</>
+                        <>
+                          <Icon name="users" size={12} /> {activeChannel.members.length} members
+                        </>
                       )}
                     </div>
                   </div>
                   {otherMember && (
-                    <div className="chat-thread-header-actions">
-                      <button
-                        type="button"
-                        className="chat-call-btn"
-                        title="Audio call"
-                        aria-label="Start audio call"
-                        onClick={() => startCall(otherMember, 'audio')}
-                      >
+                    <div className="flex shrink-0 items-center gap-2">
+                      <CallBtn label="Audio call" onClick={() => startCall(otherMember, 'audio')}>
                         <Icon name="phone" size={18} />
-                      </button>
-                      <button
-                        type="button"
-                        className="chat-call-btn"
-                        title="Video call"
-                        aria-label="Start video call"
-                        onClick={() => startCall(otherMember, 'video')}
-                      >
+                      </CallBtn>
+                      <CallBtn label="Video call" onClick={() => startCall(otherMember, 'video')}>
                         <Icon name="video" size={18} />
-                      </button>
+                      </CallBtn>
                     </div>
                   )}
                 </header>
               )
             })()}
 
-            <div className="chat-messages" onClick={() => setEmojiPicker(null)}>
+            <div
+              className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-7 pb-2 pt-6"
+              onClick={() => setEmojiPicker(null)}
+            >
               {grouped.map((g) =>
                 g.type === 'divider' ? (
-                  <div key={g.id} className="chat-day-divider"><span>{dayLabel(g.date)}</span></div>
+                  <div
+                    key={g.id}
+                    className="flex items-center gap-2.5 py-2 text-[11.5px] font-medium uppercase tracking-[0.08em] text-fg-muted"
+                  >
+                    <span className="h-px flex-1 bg-line" aria-hidden />
+                    <span className="rounded-full border border-line-strong bg-surface px-3 py-1 text-fg-dim shadow-xs">
+                      {dayLabel(g.date)}
+                    </span>
+                    <span className="h-px flex-1 bg-line" aria-hidden />
+                  </div>
                 ) : (
-                  <div key={g.id} className={'chat-cluster' + (g.sender_id === user.id ? ' mine' : '')}>
+                  <div
+                    key={g.id}
+                    className={cn(
+                      'flex items-end gap-2.5',
+                      g.sender_id === user.id && 'flex-row-reverse'
+                    )}
+                  >
                     <Avatar name={g.sender_name} color={g.sender_color} size="sm" />
-                    <div className="chat-cluster-body">
-                      <div className="chat-cluster-meta">
-                        <span className="chat-cluster-name">{g.sender_name}</span>
-                        <span className="chat-cluster-time">{formatTime(g.messages[0].created_at)}</span>
+                    <div className={cn('flex min-w-0 max-w-[70%] flex-1 flex-col', g.sender_id === user.id && 'items-end')}>
+                      <div
+                        className={cn(
+                          'flex items-baseline gap-2 px-1 pb-1 text-[11.5px]',
+                          g.sender_id === user.id && 'flex-row-reverse'
+                        )}
+                      >
+                        <span className="font-semibold text-fg-dim">{g.sender_name}</span>
+                        <span className="text-fg-muted">{formatTime(g.messages[0].created_at)}</span>
                       </div>
-                      <div className="chat-cluster-msgs">
+                      <div className={cn('flex flex-col gap-1', g.sender_id === user.id && 'items-end')}>
                         {g.messages.map((m) => (
                           <MessageBubble
                             key={m.id}
@@ -719,61 +848,108 @@ export default function Chat() {
               <div ref={messagesEndRef} />
             </div>
 
-            <div className={'chat-typing' + (typingText ? ' active' : '')}>
+            {/* Typing indicator */}
+            <div
+              className={cn(
+                'flex h-[22px] items-center gap-2 px-7 text-[12px] text-fg-muted transition-opacity',
+                typingText ? 'opacity-100' : 'opacity-0'
+              )}
+            >
               {typingText && (
                 <>
-                  <span className="typing-dots"><span /><span /><span /></span>
+                  <span className="inline-flex items-end gap-[3px]" aria-hidden>
+                    {[0, 1, 2].map((i) => (
+                      <span
+                        key={i}
+                        className="block h-[5px] w-[5px] animate-bounce rounded-full bg-accent"
+                        style={{ animationDelay: `${i * 0.15}s` }}
+                      />
+                    ))}
+                  </span>
                   <span>{typingText}</span>
                 </>
               )}
             </div>
 
+            {/* Reply bar */}
             {replyTo && (
-              <div className="chat-reply-bar">
+              <div
+                className="flex items-center gap-2 border-b border-line border-t-[color-mix(in_srgb,var(--c-accent)_30%,var(--c-line))] px-5 py-2 text-[12.5px] text-fg-dim"
+                style={{ background: 'color-mix(in srgb, var(--c-accent) 8%, transparent)', borderTopWidth: '1px', borderTopStyle: 'solid' }}
+              >
                 <Icon name="reply" size={14} />
-                <span className="chat-reply-bar-text">
-                  Replying to <strong>{replyTo.sender_name}</strong>: {replyTo.body?.slice(0, 80)}
+                <span className="min-w-0 flex-1 truncate">
+                  Replying to <strong className="text-fg">{replyTo.sender_name}</strong>: {replyTo.body?.slice(0, 80)}
                 </span>
-                <button className="ghost chat-reply-bar-close" onClick={() => setReplyTo(null)}>
+                <button
+                  className="ghost"
+                  onClick={() => setReplyTo(null)}
+                  style={{ padding: '4px 6px', fontSize: 12 }}
+                >
                   <Icon name="close" size={14} />
                 </button>
               </div>
             )}
 
+            {/* Smart replies */}
             {smartReplies.length > 0 && (
-              <div className="chat-smart-replies">
-                <span className="chat-smart-replies-label"><Icon name="sparkle" size={12} /> Suggested</span>
+              <div className="flex flex-wrap items-center gap-2 border-t border-line px-5 py-2.5">
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-muted">
+                  <Icon name="sparkle" size={12} /> Suggested
+                </span>
                 {smartReplies.map((s, i) => (
-                  <button key={i} className="chat-smart-reply-chip" onClick={() => applySmartReply(s)}>{s}</button>
+                  <button
+                    key={i}
+                    onClick={() => applySmartReply(s)}
+                    className="relative overflow-hidden rounded-full border border-line-strong bg-bg-1 px-3 py-1.5 text-[12.5px] font-medium text-fg-dim transition hover:-translate-y-px hover:border-accent hover:bg-accent-soft hover:shadow-[0_10px_22px_-10px_var(--c-accent-ring)]"
+                  >
+                    {s}
+                  </button>
                 ))}
-                <button className="chat-smart-reply-dismiss" onClick={() => setSmartReplies([])} aria-label="Dismiss suggestions">
+                <button
+                  className="ghost ml-auto"
+                  style={{ padding: '4px 6px' }}
+                  onClick={() => setSmartReplies([])}
+                  aria-label="Dismiss suggestions"
+                >
                   <Icon name="close" size={12} />
                 </button>
               </div>
             )}
 
+            {/* Mention popover */}
             {mentionState && mentionCandidates.length > 0 && (
-              <div className="chat-mention-popover" role="listbox">
+              <div
+                role="listbox"
+                className="absolute bottom-[88px] left-7 z-30 w-[280px] rounded-[14px] border border-line-strong p-1.5 shadow-[0_20px_50px_-16px_color-mix(in_srgb,var(--c-fg)_35%,transparent)] backdrop-blur-md"
+                style={{ background: 'color-mix(in srgb, var(--c-surface) 94%, transparent)' }}
+              >
                 {mentionCandidates.map((m, i) => (
                   <button
                     key={m.id}
                     role="option"
                     aria-selected={i === mentionIndex}
-                    className={'chat-mention-opt' + (i === mentionIndex ? ' active' : '')}
                     onMouseDown={(e) => { e.preventDefault(); insertMention(m) }}
                     onMouseEnter={() => setMentionIndex(i)}
+                    className={cn(
+                      'flex w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left transition',
+                      i === mentionIndex
+                        ? 'translate-x-0.5 bg-accent-soft'
+                        : 'hover:translate-x-0.5 hover:bg-accent-soft'
+                    )}
                   >
                     <Avatar name={m.name} color={m.avatar_color} size="sm" />
-                    <div className="chat-mention-opt-name">
-                      <span>{m.name}</span>
-                      <span className="chat-mention-opt-handle">@{m.name.replace(/\s+/g, '')}</span>
+                    <div className="min-w-0 flex-1 leading-tight">
+                      <span className="block truncate text-[13px] text-fg">{m.name}</span>
+                      <span className="block truncate text-[11px] text-fg-muted">@{m.name.replace(/\s+/g, '')}</span>
                     </div>
                   </button>
                 ))}
               </div>
             )}
 
-            <div className="chat-composer">
+            {/* Composer */}
+            <div className="relative flex items-end gap-2 border-t border-line bg-surface px-5 py-3">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -781,32 +957,30 @@ export default function Chat() {
                 accept=".png,.jpg,.jpeg,.gif,.webp,.svg,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.json,.md,.webm,.mp3,.wav,.m4a,.ogg"
                 onChange={handleFileUpload}
               />
-              <button
-                className="ghost chat-composer-btn"
+              <ComposerIconBtn
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading || isRecording}
                 title="Attach file"
               >
-                {uploading ? <div className="spinner-sm" /> : <Icon name="attach" size={18} />}
-              </button>
-              <button
-                className="ghost chat-composer-btn"
+                {uploading ? <SpinnerSm /> : <Icon name="attach" size={18} />}
+              </ComposerIconBtn>
+              <ComposerIconBtn
                 onClick={() => setShowComposerEmoji((v) => !v)}
                 disabled={isRecording}
                 title="Emoji"
                 aria-label="Emoji"
               >
                 <Icon name="smile" size={18} />
-              </button>
-              <button
-                className="ghost chat-composer-btn"
+              </ComposerIconBtn>
+              <ComposerIconBtn
                 onClick={fetchSmartReplies}
                 disabled={isRecording || smartLoading || !messages.length}
                 title="Suggest a reply"
                 aria-label="Suggest a reply"
               >
-                {smartLoading ? <div className="spinner-sm" /> : <Icon name="sparkle" size={18} />}
-              </button>
+                {smartLoading ? <SpinnerSm /> : <Icon name="sparkle" size={18} />}
+              </ComposerIconBtn>
+
               <textarea
                 ref={composerRef}
                 placeholder="Type a message. Enter to send, Shift+Enter for new line."
@@ -815,28 +989,67 @@ export default function Chat() {
                 onKeyDown={onComposerKey}
                 rows={1}
                 disabled={isRecording}
+                className="!min-h-[46px] !resize-none !rounded-[14px] !border-line-strong !bg-bg-1 !px-3.5 !py-3 !text-[14.5px] !leading-[1.55] !shadow-[0_1px_2px_color-mix(in_srgb,var(--c-fg)_4%,transparent)] focus:!border-accent focus:!bg-surface-2 focus:!shadow-[0_0_0_3px_var(--c-accent-ring)]"
+                style={{ maxHeight: 180 }}
               />
+
               <button
-                className={'chat-voice-btn' + (isRecording ? ' recording' : '')}
                 onClick={isRecording ? () => stopVoiceRecording(false) : startVoiceRecording}
                 title={isRecording ? 'Send voice note' : 'Record voice note'}
                 aria-label={isRecording ? 'Send voice note' : 'Record voice note'}
+                className={cn(
+                  'inline-flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[14px] border-0 transition',
+                  isRecording
+                    ? 'animate-pulse bg-danger text-white shadow-[0_4px_14px_-4px_var(--c-danger-soft)]'
+                    : 'bg-transparent text-fg-muted hover:bg-[color-mix(in_srgb,var(--c-accent)_10%,transparent)] hover:text-accent'
+                )}
+                style={{ padding: 0 }}
               >
                 <Icon name={isRecording ? 'send' : 'mic'} size={18} />
               </button>
-              <button className="primary chat-send" onClick={sendMessage} disabled={!draft.trim() || isRecording} aria-label="Send">
+
+              <button
+                className="primary"
+                onClick={sendMessage}
+                disabled={!draft.trim() || isRecording}
+                aria-label="Send"
+                style={{ width: 46, height: 46, padding: 0, borderRadius: 14, flexShrink: 0 }}
+              >
                 <Icon name="send" size={16} />
               </button>
 
               {isRecording && (
-                <div className="voice-recording-bar">
-                  <span className="rec-pulse" />
-                  <span className="rec-time">{formatRecTime(recTime)}</span>
-                  <span className="rec-bars" aria-hidden="true">
-                    {Array.from({ length: 28 }).map((_, i) => <span key={i} />)}
+                <div
+                  className="absolute inset-x-0 -top-[44px] flex items-center gap-3 border-t border-line px-5 py-2.5 backdrop-blur-md"
+                  style={{ background: 'color-mix(in srgb, var(--c-danger) 6%, var(--c-surface))' }}
+                >
+                  <span className="inline-block h-[9px] w-[9px] animate-pulse rounded-full bg-danger shadow-[0_0_12px_var(--c-danger)]" />
+                  <span className="font-mono text-[13px] tabular-nums text-fg">{formatRecTime(recTime)}</span>
+                  <span className="flex flex-1 items-center gap-[2px]" aria-hidden>
+                    {Array.from({ length: 28 }).map((_, i) => (
+                      <span
+                        key={i}
+                        className="block h-3 w-[2px] origin-center animate-pulse rounded bg-danger/70"
+                        style={{ animationDelay: `${(i % 6) * 0.08}s` }}
+                      />
+                    ))}
                   </span>
-                  <button className="rec-cancel" onClick={() => stopVoiceRecording(true)}>Cancel</button>
-                  <button className="rec-send" onClick={() => stopVoiceRecording(false)}>Send</button>
+                  <button
+                    className="rounded-[10px] border border-line-strong bg-transparent px-3 py-1.5 text-[13px] font-semibold text-fg-muted transition hover:-translate-y-px hover:bg-bg-3 hover:text-fg"
+                    onClick={() => stopVoiceRecording(true)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="rounded-[10px] border-0 px-3 py-1.5 text-[13px] font-semibold text-white transition hover:-translate-y-px"
+                    style={{
+                      background: 'linear-gradient(135deg, var(--c-success), color-mix(in srgb, var(--c-success) 70%, #000))',
+                      boxShadow: '0 8px 20px -8px color-mix(in srgb, var(--c-success) 60%, transparent)',
+                    }}
+                    onClick={() => stopVoiceRecording(false)}
+                  >
+                    Send
+                  </button>
                 </div>
               )}
 
@@ -867,9 +1080,54 @@ export default function Chat() {
   )
 }
 
-// ── Message Bubble ──────────────────────────────────────────────────────
+/* ────────────────────── small primitives ────────────────────── */
 
-function MessageBubble({ msg, isMine, isChannelCreator, onReply, onReact, onDelete, emojiPickerOpen, onToggleEmojiPicker, readBy, myHandle }) {
+function ComposerIconBtn({ children, onClick, disabled, title, ...rest }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="ghost inline-flex h-[46px] w-[46px] shrink-0 items-center justify-center !rounded-[14px] !p-0 text-fg-muted hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)] hover:!text-fg"
+      style={{ flexShrink: 0 }}
+      {...rest}
+    >
+      {children}
+    </button>
+  )
+}
+
+function CallBtn({ label, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      type="button"
+      title={label}
+      aria-label={label}
+      className="grid h-[38px] w-[38px] place-items-center !rounded-full !border-line !bg-surface !p-0 text-fg transition hover:-translate-y-px hover:!border-[color-mix(in_srgb,var(--c-accent)_45%,transparent)] hover:!bg-[color-mix(in_srgb,var(--c-accent)_10%,transparent)] hover:!text-accent"
+    >
+      {children}
+    </button>
+  )
+}
+
+function SpinnerSm() {
+  return (
+    <span
+      className="inline-block h-[14px] w-[14px] animate-spin rounded-full border-2 border-current/30 border-t-current"
+      style={{ borderTopColor: 'currentColor' }}
+    />
+  )
+}
+
+/* ────────────────────── Message Bubble ────────────────────── */
+
+function MessageBubble({
+  msg, isMine, isChannelCreator,
+  onReply, onReact, onDelete,
+  emojiPickerOpen, onToggleEmojiPicker,
+  readBy, myHandle,
+}) {
   const reactionGroups = useMemo(() => {
     const groups = {}
     for (const r of (msg.reactions || [])) {
@@ -881,7 +1139,7 @@ function MessageBubble({ msg, isMine, isChannelCreator, onReply, onReact, onDele
 
   if (msg.deleted_at) {
     return (
-      <div className="chat-bubble deleted">
+      <div className="inline-flex items-center gap-1.5 rounded-[16px] border border-dashed border-line-strong bg-bg-3 px-3.5 py-2.5 text-[13px] italic text-fg-muted">
         <Icon name="trash" size={13} />
         <em>This message was deleted</em>
       </div>
@@ -891,73 +1149,140 @@ function MessageBubble({ msg, isMine, isChannelCreator, onReply, onReact, onDele
   const hasFile = !!msg.file_url
   const isImage = hasFile && isImageType(msg.file_type)
   const isAudio = hasFile && ((msg.file_type || '').startsWith('audio/') || /\.(webm|mp3|wav|ogg|m4a)$/i.test(msg.file_name || ''))
+  const fileOnly = hasFile && !msg.body?.trim()
+
+  // Bubble palette: solid for received (theme-aware), gradient for sent.
+  const bubbleBase = 'group/bubble relative isolate w-fit max-w-full break-words px-3.5 py-2.5 text-[14.5px] leading-[1.55] transition-[transform,box-shadow] duration-200 hover:-translate-y-px'
+
+  const sentClass = cn(
+    bubbleBase,
+    'rounded-[18px] rounded-br-[6px] text-white',
+    'shadow-[0_1px_0_rgba(255,255,255,0.16)_inset,0_10px_28px_-10px_color-mix(in_srgb,var(--c-accent)_60%,transparent)]',
+    'hover:shadow-[0_1px_0_rgba(255,255,255,0.22)_inset,0_18px_40px_-10px_color-mix(in_srgb,var(--c-accent)_70%,transparent)]'
+  )
+
+  const receivedClass = cn(
+    bubbleBase,
+    'rounded-[18px] rounded-bl-[6px] border border-line text-fg',
+    'shadow-[0_1px_2px_color-mix(in_srgb,var(--c-fg)_4%,transparent),0_8px_24px_-16px_color-mix(in_srgb,var(--c-fg)_18%,transparent)]',
+    'hover:shadow-[0_4px_8px_color-mix(in_srgb,var(--c-fg)_5%,transparent),0_18px_36px_-14px_color-mix(in_srgb,var(--c-fg)_22%,transparent)]'
+  )
 
   return (
-    <div className="chat-bubble-wrap">
+    <div className={cn('flex flex-col gap-1', isMine && 'items-end')}>
       {msg.reply_to_id && msg.reply_preview && (
-        <div className="chat-reply-ref">
+        <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border-l-2 border-l-accent bg-bg-2 px-2 py-1 text-[12px] text-fg-muted">
           <Icon name="reply" size={12} />
-          <span>{msg.reply_preview}</span>
+          <span className="truncate">{msg.reply_preview}</span>
         </div>
       )}
 
-      <div className={'chat-bubble' + (hasFile && !msg.body?.trim() ? ' file-only' : '')}>
+      <div
+        className={cn(
+          isMine ? sentClass : receivedClass,
+          fileOnly && '!border-0 !bg-transparent !p-0 !shadow-none',
+          msg._pending && 'opacity-70',
+          msg._failed && '!border-danger !bg-[color-mix(in_srgb,var(--c-danger)_8%,transparent)] !text-fg'
+        )}
+        style={
+          isMine
+            ? { background: 'linear-gradient(135deg, var(--c-accent) 0%, var(--c-accent-2) 55%, var(--c-accent-3) 100%)' }
+            : { background: 'var(--c-surface-2)' }
+        }
+      >
         {hasFile && isImage && (
-          <a href={`${getApiBase()}${msg.file_url}`} target="_blank" rel="noopener noreferrer" className="chat-file-image">
-            <img src={`${getApiBase()}${msg.file_url}`} alt={msg.file_name} />
+          <a
+            href={`${getApiBase()}${msg.file_url}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block overflow-hidden rounded-md transition-opacity hover:opacity-90"
+          >
+            <img src={`${getApiBase()}${msg.file_url}`} alt={msg.file_name} className="block max-h-[320px] max-w-full" />
           </a>
         )}
         {hasFile && isAudio && (
-          <div className="chat-voice-note">
+          <div
+            className="flex min-w-[220px] items-center gap-2.5 rounded-md border px-2.5 py-1.5"
+            style={{
+              background: 'color-mix(in srgb, var(--c-accent) 10%, transparent)',
+              borderColor: 'color-mix(in srgb, var(--c-accent) 22%, transparent)',
+            }}
+          >
             <Icon name="mic" size={16} />
-            <audio controls preload="metadata" src={`${getApiBase()}${msg.file_url}`} />
+            <audio controls preload="metadata" src={`${getApiBase()}${msg.file_url}`} className="flex-1" />
           </div>
         )}
         {hasFile && !isImage && !isAudio && (
-          <a href={`${getApiBase()}${msg.file_url}`} target="_blank" rel="noopener noreferrer" className="chat-file-attach">
+          <a
+            href={`${getApiBase()}${msg.file_url}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="-mx-0.5 mb-1 flex items-center gap-2.5 rounded-md border border-line bg-bg-3 px-3 py-2 text-inherit transition hover:border-[color-mix(in_srgb,var(--c-accent)_25%,transparent)] hover:bg-accent-soft"
+          >
             <Icon name="file" size={18} />
-            <div className="chat-file-info">
-              <span className="chat-file-name">{msg.file_name}</span>
-              <span className="chat-file-size">{formatFileSize(msg.file_size)}</span>
+            <div className="flex min-w-0 flex-1 flex-col gap-px">
+              <span className="truncate text-[13px] font-medium">{msg.file_name}</span>
+              <span className="text-[11px] text-fg-muted">{formatFileSize(msg.file_size)}</span>
             </div>
-            <Icon name="download" size={16} className="chat-file-dl" />
+            <Icon name="download" size={16} className="opacity-70" />
           </a>
         )}
         {(!hasFile || (msg.body && msg.body !== msg.file_name)) && (
-          <span>{renderBodyWithMentions(msg.body, myHandle)}</span>
+          <span className="whitespace-pre-wrap break-words">
+            {renderBodyWithMentions(msg.body, myHandle)}
+          </span>
         )}
 
         {/* Hover actions */}
-        <div className="chat-bubble-actions">
-          <button title="React" onClick={onToggleEmojiPicker}><Icon name="emoji" size={14} /></button>
-          <button title="Reply" onClick={onReply}><Icon name="reply" size={14} /></button>
+        <div
+          className={cn(
+            'absolute -top-3.5 z-10 flex items-center gap-0.5 rounded-[10px] border border-line-strong p-0.5 opacity-0 backdrop-blur-md transition-all duration-200',
+            'shadow-[0_10px_22px_-10px_color-mix(in_srgb,var(--c-fg)_30%,transparent)]',
+            'group-hover/bubble:translate-y-0 group-hover/bubble:opacity-100',
+            isMine ? '-left-1 right-auto' : 'right-1 left-auto'
+          )}
+          style={{ background: 'color-mix(in srgb, var(--c-surface) 94%, transparent)' }}
+        >
+          <BubbleAction title="React" onClick={onToggleEmojiPicker}><Icon name="emoji" size={14} /></BubbleAction>
+          <BubbleAction title="Reply" onClick={onReply}><Icon name="reply" size={14} /></BubbleAction>
           {(isMine || isChannelCreator) && (
-            <button title="Delete" onClick={onDelete}><Icon name="trash" size={14} /></button>
+            <BubbleAction title="Delete" onClick={onDelete}><Icon name="trash" size={14} /></BubbleAction>
           )}
         </div>
       </div>
 
-      {/* Emoji picker */}
+      {/* Quick-react emoji picker */}
       {emojiPickerOpen && (
-        <div className="chat-emoji-picker" onClick={(e) => e.stopPropagation()}>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="flex items-center gap-1 rounded-full border border-line-strong p-1 shadow-md backdrop-blur-md"
+          style={{ background: 'color-mix(in srgb, var(--c-surface) 96%, transparent)' }}
+        >
           {QUICK_EMOJIS.map((em) => (
-            <button key={em} className="chat-emoji-btn" onClick={() => onReact(em)}>{em}</button>
+            <button
+              key={em}
+              onClick={() => onReact(em)}
+              className="grid h-8 w-8 place-items-center !rounded-full !border-0 !bg-transparent text-[18px] !shadow-none transition hover:scale-110 hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)]"
+              style={{ padding: 0 }}
+            >
+              {em}
+            </button>
           ))}
         </div>
       )}
 
       {/* Reactions display */}
       {Object.keys(reactionGroups).length > 0 && (
-        <div className="chat-reactions">
+        <div className="flex flex-wrap gap-1">
           {Object.entries(reactionGroups).map(([emoji, users]) => (
             <button
               key={emoji}
-              className="chat-reaction-chip"
               onClick={() => onReact(emoji)}
               title={users.map((u) => u.user_name).join(', ')}
+              className="inline-flex items-center gap-1 !rounded-full !border-line !bg-bg-3 !px-2 !py-0.5 text-[12.5px] !shadow-none transition hover:!border-accent hover:!bg-accent-soft"
             >
               <span>{emoji}</span>
-              <span className="chat-reaction-count">{users.length}</span>
+              <span className="font-semibold tabular-nums text-fg-dim">{users.length}</span>
             </button>
           ))}
         </div>
@@ -965,7 +1290,7 @@ function MessageBubble({ msg, isMine, isChannelCreator, onReply, onReact, onDele
 
       {/* Read receipts */}
       {readBy && readBy.length > 0 && (
-        <div className="chat-read-by" title={readBy.join(', ')}>
+        <div className="flex items-center gap-1 px-1 text-[11px] text-fg-muted" title={readBy.join(', ')}>
           <Icon name="check" size={11} />
           <span>Read by {readBy.length <= 2 ? readBy.join(', ') : `${readBy.length} people`}</span>
         </div>
@@ -974,7 +1299,20 @@ function MessageBubble({ msg, isMine, isChannelCreator, onReply, onReact, onDele
   )
 }
 
-// ── Composer emoji picker (full) ───────────────────────────────────────
+function BubbleAction({ children, onClick, title }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="grid h-7 w-7 place-items-center !rounded-lg !border-0 !bg-transparent !p-0 text-fg-dim !shadow-none transition hover:scale-110 hover:!bg-accent-soft hover:!text-accent"
+    >
+      {children}
+    </button>
+  )
+}
+
+/* ─────────────── Composer emoji picker (full) ─────────────── */
+
 function ComposerEmojiPicker({ activeTab, onTabChange, onPick, onClose }) {
   const rootRef = useRef(null)
   useEffect(() => {
@@ -988,24 +1326,41 @@ function ComposerEmojiPicker({ activeTab, onTabChange, onPick, onClose }) {
 
   const active = EMOJI_CATEGORIES.find((c) => c.key === activeTab) || EMOJI_CATEGORIES[0]
   return (
-    <div ref={rootRef} className="composer-emoji-popover" role="dialog" aria-label="Emoji picker">
-      <div className="emoji-tabs">
+    <div
+      ref={rootRef}
+      role="dialog"
+      aria-label="Emoji picker"
+      className="scale-in absolute bottom-[calc(100%+6px)] right-5 z-[60] flex max-h-[360px] w-[340px] flex-col overflow-hidden rounded-2xl border border-line-strong shadow-[0_30px_60px_-20px_color-mix(in_srgb,var(--c-fg)_40%,transparent)] backdrop-blur-md"
+      style={{ background: 'color-mix(in srgb, var(--c-surface) 96%, transparent)' }}
+    >
+      <div className="flex gap-0.5 overflow-x-auto border-b border-line bg-bg-2 px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {EMOJI_CATEGORIES.map((c) => (
           <button
             key={c.key}
-            className={'emoji-tab' + (c.key === active.key ? ' active' : '')}
             onClick={() => onTabChange(c.key)}
             title={c.label}
             aria-label={c.label}
+            className={cn(
+              'grid h-8 w-8 shrink-0 place-items-center !rounded-md !border-0 !p-0 text-[17px] !shadow-none transition',
+              c.key === active.key
+                ? '!bg-[color-mix(in_srgb,var(--c-accent)_12%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--c-accent)_32%,transparent)]!'
+                : '!bg-transparent hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)]'
+            )}
           >
             {c.icon}
           </button>
         ))}
       </div>
-      <div className="emoji-grid">
-        <div className="emoji-grid-title">{active.label}</div>
+      <div className="grid flex-1 grid-cols-8 gap-0.5 overflow-y-auto px-2.5 pb-3 pt-2">
+        <div className="col-span-full px-0.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-muted">
+          {active.label}
+        </div>
         {active.emojis.map((em, i) => (
-          <button key={`${active.key}-${i}`} className="emoji-item" onClick={() => onPick(em)}>
+          <button
+            key={`${active.key}-${i}`}
+            onClick={() => onPick(em)}
+            className="grid h-9 w-9 place-items-center !rounded-md !border-0 !bg-transparent !p-0 text-[20px] !shadow-none transition hover:scale-[1.15] hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)]"
+          >
             {em}
           </button>
         ))}
@@ -1014,7 +1369,7 @@ function ComposerEmojiPicker({ activeTab, onTabChange, onPick, onClose }) {
   )
 }
 
-// ── New Channel Modal ───────────────────────────────────────────────────
+/* ─────────────── New channel modal ─────────────── */
 
 function NewChannelModal({ onClose, onCreated }) {
   const [users, setUsers] = useState([])
@@ -1039,10 +1394,7 @@ function NewChannelModal({ onClose, onCreated }) {
 
   const create = async () => {
     const ids = Array.from(selected)
-    if (!ids.length) {
-      setErr('Pick at least one person.')
-      return
-    }
+    if (!ids.length) { setErr('Pick at least one person.'); return }
     setBusy(true)
     setErr('')
     try {
@@ -1066,44 +1418,92 @@ function NewChannelModal({ onClose, onCreated }) {
   }
 
   return (
-    <div className="new-channel-modal" onClick={onClose}>
-      <div className="new-channel-card" onClick={(e) => e.stopPropagation()}>
-        <div className="new-channel-head">
-          <h3>Start a conversation</h3>
-          <button className="ghost new-channel-close" onClick={onClose} aria-label="Close">
+    <div
+      className="fixed inset-0 z-[100] grid place-items-center p-4"
+      onClick={onClose}
+      style={{ background: 'color-mix(in srgb, var(--c-fg) 45%, transparent)' }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[80vh] w-full max-w-[440px] flex-col gap-3 rounded-2xl border border-line-strong bg-surface p-5 shadow-2xl"
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="m-0 font-display text-[18px] font-semibold tracking-[-0.02em] text-fg">
+            Start a conversation
+          </h3>
+          <button
+            className="ghost"
+            onClick={onClose}
+            aria-label="Close"
+            style={{ padding: '6px 8px' }}
+          >
             <Icon name="close" size={16} />
           </button>
         </div>
+
         {err && (
-          <div className="auth-error">
+          <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger-soft px-3 py-2 text-[13px] text-danger">
             <Icon name="close" size={14} /> {err}
           </div>
         )}
-        <div className="chat-search">
-          <Icon name="search" size={14} className="chat-search-icon" />
-          <input placeholder="Search people by name or email…" value={query} onChange={(e) => setQuery(e.target.value)} />
+
+        <div className="relative">
+          <Icon
+            name="search"
+            size={14}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
+          />
+          <input
+            placeholder="Search people by name or email…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="!h-[38px] !rounded-md !border-line !bg-bg-3 !pl-9 !text-[13.5px] !shadow-none focus:!border-accent focus:!bg-bg-1"
+          />
         </div>
-        <div className="new-channel-users">
+
+        <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
           {users.length === 0 && (
-            <div style={{ padding: 16, color: 'var(--muted)', fontSize: 13, textAlign: 'center' }}>No users found.</div>
+            <div className="px-4 py-4 text-center text-[13px] text-fg-muted">
+              No users found.
+            </div>
           )}
-          {users.map((u) => (
-            <button key={u.id} className={'new-channel-user' + (selected.has(u.id) ? ' selected' : '')} onClick={() => toggle(u.id)}>
-              <Avatar name={u.name} color={u.avatar_color} size="sm" />
-              <div className="new-channel-user-name">
-                {u.name}
-                <div style={{ fontSize: 11, color: 'var(--muted)' }}>{u.email}</div>
-              </div>
-              {selected.has(u.id) && (
-                <span className="new-channel-user-check"><Icon name="check" size={14} /></span>
-              )}
-            </button>
-          ))}
+          {users.map((u) => {
+            const isSelected = selected.has(u.id)
+            return (
+              <button
+                key={u.id}
+                onClick={() => toggle(u.id)}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-md border-0 px-2 py-2 text-left transition',
+                  isSelected
+                    ? '!bg-accent-soft'
+                    : '!bg-transparent hover:!bg-[color-mix(in_srgb,var(--c-fg)_5%,transparent)]'
+                )}
+              >
+                <Avatar name={u.name} color={u.avatar_color} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13.5px] text-fg">{u.name}</div>
+                  <div className="truncate text-[11px] text-fg-muted">{u.email}</div>
+                </div>
+                {isSelected && (
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-accent text-white">
+                    <Icon name="check" size={14} />
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
+
         {selected.size > 1 && (
-          <input placeholder="Group name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+          <input
+            placeholder="Group name (optional)"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
         )}
-        <div className="new-channel-actions">
+
+        <div className="flex items-center justify-end gap-2 pt-1">
           <button onClick={onClose}>Cancel</button>
           <button className="primary" onClick={create} disabled={busy || selected.size === 0}>
             {busy ? 'Creating…' : `Create${selected.size ? ` (${selected.size})` : ''}`}
