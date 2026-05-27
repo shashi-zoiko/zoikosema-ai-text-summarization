@@ -3,9 +3,8 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 const STORAGE_KEY = 'zoiko_theme'
 
 export const THEMES = [
-  { id: 'midnight', label: 'Midnight Graphite', mode: 'dark', desc: 'Charcoal canvas with indigo accents.' },
-  { id: 'aurora',   label: 'Aurora',            mode: 'dark', desc: 'Ambient blue–purple atmosphere.' },
-  { id: 'light',    label: 'Light Enterprise',  mode: 'light', desc: 'Linear-inspired productivity light.' },
+  { id: 'midnight', label: 'Dark',  mode: 'dark',  desc: 'Charcoal canvas with indigo accents.' },
+  { id: 'light',    label: 'Light', mode: 'light', desc: 'Linear-inspired productivity light.' },
 ]
 
 const ThemeContext = createContext({

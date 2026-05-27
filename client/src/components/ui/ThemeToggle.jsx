@@ -1,11 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Moon, Sparkles, Sun } from 'lucide-react'
+import { Moon, Sun } from 'lucide-react'
 import { useTheme, THEMES } from '../../theme/ThemeProvider'
 import { cn } from '../../lib/cn'
 
 const ICONS = {
   midnight: Moon,
-  aurora: Sparkles,
   light: Sun,
 }
 

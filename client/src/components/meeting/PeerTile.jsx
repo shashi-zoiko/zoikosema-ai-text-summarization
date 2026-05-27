@@ -129,7 +129,7 @@ function PeerTile({
   return (
     <div
       className={
-        'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#202124] ' +
+        'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#3c4043] ' +
         (speaking ? 'ring-2 ring-[#8ab4f8]' : 'ring-1 ring-white/5') +
         (spotlight ? ' shadow-lg shadow-black/40' : '')
       }
@@ -151,13 +151,22 @@ function PeerTile({
           }
         />
       ) : (
-        <div className="absolute inset-0 grid place-items-center bg-[#202124]">
+        // No-video state: solid colored tile with the user's avatar
+        // initial centered. Meet picks a deterministic color per user; we
+        // honour their saved `avatar_color`. The gradient is subtle — a
+        // 70%→100% darkening of the same hue, never a hard ring.
+        <div
+          className="absolute inset-0 grid place-items-center"
+          style={{
+            background: `radial-gradient(circle at 50% 35%, ${avatarColor} 0%, color-mix(in srgb, ${avatarColor} 55%, #000) 100%)`,
+          }}
+        >
           <div
             className={
-              'grid place-items-center rounded-full font-semibold text-white ' +
-              (spotlight ? 'h-28 w-28 text-4xl' : mini ? 'h-10 w-10 text-base' : 'h-20 w-20 text-2xl')
+              'grid place-items-center rounded-full font-semibold text-white ring-1 ring-white/15 backdrop-blur-sm ' +
+              'bg-white/[0.08] ' +
+              (spotlight ? 'h-36 w-36 text-5xl' : mini ? 'h-10 w-10 text-base' : 'h-24 w-24 text-3xl')
             }
-            style={{ backgroundColor: avatarColor }}
           >{initial}</div>
         </div>
       )}
@@ -165,19 +174,32 @@ function PeerTile({
       {/* Hand raised (top-left) */}
       {peer.hand && !mini && (
         <div
-          className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow"
+          className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow-md"
           title="Hand raised"
         >
           <Hand className="h-4 w-4" />
         </div>
       )}
 
-      {/* Pin button (top-right, hover-revealed) */}
+      {/* Mic-off badge (top-right) — Meet places this in the top-right
+          corner with a small filled circle. Hidden on mini tiles to avoid
+          clutter; the name pill below the tile already signals state.   */}
+      {audioOff && !mini && (
+        <div
+          className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm"
+          title="Muted"
+        >
+          <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />
+        </div>
+      )}
+
+      {/* Pin button (top-right too — slides left when mic-off badge shown) */}
       {onTogglePin && !mini && (
         <button
           onClick={(e) => { e.stopPropagation(); onTogglePin(peer.peer_id) }}
           className={
-            'absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full transition ' +
+            'absolute top-3 grid h-9 w-9 place-items-center rounded-full transition ' +
+            (audioOff ? 'right-12 ' : 'right-3 ') +
             (pinned
               ? 'bg-[#8ab4f8]/20 text-[#8ab4f8] opacity-100'
               : 'bg-black/55 text-white/85 opacity-0 backdrop-blur hover:bg-black/70 group-hover/tile:opacity-100')
@@ -189,26 +211,22 @@ function PeerTile({
         </button>
       )}
 
-      {/* Bottom name bar */}
+      {/* Bottom name pill */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
         <div className={
           'flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 font-medium text-white backdrop-blur-sm ' +
-          (mini ? 'text-[11px]' : 'text-xs')
+          (mini ? 'text-[11px]' : 'text-[12.5px]')
         }>
           <span className="truncate">{peer.name || '…'}{isScreen ? ' · Presenting' : ''}</span>
           {peer.role === 'host' && <Crown className="h-3 w-3 shrink-0 text-amber-300" />}
           {peer.role === 'co_host' && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-300" />}
         </div>
 
-        {audioOff && (
-          <div
-            className={
-              'grid place-items-center rounded-full bg-[#ea4335] text-white shadow ' +
-              (mini ? 'h-6 w-6' : 'h-7 w-7')
-            }
-            title="Muted"
-          >
-            <MicOff className={mini ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
+        {audioOff && mini && (
+          // On mini tiles the mic-off indicator goes back to the name row
+          // so the top-right corner stays clean.
+          <div className="grid h-5 w-5 place-items-center rounded-full bg-[#ea4335] text-white shadow" title="Muted">
+            <MicOff className="h-3 w-3" />
           </div>
         )}
       </div>

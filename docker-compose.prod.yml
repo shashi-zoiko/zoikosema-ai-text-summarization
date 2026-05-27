@@ -15,6 +15,57 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: zoiko-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  livekit:
+    # For a hardened prod deploy with TURN/TLS, swap this config for
+    # infra/livekit/livekit.prod.yaml and mount your TLS material under
+    # /etc/livekit/tls. The shipped livekit.yaml is fine for VPN/internal use.
+    image: livekit/livekit-server:v1.12.0
+    container_name: zoiko-livekit
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    volumes:
+      - ./infra/livekit/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7880/"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  livekit-egress:
+    image: livekit/egress:v1.12.0
+    container_name: zoiko-livekit-egress
+    restart: unless-stopped
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    depends_on:
+      livekit:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - ./infra/livekit/egress.yaml:/etc/egress.yaml:ro
+      - zoiko_recordings:/out
+
   server:
     image: ${SERVER_IMAGE:-ghcr.io/zoikotime/zoiko_meet/server:latest}
     container_name: zoiko-server
@@ -34,8 +85,27 @@ services:
       FRONTEND_URL: ${FRONTEND_URL}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       AI_MODEL: ${AI_MODEL}
+      # ── LiveKit (SFU) ────────────────────────────────────────────────
+      # Leave MEDIA_PROVIDER unset to keep the mesh path (no SFU needed).
+      # To enable LiveKit:
+      #   1. Stand up a LiveKit SFU reachable from the public internet
+      #      (LiveKit Cloud is the easiest path on Cloud Run — see
+      #      docs/livekit-migration-dogfood.md and infra/livekit/README.md).
+      #   2. Set MEDIA_PROVIDER=livekit and the four LIVEKIT_* vars below.
+      #   3. New meetings will then use the SFU; existing meetings stay on
+      #      mesh because their media_provider was stamped at create time.
+      MEDIA_PROVIDER: ${MEDIA_PROVIDER:-livekit}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecretdevsecretdevsecretdevsecret}
+      LIVEKIT_WS_URL: ${LIVEKIT_WS_URL:-ws://livekit:7880}
+      LIVEKIT_PUBLIC_WS_URL: ${LIVEKIT_PUBLIC_WS_URL:-ws://localhost:7880}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      livekit:
         condition: service_healthy
     ports:
       - "8001:8080"
@@ -49,8 +119,10 @@ services:
     restart: unless-stopped
     depends_on:
       - server
+    # client/nginx.conf listens on 8080 inside the container — map host:container
+    # 1:1 so the SPA is reachable. (Previously 8080:80, which hit a dead port.)
     ports:
-      - "8080:80"
+      - "8080:8080"
 
 volumes:
   zoiko_pg_data:

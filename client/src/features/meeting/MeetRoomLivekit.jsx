@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   LiveKitRoom,
@@ -6,7 +6,7 @@ import {
   useConnectionState,
 } from '@livekit/components-react'
 import { ConnectionState, DisconnectReason, VideoPresets } from 'livekit-client'
-import { Hand, MessageSquare, PencilLine, Settings, Smile, Users, UsersRound, Circle } from 'lucide-react'
+import { PencilLine, Users } from 'lucide-react'
 import '@livekit/components-styles'
 
 import { fetchMediaToken } from './api/media.js'
@@ -15,7 +15,7 @@ import { api } from '../../api/client.js'
 import { useAuth } from '../../context/AuthContext.jsx'
 
 import Stage from './components/Stage.jsx'
-import ControlBar from './components/ControlBar.jsx'
+import MeetingDock from '../../components/meeting/MeetingDock.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
 import WaitingRoomPanel from './components/WaitingRoomPanel.jsx'
 import HostMenu from './components/HostMenu.jsx'
@@ -27,7 +27,7 @@ import Whiteboard from '../../components/Whiteboard.jsx'   // reused from legacy
 import useMeetingControlWs from './hooks/useMeetingControlWs.js'
 import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
 import useMutedWhileSpeaking from './hooks/useMutedWhileSpeaking.js'
-import { useLocalParticipant, useRoomContext } from '@livekit/components-react'
+import { useLocalParticipant, useMediaDeviceSelect, useRoomContext } from '@livekit/components-react'
 import { useCaptions } from './components/CaptionsOverlay.jsx'
 import { useRoomStore } from './state/roomStore.js'
 
@@ -44,8 +44,6 @@ const ROOM_OPTIONS = {
     resolution: VideoPresets.h720.resolution,
   },
 }
-
-const QUICK_EMOJIS = ['👍', '👏', '❤️', '😂', '🎉', '🙏']
 
 export default function MeetRoomLivekit() {
   const { code } = useParams()
@@ -184,14 +182,23 @@ export default function MeetRoomLivekit() {
         // Probe recording state (host UI uses this on mount)
         try { setRecording(await getRecordingState(code)) } catch { /* ignore */ }
       } catch (e) {
-        if (!cancelled) {
-          setError(e?.message || 'Failed to join')
-          setPhase('error')
+        if (cancelled) return
+        const msg = e?.message || 'Failed to join'
+        // Auto-fallback: if /media-token 503s because LiveKit isn't
+        // configured in this environment, bounce to the mesh room instead
+        // of dead-ending on an error screen. This happens when a user
+        // deep-links /room-lk on a deployment that hasn't enabled the SFU
+        // yet — common during the strangler-fig migration.
+        if (/livekit is not enabled/i.test(msg)) {
+          navigate(`/meet/${code}/room`, { replace: true })
+          return
         }
+        setError(msg)
+        setPhase('error')
       }
     })()
     return () => { cancelled = true }
-  }, [code])
+  }, [code, navigate])
 
   // ── Actions ──────────────────────────────────────────────────────────────
   const sendChat = useCallback((body) => ctrlSend({ type: 'chat', body }), [ctrlSend])
@@ -310,7 +317,7 @@ export default function MeetRoomLivekit() {
       video
       onDisconnected={handleDisconnected}
       onError={(e) => setError(e?.message || String(e))}
-      className="h-screen w-screen flex flex-col bg-zinc-950 text-white"
+      className="h-screen w-screen flex flex-col bg-[#202124] text-white"
     >
       <Header
         code={code}
@@ -370,78 +377,27 @@ export default function MeetRoomLivekit() {
 
       <RoomAudioRenderer />
 
-      <ControlBar
-        onLeave={userLeave}
-        rightSlot={
-          <>
-            <SmallBtn active={handRaised} onClick={toggleHand} title={handRaised ? 'Lower hand' : 'Raise hand'}>
-              <Hand size={16} />
-            </SmallBtn>
-            <SmallBtn active={showEmoji} onClick={() => setShowEmoji((v) => !v)} title="React">
-              <Smile size={16} />
-            </SmallBtn>
-            {isHostOrCohost && (
-              <SmallBtn
-                active={recording.recording}
-                onClick={toggleRecord}
-                title={recording.recording ? 'Stop recording' : 'Start recording'}
-              >
-                <Circle size={16} className={recording.recording ? 'text-red-400 fill-red-400' : ''} />
-              </SmallBtn>
-            )}
-            {isHostOrCohost && (
-              <SidebarToggle
-                active={sidebar === 'waiting'}
-                unread={unreadWaiting}
-                onClick={() => setSidebar((s) => (s === 'waiting' ? null : 'waiting'))}
-                title="Waiting room"
-              >
-                <Users size={16} />
-              </SidebarToggle>
-            )}
-            <SidebarToggle
-              active={sidebar === 'people'}
-              unread={0}
-              onClick={() => setSidebar((s) => (s === 'people' ? null : 'people'))}
-              title="People"
-            >
-              <UsersRound size={16} />
-            </SidebarToggle>
-            <SidebarToggle
-              active={sidebar === 'chat'}
-              unread={unreadChat}
-              onClick={() => setSidebar((s) => (s === 'chat' ? null : 'chat'))}
-              title="Chat"
-            >
-              <MessageSquare size={16} />
-            </SidebarToggle>
-            <SmallBtn
-              active={showWhiteboard}
-              onClick={() => setShowWhiteboard((v) => !v)}
-              title={showWhiteboard ? 'Close whiteboard' : 'Open whiteboard'}
-            >
-              <PencilLine size={16} />
-            </SmallBtn>
-            <SmallBtn onClick={() => setShowDevices(true)} title="Devices">
-              <Settings size={16} />
-            </SmallBtn>
-          </>
-        }
+      <LivekitDockAdapter
+        code={code}
+        isHostOrCohost={isHostOrCohost}
+        screenshareEnabled={meeting.screenshare_enabled}
+        sidebar={sidebar}
+        setSidebar={setSidebar}
+        waitingList={isHostOrCohost ? waiting : []}
+        unreadChat={unreadChat}
+        unreadWaiting={unreadWaiting}
+        handRaised={handRaised}
+        toggleHand={toggleHand}
+        showEmoji={showEmoji}
+        setShowEmoji={setShowEmoji}
+        sendReaction={sendReaction}
+        isRecording={recording.recording}
+        toggleRecording={toggleRecord}
+        showWhiteboard={showWhiteboard}
+        toggleWhiteboard={() => setShowWhiteboard((v) => !v)}
+        openDevices={() => setShowDevices(true)}
+        leave={userLeave}
       />
-
-      {showEmoji && (
-        <div className="fixed bottom-20 right-6 z-30 flex gap-1 bg-zinc-900 border border-zinc-800 rounded-full px-3 py-2 shadow-xl">
-          {QUICK_EMOJIS.map((e) => (
-            <button
-              key={e}
-              onClick={() => sendReaction(e)}
-              className="text-2xl w-9 h-9 grid place-items-center rounded-full hover:bg-zinc-800"
-            >
-              {e}
-            </button>
-          ))}
-        </div>
-      )}
 
       {showDevices && <DevicePicker onClose={() => setShowDevices(false)} />}
 
@@ -459,77 +415,275 @@ export default function MeetRoomLivekit() {
 
 /* ── Subcomponents ─────────────────────────────────────────────────────── */
 
-function SmallBtn({ active, onClick, title, children }) {
+/**
+ * Bridges the shared <MeetingDock> to LiveKit's local-participant state.
+ * Must live inside <LiveKitRoom> because it uses LK hooks.
+ *
+ * Mic / camera / screen-share state come from `localParticipant`; everything
+ * else (chat, hand, reactions, recording, whiteboard) is passed in from the
+ * parent because those flow through our own control WebSocket.
+ */
+function LivekitDockAdapter({
+  code,
+  isHostOrCohost,
+  screenshareEnabled,
+  sidebar,
+  setSidebar,
+  waitingList,
+  unreadChat,
+  unreadWaiting,
+  handRaised,
+  toggleHand,
+  showEmoji,
+  setShowEmoji,
+  sendReaction,
+  isRecording,
+  toggleRecording,
+  showWhiteboard,
+  toggleWhiteboard,
+  openDevices,
+  leave,
+}) {
+  const { localParticipant } = useLocalParticipant()
+  const audioInputs = useMediaDeviceSelect({ kind: 'audioinput' })
+  const videoInputs = useMediaDeviceSelect({ kind: 'videoinput' })
+  const [clock, setClock] = useState(() => fmtClock(new Date()))
+  const [showSharePicker, setShowSharePicker] = useState(false)
+
+  useEffect(() => {
+    const t = setInterval(() => setClock(fmtClock(new Date())), 30_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const micOn = !!localParticipant?.isMicrophoneEnabled
+  const camOn = !!localParticipant?.isCameraEnabled
+  const screenOn = !!localParticipant?.isScreenShareEnabled
+
+  const toggleMic = useCallback(
+    () => localParticipant?.setMicrophoneEnabled(!micOn).catch(() => {}),
+    [localParticipant, micOn],
+  )
+  const toggleCam = useCallback(
+    () => localParticipant?.setCameraEnabled(!camOn).catch(() => {}),
+    [localParticipant, camOn],
+  )
+  const startShare = useCallback(
+    () => localParticipant?.setScreenShareEnabled(true).catch(() => {}),
+    [localParticipant],
+  )
+  const stopShare = useCallback(
+    () => localParticipant?.setScreenShareEnabled(false).catch(() => {}),
+    [localParticipant],
+  )
+
+  // The dock manages its own host-or-cohost gating for "Start recording".
+  // It also surfaces a waiting-room badge by counting pending users; the
+  // host's waiting-room sidebar opens via the unread-badged "people" icon.
   return (
-    <button
-      onClick={onClick}
-      title={title}
-      className={
-        'w-10 h-10 grid place-items-center rounded-full transition-colors ' +
-        (active ? 'bg-blue-600 hover:bg-blue-700' : 'bg-zinc-700 hover:bg-zinc-600')
+    <MeetingDock
+      clock={clock}
+      code={code}
+      audioOn={micOn}
+      toggleAudio={toggleMic}
+      audioDeviceMenu={
+        audioInputs.devices?.length > 1
+          ? ({ close }) => (
+              <LkDockDeviceMenu
+                title="Microphone"
+                devices={audioInputs.devices}
+                current={audioInputs.activeDeviceId}
+                onPick={async (id) => {
+                  try { await audioInputs.setActiveMediaDevice(id) } catch { /* device removed */ }
+                  close()
+                }}
+              />
+            )
+          : null
       }
-    >
-      {children}
-    </button>
+      videoOn={camOn}
+      toggleVideo={toggleCam}
+      videoDeviceMenu={
+        videoInputs.devices?.length > 1
+          ? ({ close }) => (
+              <LkDockDeviceMenu
+                title="Camera"
+                devices={videoInputs.devices}
+                current={videoInputs.activeDeviceId}
+                onPick={async (id) => {
+                  try { await videoInputs.setActiveMediaDevice(id) } catch { /* device removed */ }
+                  close()
+                }}
+              />
+            )
+          : null
+      }
+      screenOn={screenOn}
+      screenshareEnabled={screenshareEnabled}
+      isHostOrCohost={isHostOrCohost}
+      showSharePicker={showSharePicker}
+      setShowSharePicker={setShowSharePicker}
+      startScreenShare={startShare}
+      stopScreenShare={stopShare}
+      isRecording={isRecording}
+      startRecording={toggleRecording}
+      stopRecording={toggleRecording}
+      handRaised={handRaised}
+      toggleHand={toggleHand}
+      showEmoji={showEmoji}
+      setShowEmoji={setShowEmoji}
+      sendReaction={sendReaction}
+      sidebar={sidebar}
+      setSidebar={setSidebar}
+      waitingList={waitingList}
+      unreadChat={unreadChat}
+      onInfo={openDevices}
+      extraCenterSlot={
+        <RoundDockExtra
+          active={showWhiteboard}
+          onClick={toggleWhiteboard}
+          label={showWhiteboard ? 'Close whiteboard' : 'Open whiteboard'}
+        >
+          <PencilLine className="h-5 w-5" />
+        </RoundDockExtra>
+      }
+      extraRightSlot={
+        isHostOrCohost && unreadWaiting > 0 ? (
+          <RoundDockExtra
+            active={sidebar === 'waiting'}
+            onClick={() => setSidebar((s) => (s === 'waiting' ? null : 'waiting'))}
+            label="Waiting room"
+            badge={unreadWaiting}
+          >
+            <Users className="h-5 w-5" />
+          </RoundDockExtra>
+        ) : null
+      }
+      leave={leave}
+    />
   )
 }
 
-function SidebarToggle({ active, unread, onClick, title, children }) {
+function RoundDockExtra({ active, onClick, label, badge, children }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      title={title}
+      aria-label={label}
+      aria-pressed={active}
+      title={label}
       className={
-        'relative w-10 h-10 grid place-items-center rounded-full transition-colors ' +
-        (active ? 'bg-blue-600 hover:bg-blue-700' : 'bg-zinc-700 hover:bg-zinc-600')
+        'relative grid h-11 w-11 place-items-center rounded-full transition active:scale-[0.97] ' +
+        (active
+          ? 'bg-[#a8c7fa] text-[#202124] hover:bg-[#bdd5fc]'
+          : 'bg-[#3c4043] text-white hover:bg-[#4a4f55]')
       }
     >
       {children}
-      {unread > 0 && !active && (
-        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] min-w-4.5 h-4.5 grid place-items-center rounded-full px-1">
-          {unread > 99 ? '99+' : unread}
+      {badge > 0 && (
+        <span className="pointer-events-none absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#ea4335] px-1 text-[10px] font-bold leading-none text-white">
+          {badge > 99 ? '99+' : badge}
         </span>
       )}
     </button>
   )
 }
 
+function fmtClock(d) {
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+/**
+ * Device picker that hangs off the mic / camera caret in the dock.
+ * Mirrors the mesh room's DockDeviceMenu visually so the affordance is
+ * identical across both rooms; only the device-list source differs.
+ */
+function LkDockDeviceMenu({ title, devices, current, onPick }) {
+  return (
+    <div className="py-1.5">
+      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+        {title}
+      </div>
+      <ul className="max-h-[260px] overflow-y-auto">
+        {devices.map((d) => {
+          const active = d.deviceId === current
+          return (
+            <li key={d.deviceId}>
+              <button
+                onClick={() => { if (!active) onPick(d.deviceId) }}
+                className={
+                  'flex w-full items-start gap-2.5 px-3 py-2 text-left text-[13px] transition ' +
+                  (active
+                    ? 'bg-[#8ab4f8]/12 text-[#8ab4f8]'
+                    : 'text-zinc-100 hover:bg-white/[0.06]')
+                }
+              >
+                <span className="mt-1 grid h-2 w-2 shrink-0 place-items-center">
+                  {active && <span className="h-2 w-2 rounded-full bg-current" />}
+                </span>
+                <span className="min-w-0 flex-1 truncate">
+                  {d.label || `${title} ${d.deviceId.slice(0, 6)}`}
+                </span>
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
 function Header({ code, ctrlConnected, recording, isHostOrCohost, meeting, onLock, onChatEnabled, onScreenEnabled, onEnd }) {
   const state = useConnectionState()
-  const mediaLabel =
-    state === ConnectionState.Connected
-      ? 'Connected'
-      : state === ConnectionState.Reconnecting
-        ? 'Reconnecting…'
-        : state === ConnectionState.Connecting
-          ? 'Connecting…'
-          : state
-  const dotColor =
-    state === ConnectionState.Connected
-      ? 'bg-emerald-500'
-      : state === ConnectionState.Reconnecting
-        ? 'bg-amber-500'
-        : 'bg-zinc-500'
+  const [copied, setCopied] = useState(false)
+
+  const reconnecting = state === ConnectionState.Reconnecting
+  const connecting = state === ConnectionState.Connecting
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/meet/${code}`)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1600)
+    } catch {}
+  }
+
+  // Transparent top bar that floats over the stage — matches the mesh
+  // room's header and Meet's chromeless look.
   return (
-    <div className="flex items-center justify-between px-4 py-2 bg-zinc-900 border-b border-zinc-800">
-      <div className="text-sm text-zinc-300 flex items-center gap-3">
-        <span>Meeting <span className="font-mono text-zinc-100">{code}</span></span>
+    <div className="flex h-14 shrink-0 items-center justify-between px-4">
+      <div className="flex items-center gap-2.5 text-sm">
         {recording && (
-          <span className="flex items-center gap-1 text-xs text-red-400">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#ea4335]/15 px-2.5 py-1 text-[11px] font-semibold text-[#ea4335]">
+            <span className="relative grid h-1.5 w-1.5 place-items-center">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
+            </span>
             REC
           </span>
         )}
+        {meeting?.locked && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-400" title="Meeting is locked">
+            🔒 Locked
+          </span>
+        )}
+        {(reconnecting || (!ctrlConnected && !connecting)) && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-400">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+            Reconnecting…
+          </span>
+        )}
       </div>
-      <div className="flex items-center gap-3 text-xs text-zinc-300">
-        <span className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${dotColor}`} />
-          {mediaLabel}
-        </span>
-        <span className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${ctrlConnected ? 'bg-emerald-500' : 'bg-zinc-500'}`} />
-          Chat
-        </span>
+
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[13px] tracking-wide text-zinc-300">{code}</span>
+        <button
+          onClick={copyLink}
+          title="Copy invite link"
+          aria-label="Copy invite link"
+          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-zinc-200 transition hover:bg-white/10"
+        >
+          {copied ? '✓ Copied' : 'Copy link'}
+        </button>
         {isHostOrCohost && (
           <HostMenu
             meeting={meeting}

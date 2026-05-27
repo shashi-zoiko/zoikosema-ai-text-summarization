@@ -53,58 +53,87 @@ function ParticipantTileImpl({ trackRef, isHero }) {
 
   const hasVideo = !!trackRef.publication && !trackRef.publication.isMuted
   const displayName = name || identity || 'Guest'
+  // Deterministic colour per identity so the same user always gets the same
+  // tile background — Meet does the same trick.
+  const avatarColor = pickColor(identity || displayName)
 
   return (
     <div
       onDoubleClick={onPinToggle}
       title="Double-click to pin"
-      className="relative rounded-xl overflow-hidden bg-zinc-900 aspect-video shadow ring-2 transition-shadow group"
-      style={{
-        boxShadow: isSpeaking ? '0 0 0 3px rgb(91 141 239)' : undefined,
-      }}
+      className={
+        'group relative isolate aspect-video overflow-hidden rounded-2xl bg-[#3c4043] transition-shadow ' +
+        (isSpeaking ? 'ring-2 ring-[#8ab4f8]' : 'ring-1 ring-white/5')
+      }
     >
       {hasVideo ? (
-        <VideoTrack trackRef={trackRef} className="w-full h-full object-cover" />
+        <VideoTrack trackRef={trackRef} className="absolute inset-0 h-full w-full object-cover" />
       ) : (
-        <div className="w-full h-full grid place-items-center text-zinc-400">
+        <div
+          className="absolute inset-0 grid place-items-center"
+          style={{
+            background: `radial-gradient(circle at 50% 35%, ${avatarColor} 0%, color-mix(in srgb, ${avatarColor} 55%, #000) 100%)`,
+          }}
+        >
           <div className={
-            'rounded-full bg-zinc-700 grid place-items-center font-semibold text-zinc-200 ' +
-            (isHero ? 'w-24 h-24 text-4xl' : 'w-16 h-16 text-2xl')
+            'grid place-items-center rounded-full font-semibold text-white ring-1 ring-white/15 backdrop-blur-sm bg-white/[0.08] ' +
+            (isHero ? 'h-36 w-36 text-5xl' : 'h-24 w-24 text-3xl')
           }>
             {displayName.slice(0, 1).toUpperCase()}
           </div>
         </div>
       )}
 
+      {/* Hand raised — top-left */}
+      {raised && (
+        <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow-md" title="Hand raised">
+          <Hand className="h-4 w-4" />
+        </div>
+      )}
+
+      {/* Mic-off badge — top-right (matches Meet) */}
+      {micMuted && (
+        <div className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm" title="Muted">
+          <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />
+        </div>
+      )}
+
+      {/* Pin button — hover-revealed, slides left when mic-off badge present */}
       <button
         onClick={onPinToggle}
-        title={isPinned ? 'Unpin' : 'Pin'}
-        className="absolute top-2 right-2 p-1.5 rounded bg-black/50 text-white opacity-0 group-hover:opacity-100 hover:bg-black/70 transition-opacity"
+        aria-label={isPinned ? 'Unpin' : 'Pin'}
+        title={isPinned ? 'Unpin' : 'Pin to main view'}
+        className={
+          'absolute top-3 grid h-9 w-9 place-items-center rounded-full transition ' +
+          (micMuted ? 'right-12 ' : 'right-3 ') +
+          (isPinned
+            ? 'bg-[#8ab4f8]/20 text-[#8ab4f8] opacity-100'
+            : 'bg-black/55 text-white/85 opacity-0 backdrop-blur hover:bg-black/70 group-hover:opacity-100')
+        }
       >
-        {isPinned ? <PinOff size={12} /> : <Pin size={12} />}
+        {isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
       </button>
 
       <QualityBars quality={quality} />
 
-
-      {raised && (
-        <div className="absolute top-2 left-2 bg-amber-500 text-white rounded-full p-1">
-          <Hand size={12} />
+      {/* Bottom name pill */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
+        <div className="flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[12.5px] font-medium text-white backdrop-blur-sm">
+          <span className="truncate">{displayName}</span>
         </div>
-      )}
-
-      <div className="absolute bottom-2 left-2 right-2 flex items-center gap-2">
-        <span className="text-xs bg-black/60 text-white px-2 py-1 rounded">
-          {displayName}
-        </span>
-        {micMuted && (
-          <span className="bg-red-500/90 text-white p-1 rounded">
-            <MicOff size={12} />
-          </span>
-        )}
       </div>
     </div>
   )
+}
+
+// Cheap deterministic colour hash. Same algorithm we use in the chat avatar
+// helper so a participant looks the same across rooms.
+const COLORS = ['#5b8def', '#a16cf4', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#f472b6']
+function pickColor(seed) {
+  if (!seed) return COLORS[0]
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
+  return COLORS[Math.abs(h) % COLORS.length]
 }
 
 export const ParticipantTile = memo(

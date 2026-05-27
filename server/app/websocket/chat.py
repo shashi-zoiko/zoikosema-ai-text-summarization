@@ -99,6 +99,7 @@ def _persist_message(
     sender_color: str,
     body: str,
     reply_to_id: int | None,
+    client_id: str | None = None,
 ) -> Callable[[Session], dict[str, Any]]:
     """Insert message + resolve mentions + create notifications in ONE session.
     Returns a session-bound thunk for _run_db; the thunk yields a payload dict
@@ -194,6 +195,11 @@ def _persist_message(
                 "file_size": None,
                 "reactions": [],
                 "mentions": mention_ids,
+                # Echo back the sender's client_id (if any) so the optimistic
+                # bubble can swap itself for the persisted row. Other peers
+                # ignore this field. Send `None` rather than omitting so the
+                # field shape stays stable.
+                "client_id": client_id,
             },
         }
         return {"payload": broadcast_payload, "notifications": notif_payloads}
@@ -310,6 +316,11 @@ async def channel_ws(websocket: WebSocket, channel_id: int, token: str = ""):
                 body = (data.get("body") or "").strip()
                 if not body:
                     continue
+                client_id = data.get("client_id")
+                # Cap to a sane length — this is opaque to the server, only
+                # echoed back. A malicious client can't grow our payloads.
+                if client_id is not None and (not isinstance(client_id, str) or len(client_id) > 64):
+                    client_id = None
                 result = await _run_db(_persist_message(
                     channel_id=channel_id,
                     sender_id=user_id,
@@ -317,6 +328,7 @@ async def channel_ws(websocket: WebSocket, channel_id: int, token: str = ""):
                     sender_color=user_color,
                     body=body,
                     reply_to_id=data.get("reply_to_id"),
+                    client_id=client_id,
                 ))
                 if result.get("error") == "muted":
                     await websocket.send_json({"type": "error", "message": "You are muted in this channel"})

@@ -58,6 +58,55 @@ def get_db():
         db.close()
 
 
+# (index_name, table, ddl) — additive indexes applied at startup. The index
+# name is also the CREATE INDEX IF NOT EXISTS guard, so re-runs are no-ops.
+# Put hot chat / meeting query paths here; query planner-confirmed wins only,
+# not "might-need-someday" indexes.
+_ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
+    # /api/channels list_my_channels: "last message per channel" subquery
+    # plans as `messages WHERE channel_id IN (…) AND deleted_at IS NULL` and
+    # the same scan drives unread counts. Without this composite, PG falls
+    # back to a Bitmap Heap Scan on the single-column channel_id index then
+    # filters deleted_at row-by-row. The partial-NULL index lets PG read the
+    # last-id-per-channel in one index range scan per channel.
+    ("ix_messages_channel_id_id_active", "messages",
+     "CREATE INDEX IF NOT EXISTS ix_messages_channel_id_id_active "
+     "ON messages (channel_id, id DESC) WHERE deleted_at IS NULL"),
+    # /api/channels/{id}/messages: `ORDER BY id DESC LIMIT N` on a channel.
+    # The same composite covers this — listed separately so the comment
+    # stays focused on the query path it optimizes.
+    ("ix_messages_channel_id_id", "messages",
+     "CREATE INDEX IF NOT EXISTS ix_messages_channel_id_id "
+     "ON messages (channel_id, id DESC)"),
+    # ChannelMember membership lookups happen on every WS connect AND every
+    # message send (`_persist_message` re-validates membership). The two
+    # existing single-column indexes can't satisfy the AND on (channel_id,
+    # user_id) without bitmap intersection. Non-UNIQUE on purpose: while the
+    # app only ever inserts one row per pair, we don't want a startup
+    # migration to fail on historical duplicates the way /join did.
+    ("ix_channel_members_channel_user", "channel_members",
+     "CREATE INDEX IF NOT EXISTS ix_channel_members_channel_user "
+     "ON channel_members (channel_id, user_id)"),
+    # MessageReadReceipt: same shape — one row per (channel, user), hit on
+    # mark_read and the unread-counts query for the channel list.
+    ("ix_read_receipts_channel_user", "message_read_receipts",
+     "CREATE INDEX IF NOT EXISTS ix_read_receipts_channel_user "
+     "ON message_read_receipts (channel_id, user_id)"),
+    # MessageReaction.toggle: the existence-check selects on (message_id,
+    # user_id, emoji). Composite lets PG hit the index directly instead of
+    # bitmap-AND-ing the message_id index against a filter.
+    ("ix_reactions_msg_user_emoji", "message_reactions",
+     "CREATE INDEX IF NOT EXISTS ix_reactions_msg_user_emoji "
+     "ON message_reactions (message_id, user_id, emoji)"),
+    # MeetingParticipant lookups in /join, /media-token, and the signaling
+    # WS all filter on (meeting_id, user_id). Same story as above — without
+    # a composite, the two single-column indexes have to be combined.
+    ("ix_meeting_participants_meeting_user", "meeting_participants",
+     "CREATE INDEX IF NOT EXISTS ix_meeting_participants_meeting_user "
+     "ON meeting_participants (meeting_id, user_id)"),
+]
+
+
 # (table, column, pg_ddl) — additive columns applied at startup so older DBs
 # pick up new nullable / defaulted columns without a full migration tool.
 _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
@@ -102,6 +151,19 @@ def _apply_additive_migrations() -> None:
             if column in cols:
                 continue
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {pg_ddl}"))
+        # Indexes ship after columns because some of them reference columns we
+        # may have just added (e.g. messages.deleted_at). All DDL uses
+        # `CREATE INDEX IF NOT EXISTS` so re-runs are no-ops.
+        for _index_name, table, ddl in _ADDITIVE_INDEXES:
+            if table not in existing_tables:
+                continue
+            try:
+                conn.execute(text(ddl))
+            except Exception:
+                # An existing same-named index with a different definition
+                # would error here; we log via the calling startup handler
+                # and continue so a single bad index can't take the app down.
+                log.exception("additive index failed: %s", _index_name)
 
 
 def init_db() -> None:

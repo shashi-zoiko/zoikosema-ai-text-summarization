@@ -45,10 +45,25 @@ export default function useSpeakerDetection(onSpeaking, threshold = 0.015) {
       if (prev) {
         if (prev.intervalId) clearInterval(prev.intervalId)
         try { prev.source.disconnect() } catch {}
+        delete trackedRef.current[peerId]
       }
 
+      // createMediaStreamSource throws "MediaStream has no audio track" if
+      // the stream only carries video (e.g. the user joined with mic off, or
+      // the audio track was stopped/replaced). Skip silently — when an audio
+      // track later appears, the caller re-attaches.
+      const audioTrack = stream.getAudioTracks?.()[0]
+      if (!audioTrack || audioTrack.readyState === 'ended') return
+
       const ctx = getCtx()
-      const source = ctx.createMediaStreamSource(stream)
+      let source
+      try {
+        source = ctx.createMediaStreamSource(stream)
+      } catch {
+        // Track was live at the check above but vanished before the Web Audio
+        // node bound to it — race on mic recovery / device switch. Bail.
+        return
+      }
       const analyser = ctx.createAnalyser()
       analyser.fftSize = 512
       analyser.smoothingTimeConstant = 0.5

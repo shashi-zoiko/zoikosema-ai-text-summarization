@@ -87,42 +87,6 @@
   color-scheme: dark;
 }
 
-/* ============== THEME: Aurora (ambient blue/purple) ============== */
-[data-theme="aurora"] {
-  --c-bg: #0a0815;
-  --c-bg-1: #0f0c1f;
-  --c-bg-2: #16122b;
-  --c-bg-3: #201a3b;
-  --c-surface: #110d23;
-  --c-surface-2: #1a1432;
-
-  --c-fg: #eee6ff;
-  --c-fg-dim: #c9bfe6;
-  --c-fg-muted: #8780a8;
-
-  --c-line: rgba(168, 139, 250, 0.10);
-  --c-line-strong: rgba(168, 139, 250, 0.20);
-
-  --c-accent: #a78bfa;
-  --c-accent-2: #c084fc;
-  --c-accent-3: #f472b6;
-  --c-accent-soft: rgba(167, 139, 250, 0.18);
-  --c-accent-ring: rgba(167, 139, 250, 0.40);
-
-  --c-success: #34d399;
-  --c-success-soft: rgba(52, 211, 153, 0.14);
-  --c-warn: #fbbf24;
-  --c-warn-soft: rgba(251, 191, 36, 0.14);
-  --c-danger: #fb7185;
-  --c-danger-soft: rgba(251, 113, 133, 0.14);
-
-  --bg-gradient:
-    radial-gradient(900px 500px at 20% 0%, rgba(167, 139, 250, 0.18), transparent 60%),
-    radial-gradient(900px 500px at 95% 110%, rgba(244, 114, 182, 0.10), transparent 60%),
-    var(--c-bg);
-  color-scheme: dark;
-}
-
 /* ============== THEME: Light Enterprise ============== */
 [data-theme="light"] {
   --c-bg: #f6f7fb;
@@ -222,23 +186,6 @@ h4 { line-height: 1.40; font-weight: 600; }
 /* ===================================================================== */
 
 @layer components {
-  .glass-panel {
-    background: color-mix(in srgb, var(--c-surface) 78%, transparent);
-    border: 1px solid var(--c-line);
-    backdrop-filter: blur(20px) saturate(160%);
-    -webkit-backdrop-filter: blur(20px) saturate(160%);
-  }
-
-  .glass-dock {
-    background: color-mix(in srgb, var(--c-surface) 70%, transparent);
-    border: 1px solid var(--c-line);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    box-shadow:
-      0 24px 48px -12px rgba(0, 0, 0, 0.35),
-      0 0 0 1px rgba(255, 255, 255, 0.03) inset;
-  }
-
   .ring-focus {
     outline: none;
     box-shadow: 0 0 0 3px var(--c-accent-ring);
@@ -254,24 +201,6 @@ h4 { line-height: 1.40; font-weight: 600; }
     background-clip: text;
     -webkit-text-fill-color: transparent;
     color: transparent;
-  }
-
-  .gradient-border {
-    position: relative;
-    background-clip: padding-box;
-  }
-  .gradient-border::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    padding: 1px;
-    border-radius: inherit;
-    background: linear-gradient(135deg, var(--c-accent) 0%, var(--c-accent-3) 100%);
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-            mask-composite: exclude;
-    pointer-events: none;
   }
 
   .grid-pattern {
@@ -301,28 +230,10 @@ h4 { line-height: 1.40; font-weight: 600; }
   }
   @keyframes zk-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 
-  /* Audio level meter (used in lobby) */
-  .audio-meter {
-    display: inline-flex;
-    align-items: end;
-    gap: 2px;
-    height: 14px;
-  }
-  .audio-meter span {
-    display: inline-block;
-    width: 3px;
-    background: currentColor;
-    border-radius: 2px;
-    height: 4px;
-    transition: height 80ms linear, opacity 80ms linear;
-    opacity: 0.5;
-  }
-
   /* Brand mark — keep colors faithful on light, lift slightly on dark
      so the indigo wordmark letters don't disappear against near-black. */
   .brand-wordmark { display: inline-block; }
-  [data-theme="midnight"] .brand-wordmark,
-  [data-theme="aurora"]   .brand-wordmark {
+  [data-theme="midnight"] .brand-wordmark {
     filter: brightness(1.18) saturate(1.04);
   }
 
@@ -341,86 +252,7 @@ h4 { line-height: 1.40; font-weight: 600; }
     100% { transform: scale(2.2); opacity: 0; }
   }
 
-  /* =========== Theme-aware meeting dock (light/dark) =========== */
-  .meet-dock {
-    background: color-mix(in srgb, var(--c-surface) 72%, transparent);
-    border: 1px solid var(--c-line-strong);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    backdrop-filter: blur(24px) saturate(180%);
-    box-shadow:
-      0 28px 60px -18px color-mix(in srgb, var(--c-fg) 30%, transparent),
-      0 0 0 1px color-mix(in srgb, var(--c-fg) 4%, transparent) inset;
-  }
-  [data-theme="midnight"] .meet-dock,
-  [data-theme="aurora"]   .meet-dock {
-    background: color-mix(in srgb, #0a0c12 65%, transparent);
-    border-color: rgba(255,255,255,0.10);
-    box-shadow:
-      0 28px 60px -16px rgba(0,0,0,0.65),
-      0 0 0 1px rgba(255,255,255,0.03) inset;
-  }
-
-  /* Meta pill (clock / code / REC) — used bottom-left of room */
-  .meet-meta-pill {
-    background: color-mix(in srgb, var(--c-surface) 80%, transparent);
-    border: 1px solid var(--c-line);
-    color: var(--c-fg-dim);
-    -webkit-backdrop-filter: blur(14px) saturate(160%);
-    backdrop-filter: blur(14px) saturate(160%);
-  }
-  [data-theme="midnight"] .meet-meta-pill,
-  [data-theme="aurora"]   .meet-meta-pill {
-    background: rgba(10, 12, 18, 0.55);
-    border-color: rgba(255,255,255,0.10);
-    color: rgba(255,255,255,0.80);
-  }
-  .meet-meta-pill .meta-sep { background: color-mix(in srgb, var(--c-fg) 14%, transparent); }
-  [data-theme="midnight"] .meet-meta-pill .meta-sep,
-  [data-theme="aurora"]   .meet-meta-pill .meta-sep { background: rgba(255,255,255,0.18); }
-
-  .meet-dock-divider {
-    width: 1px;
-    height: 28px;
-    background: color-mix(in srgb, var(--c-fg) 10%, transparent);
-  }
-  [data-theme="midnight"] .meet-dock-divider,
-  [data-theme="aurora"]   .meet-dock-divider {
-    background: rgba(255,255,255,0.10);
-  }
-
-  /* Floating popovers anchored to the dock (share picker, reactions) */
-  .meet-popover {
-    background: color-mix(in srgb, var(--c-surface) 94%, transparent);
-    border: 1px solid var(--c-line-strong);
-    color: var(--c-fg);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-    backdrop-filter: blur(20px) saturate(180%);
-    box-shadow:
-      0 30px 70px -18px color-mix(in srgb, var(--c-fg) 35%, transparent),
-      0 0 0 1px color-mix(in srgb, var(--c-fg) 4%, transparent) inset;
-  }
-  [data-theme="midnight"] .meet-popover,
-  [data-theme="aurora"]   .meet-popover {
-    background: rgba(10, 12, 18, 0.88);
-    border-color: rgba(255,255,255,0.10);
-    color: #fff;
-  }
-
   /* =========== Animated button helpers =========== */
-  /* Sheen sweep — runs once on hover */
-  .btn-sheen { position: relative; overflow: hidden; }
-  .btn-sheen::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.28) 50%, transparent 70%);
-    transform: translateX(-110%);
-    transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
-    pointer-events: none;
-    border-radius: inherit;
-  }
-  .btn-sheen:hover::after { transform: translateX(110%); }
-
   /* Gentle breathing glow for "active" toggle buttons */
   @keyframes zk-breathe-accent {
     0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--c-accent) 22%, transparent),
@@ -436,81 +268,131 @@ h4 { line-height: 1.40; font-weight: 600; }
   }
   .breathe-danger { animation: zk-breathe-danger 2.6s ease-in-out infinite; }
 
-  /* Tiny icon pop on parent hover (e.g. dock buttons) */
-  @keyframes zk-icon-pop {
-    0%   { transform: scale(1) rotate(0); }
-    40%  { transform: scale(1.18) rotate(-6deg); }
-    100% { transform: scale(1) rotate(0); }
+  /* ─── Meeting room — Tailwind can't express these inline ─────────── */
+
+  /* Reaction emoji float (used by MeetRoom + LK room overlays). */
+  @keyframes zk-reaction-rise {
+    0%   { transform: translateY(0) scale(1);     opacity: 0; }
+    10%  { opacity: 1; }
+    100% { transform: translateY(-80vh) scale(1.4); opacity: 0; }
   }
-  .icon-pop-parent:hover .icon-pop { animation: zk-icon-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .zk-reaction-rise {
+    animation: zk-reaction-rise 2.4s ease-out forwards;
+    will-change: transform, opacity;
+  }
+
+  /* Layout morph wrapper — runs when the stage wrapper's React key
+     changes (grid → speaker → present). Short and subtle. */
+  @keyframes zk-stage-fade {
+    0%   { opacity: 0; transform: translateY(4px) scale(0.995); }
+    100% { opacity: 1; transform: translateY(0)   scale(1);     }
+  }
+  .zk-stage-fade {
+    animation: zk-stage-fade 220ms ease-out both;
+    display: flex;
+    height: 100%;
+    min-height: 0;
+  }
+  .zk-stage-fade > * { width: 100%; height: 100%; min-height: 0; }
+
+  /* Hero panel inside the presentation stage — soft elevation. */
+  .zk-stage-hero {
+    box-shadow: 0 12px 40px -16px rgba(0, 0, 0, 0.55);
+    transition: box-shadow 220ms ease;
+  }
+
+  /* Filmstrip scrollbar (custom-thin, calm).
+     Tailwind 4's `scrollbar-thin` utility doesn't let us colour the
+     thumb the way Meet needs, so this stays as raw CSS. */
+  .zk-filmstrip {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  }
+  .zk-filmstrip::-webkit-scrollbar { width: 6px; height: 6px; }
+  .zk-filmstrip::-webkit-scrollbar-track { background: transparent; }
+  .zk-filmstrip::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.10);
+    border-radius: 999px;
+  }
+  .zk-filmstrip::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  /* Strip tiles morph in from 0 → full size when the layout switches. */
+  @keyframes zk-strip-tile-in {
+    0%   { opacity: 0; transform: scale(0.96); }
+    100% { opacity: 1; transform: scale(1);    }
+  }
+  .zk-strip-tile {
+    animation: zk-strip-tile-in 240ms ease-out both;
+    will-change: transform, opacity;
+  }
+
+  /* Laser-pointer pulse (used by AnnotationOverlay). */
+  @keyframes zk-pointer-pulse {
+    0%   { opacity: 1;   transform: translate(-50%, -50%) scale(1);   }
+    70%  { opacity: 0.7; transform: translate(-50%, -50%) scale(1.5); }
+    100% { opacity: 0;   transform: translate(-50%, -50%) scale(2);   }
+  }
+  .zk-pointer-pulse {
+    animation: zk-pointer-pulse 1.5s ease-out forwards;
+  }
+
+  /* Incoming-call ring pulse (used by CallOverlay).
+     Renders three concentric rings cascaded 0.5s apart for a continuous
+     "ringing" effect. Stays as a keyframe because Tailwind's animate-ping
+     can't be re-timed per-instance without extra config. */
+  @keyframes zk-call-ring {
+    0%   { transform: scale(0.85); opacity: 1; }
+    80%  { transform: scale(1.25); opacity: 0; }
+    100% { transform: scale(1.25); opacity: 0; }
+  }
+  .zk-call-ring {
+    animation: zk-call-ring 1.6s ease-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .zk-reaction-rise { animation-duration: 0.6s; }
+    .zk-stage-fade,
+    .zk-strip-tile,
+    .zk-pointer-pulse { animation-duration: 0ms; }
+    .zk-stage-hero { transition: none; }
+  }
 }
 
 /* ===================================================================== */
 /*           Legacy compatibility — kept until all pages migrate          */
 /* ===================================================================== */
 
-/* These map old token names to the new theme tokens so legacy CSS files
-   (Layout.css, Home.css, Meet.css, etc.) keep working until they're
-   rewritten in a future pass. */
+/* Slimmed legacy/composite token aliases — kept only because something is
+   still referencing each one (verified via grep across .jsx + .css).
+   - The gradients / glows are composite tokens that don't fit cleanly in
+     Tailwind's @theme system, so JSX uses them via inline `style={{...}}`.
+   - The shadow / easing / duration constants are used by index.css's
+     own @layer components rules and a few inline JSX styles.
+   - `--hover-1` is the one remaining "surface-tint" style inline style;
+     left for next pass.
+   40+ other aliases (--bg, --text, --muted, --border, --r-sm, --surface,
+   --accent, --success, etc.) were dropped — every page is on Tailwind
+   now so the alias indirection is dead weight. */
 :root {
-  --bg: var(--c-bg);
-  --bg-1: var(--c-bg-1);
-  --bg-2: var(--c-bg-2);
-  --bg-3: var(--c-bg-3);
-  --bg-4: var(--c-bg-3);
-  --surface: var(--c-surface);
-  --surface-elev: var(--c-surface-2);
-  --surface-tint: var(--c-surface-2);
-  --border: var(--c-line);
-  --border-strong: var(--c-line-strong);
-  --border-focus: var(--c-accent-ring);
-  --text: var(--c-fg);
-  --text-dim: var(--c-fg-dim);
-  --muted: var(--c-fg-muted);
-  --muted-2: var(--c-fg-muted);
-  --accent: var(--c-accent);
-  --accent-2: var(--c-accent-2);
-  --accent-3: var(--c-accent-3);
-  --accent-soft: var(--c-accent-soft);
   --accent-glow: var(--c-accent-ring);
   --accent-gradient: linear-gradient(135deg, var(--c-accent) 0%, var(--c-accent-2) 55%, var(--c-accent-3) 100%);
   --accent-gradient-soft: linear-gradient(135deg, var(--c-accent-soft), color-mix(in srgb, var(--c-accent-3) 14%, transparent));
-  --accent-ring: 0 0 0 3px var(--c-accent-ring);
-  --success: var(--c-success);
-  --success-soft: var(--c-success-soft);
-  --warn: var(--c-warn);
-  --warn-soft: var(--c-warn-soft);
-  --danger: var(--c-danger);
-  --danger-soft: var(--c-danger-soft);
   --danger-glow: var(--c-danger-soft);
   --hover-1: color-mix(in srgb, var(--c-fg) 4%, transparent);
-  --hover-2: color-mix(in srgb, var(--c-fg) 7%, transparent);
-  --hover-3: color-mix(in srgb, var(--c-fg) 10%, transparent);
-  --r-xs: var(--radius-xs);
-  --r-sm: var(--radius-sm);
-  --r-md: var(--radius-md);
-  --r-lg: var(--radius-lg);
-  --r-xl: var(--radius-2xl);
-  --r-pill: var(--radius-pill);
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.10);
   --shadow-sm: 0 2px 4px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08);
   --shadow-md: 0 10px 24px -8px rgba(0,0,0,0.20), 0 4px 8px -4px rgba(0,0,0,0.10);
-  --shadow-lg: 0 24px 48px -12px rgba(0,0,0,0.30), 0 8px 16px -8px rgba(0,0,0,0.16);
-  --shadow-xl: 0 32px 64px -16px rgba(0,0,0,0.40), 0 12px 24px -12px rgba(0,0,0,0.20);
-  --shadow-glow: 0 10px 32px -10px var(--c-accent-ring);
-  --shadow-inner: inset 0 1px 2px rgba(0,0,0,0.08);
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
   --dur-fast: 140ms;
   --dur: 220ms;
   --dur-slow: 420ms;
-  --dur-slower: 680ms;
 }
 
 /* ---------- Spinner (legacy) ---------- */
@@ -609,14 +491,6 @@ button.primary:hover {
 }
 button.primary:active { transform: translateY(0) scale(0.98); filter: brightness(0.98); }
 
-button.danger {
-  background: linear-gradient(135deg, #f43f5e, #e11d48);
-  color: #fff;
-  border-color: transparent;
-  box-shadow: 0 6px 16px -6px rgba(244,63,94,0.45), inset 0 1px 0 rgba(255,255,255,0.18);
-}
-button.danger:hover { filter: brightness(1.06); transform: translateY(-2px); }
-
 button.ghost { background: transparent; border-color: transparent; color: var(--c-fg-dim); box-shadow: none; }
 button.ghost:hover { background: var(--hover-1); color: var(--c-fg); }
 
@@ -651,41 +525,22 @@ input:focus, textarea:focus, select:focus {
 }
 textarea { resize: vertical; }
 
-.hidden { display: none !important; }
-.muted { color: var(--c-fg-muted); }
-
-.glass {
-  background: color-mix(in srgb, var(--c-surface) 72%, transparent);
-  border: 1px solid var(--c-line);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  box-shadow: var(--shadow-md);
-}
-
-@keyframes fadeIn      { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fadeInUp    { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes fadeInDown  { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes fadeInR     { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
-@keyframes fadeInL     { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
-@keyframes scaleIn     { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: scale(1); } }
-@keyframes pulse       { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
-@keyframes shimmer     { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+/* Verified-live animation keyframes only. `shimmer` and `float` lived here
+   for years without callers; `pulse` is now Tailwind's `animate-pulse`
+   default (we use that in JSX); `pulseRing` powers .presence-dot below. */
+@keyframes fadeIn   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scaleIn  { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: scale(1); } }
+@keyframes pulse    { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 @keyframes pulseRing {
   0%   { box-shadow: 0 0 0 0 rgba(16,185,129,0.45); }
   70%  { box-shadow: 0 0 0 8px rgba(16,185,129,0); }
   100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
 }
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-4px); }
-}
 
-.fade-in      { animation: fadeIn var(--dur) var(--ease-out) both; }
-.fade-in-up   { animation: fadeInUp var(--dur-slow) var(--ease-out) both; }
-.fade-in-down { animation: fadeInDown var(--dur-slow) var(--ease-out) both; }
-.fade-in-r    { animation: fadeInR var(--dur) var(--ease-out) both; }
-.fade-in-l    { animation: fadeInL var(--dur) var(--ease-out) both; }
-.scale-in     { animation: scaleIn var(--dur) var(--ease-spring) both; }
+.fade-in    { animation: fadeIn var(--dur) var(--ease-out) both; }
+.fade-in-up { animation: fadeInUp var(--dur-slow) var(--ease-out) both; }
+.scale-in   { animation: scaleIn var(--dur) var(--ease-spring) both; }
 
 .presence-dot {
   position: absolute;

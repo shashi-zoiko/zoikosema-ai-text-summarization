@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Icon from './Icon'
+import { cn } from '../lib/cn'
 
 const COLORS = ['#ffffff', '#ef4f6b', '#fbbf24', '#34d399', '#7c8cff', '#f472b6', '#38bdf8', '#a78bfa']
 const STROKE_SIZES = [2, 4, 8, 14]
@@ -291,98 +292,120 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
   }, [undo, redo])
 
   return (
-    <div className="wb">
+    <div
+      className="fade-in relative flex min-h-0 min-w-0 flex-1 flex-col"
+      style={{ background: '#06060c' }}
+    >
       {/* Toolbar */}
-      <div className="wb-toolbar">
-        <div className="wb-tools">
+      <div
+        className="z-[5] flex shrink-0 items-center gap-1 border-b border-line px-3 py-2 backdrop-blur-md"
+        style={{ background: 'rgba(15,15,23,0.9)' }}
+      >
+        <div className="flex gap-0.5">
           {TOOLS.map(t => (
-            <button
-              key={t.id}
-              className={'wb-tool-btn' + (tool === t.id ? ' active' : '')}
-              onClick={() => setTool(t.id)}
-              title={t.label}
-            >
+            <ToolBtn key={t.id} active={tool === t.id} onClick={() => setTool(t.id)} title={t.label}>
               <Icon name={t.icon} size={16} />
-            </button>
+            </ToolBtn>
           ))}
         </div>
 
-        <div className="wb-divider" />
+        <Divider />
 
         {/* Color picker */}
-        <div className="wb-color-wrap">
-          <button
-            className="wb-tool-btn wb-color-btn"
+        <div className="relative">
+          <ToolBtn
             onClick={() => { setShowColors(!showColors); setShowSizes(false) }}
             title="Color"
           >
-            <span className="wb-color-swatch" style={{ background: color }} />
-          </button>
+            <span
+              className="block h-4 w-4 rounded-full border-2 border-white/20"
+              style={{ background: color }}
+            />
+          </ToolBtn>
           {showColors && (
-            <div className="wb-color-picker">
+            <Popover>
               {COLORS.map(c => (
                 <button
                   key={c}
-                  className={'wb-color-opt' + (c === color ? ' active' : '')}
-                  style={{ background: c }}
                   onClick={() => { setColor(c); setShowColors(false) }}
+                  style={{ background: c }}
+                  className={cn(
+                    'h-6 w-6 cursor-pointer rounded-full border-2 transition-transform duration-150 hover:scale-[1.15]',
+                    c === color
+                      ? 'border-white shadow-[0_0_8px_rgba(255,255,255,0.3)]'
+                      : 'border-transparent'
+                  )}
                 />
               ))}
-            </div>
+            </Popover>
           )}
         </div>
 
         {/* Stroke size */}
-        <div className="wb-size-wrap">
-          <button
-            className="wb-tool-btn"
+        <div className="relative">
+          <ToolBtn
             onClick={() => { setShowSizes(!showSizes); setShowColors(false) }}
             title="Stroke size"
           >
-            <span className="wb-size-preview" style={{ width: strokeSize + 4, height: strokeSize + 4 }} />
-          </button>
+            <span
+              className="block rounded-full bg-fg"
+              style={{ width: strokeSize + 4, height: strokeSize + 4 }}
+            />
+          </ToolBtn>
           {showSizes && (
-            <div className="wb-size-picker">
+            <Popover>
               {STROKE_SIZES.map(s => (
                 <button
                   key={s}
-                  className={'wb-size-opt' + (s === strokeSize ? ' active' : '')}
                   onClick={() => { setStrokeSize(s); setShowSizes(false) }}
+                  className={cn(
+                    'grid h-[34px] w-[34px] cursor-pointer place-items-center rounded-sm border bg-transparent transition',
+                    s === strokeSize
+                      ? 'border-accent text-accent'
+                      : 'border-transparent text-fg-muted hover:bg-white/6'
+                  )}
                 >
-                  <span style={{ width: s + 2, height: s + 2, borderRadius: '50%', background: 'currentColor' }} />
+                  <span
+                    style={{
+                      width: s + 2,
+                      height: s + 2,
+                      borderRadius: '50%',
+                      background: 'currentColor',
+                    }}
+                  />
                 </button>
               ))}
-            </div>
+            </Popover>
           )}
         </div>
 
-        <div className="wb-divider" />
+        <Divider />
 
         {/* Undo / Redo */}
-        <button className="wb-tool-btn" onClick={undo} disabled={strokes.length === 0} title="Undo (Ctrl+Z)">
+        <ToolBtn onClick={undo} disabled={strokes.length === 0} title="Undo (Ctrl+Z)">
           <Icon name="undo" size={16} />
-        </button>
-        <button className="wb-tool-btn" onClick={redo} disabled={undoneStrokes.length === 0} title="Redo (Ctrl+Y)">
+        </ToolBtn>
+        <ToolBtn onClick={redo} disabled={undoneStrokes.length === 0} title="Redo (Ctrl+Y)">
           <Icon name="redo" size={16} />
-        </button>
+        </ToolBtn>
 
-        <div className="wb-divider" />
+        <Divider />
 
-        <button className="wb-tool-btn danger" onClick={clearAll} title="Clear all">
+        <ToolBtn tone="danger" onClick={clearAll} title="Clear all">
           <Icon name="trash" size={16} />
-        </button>
+        </ToolBtn>
 
-        <div className="wb-spacer" />
+        <div className="flex-1" />
 
-        <button className="wb-tool-btn" onClick={onClose} title="Close whiteboard">
+        <ToolBtn onClick={onClose} title="Close whiteboard">
           <Icon name="close" size={16} />
-        </button>
+        </ToolBtn>
       </div>
 
       {/* Canvas */}
       <canvas
         ref={canvasRef}
-        className="wb-canvas"
+        className="block w-full flex-1 touch-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -392,10 +415,15 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
 
       {/* Text input overlay */}
       {textInput && (
-        <div className="wb-text-input" style={{ left: `${textInput.x}%`, top: `${textInput.y}%` }}>
+        <div
+          className="absolute z-10"
+          style={{ left: `${textInput.x}%`, top: `${textInput.y}%` }}
+        >
           <input
             autoFocus
             placeholder="Type text…"
+            className="!min-w-[180px] !rounded-sm !border-accent !px-2.5 !py-1.5 !text-[14px] !text-white !outline-none"
+            style={{ background: 'rgba(0,0,0,0.7)' }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') { handleTextSubmit(e.target.value); }
               if (e.key === 'Escape') setTextInput(null)
@@ -404,6 +432,41 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
           />
         </div>
       )}
+    </div>
+  )
+}
+
+/* ────────────────────── pieces ────────────────────── */
+
+function ToolBtn({ children, active, disabled, tone, onClick, title }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={cn(
+        'grid h-[34px] w-[34px] place-items-center !rounded-sm border !p-0 !shadow-none transition',
+        'disabled:cursor-default disabled:opacity-30',
+        active
+          ? '!border-[color-mix(in_srgb,var(--c-accent)_30%,transparent)] !bg-[var(--accent-gradient-soft)] !text-accent'
+          : tone === 'danger'
+            ? '!border-transparent !bg-transparent !text-danger hover:!bg-[color-mix(in_srgb,var(--c-danger)_10%,transparent)]'
+            : '!border-transparent !bg-transparent !text-fg-muted hover:!bg-white/6 hover:!text-fg'
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function Divider() {
+  return <div className="mx-1.5 h-[22px] w-px shrink-0 bg-line" />
+}
+
+function Popover({ children }) {
+  return (
+    <div className="fade-in-up absolute left-1/2 top-10 z-20 flex -translate-x-1/2 gap-1 rounded-md border border-line-strong bg-bg-2 p-1.5 shadow-lg">
+      {children}
     </div>
   )
 }

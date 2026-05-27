@@ -1,14 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
 import { Send, X } from 'lucide-react'
 
+/**
+ * Google-Meet-style in-call chat panel.
+ *
+ * Lives inside the floating sidebar shell (rounded, ring, shadow) that
+ * MeetRoomLivekit drops in. Messages are grouped visually by sender with
+ * a bubble per body; consecutive messages from the same person share a
+ * header. The composer is a pill input with the send button inline on
+ * the right — Meet uses the same affordance.
+ */
 export default function ChatPanel({ messages, onSend, onClose, disabled }) {
   const [draft, setDraft] = useState('')
   const endRef = useRef(null)
+  const inputRef = useRef(null)
 
-  // Auto-scroll to the latest message when the list grows.
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages.length])
+
+  // Focus the composer when the panel opens so the user can type
+  // immediately without an extra click.
+  useEffect(() => {
+    if (!disabled) inputRef.current?.focus()
+  }, [disabled])
 
   const submit = (e) => {
     e?.preventDefault()
@@ -19,68 +34,90 @@ export default function ChatPanel({ messages, onSend, onClose, disabled }) {
   }
 
   return (
-    <aside className="w-80 max-w-[85vw] flex flex-col bg-zinc-900 border-l border-zinc-800 text-zinc-100">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-        <h2 className="text-sm font-semibold">In-call messages</h2>
+    <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-[#2a2c2f] text-zinc-100 shadow-lg ring-1 ring-white/5">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-4">
+        <h2 className="text-[15px] font-medium">In-call messages</h2>
         <button
           onClick={onClose}
-          className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100"
-          title="Close"
+          aria-label="Close chat"
+          className="grid h-8 w-8 place-items-center rounded-full text-zinc-400 transition hover:bg-white/5 hover:text-zinc-100"
         >
-          <X size={18} />
+          <X className="h-4 w-4" />
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
         {messages.length === 0 ? (
-          <div className="text-xs text-zinc-500 text-center mt-6">
-            Messages can be seen by everyone in the call.
-          </div>
+          <p className="px-3 py-8 text-center text-[13px] leading-relaxed text-zinc-500">
+            Messages can be seen only by people in the call and are deleted
+            when the call ends.
+          </p>
         ) : (
-          messages.map((m, i) => <ChatMessage key={m._key ?? i} m={m} />)
+          messages.map((m, i) => (
+            <ChatMessage
+              key={m._key ?? i}
+              m={m}
+              prev={i > 0 ? messages[i - 1] : null}
+            />
+          ))
         )}
         <div ref={endRef} />
       </div>
 
-      <form onSubmit={submit} className="p-3 border-t border-zinc-800 flex items-center gap-2">
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={disabled ? 'Chat disabled by host' : 'Send a message…'}
-          disabled={disabled}
-          maxLength={2000}
-          className="flex-1 bg-zinc-800 text-sm px-3 py-2 rounded outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={disabled || !draft.trim()}
-          className="p-2 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
-          title="Send"
-        >
-          <Send size={16} />
-        </button>
+      <form
+        onSubmit={submit}
+        className="shrink-0 border-t border-white/5 p-3"
+      >
+        <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 transition focus-within:border-[#8ab4f8]/60">
+          <input
+            ref={inputRef}
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={disabled ? 'Chat is disabled by the host' : 'Send a message'}
+            disabled={disabled}
+            maxLength={2000}
+            className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed"
+          />
+          <button
+            type="submit"
+            disabled={disabled || !draft.trim()}
+            aria-label="Send"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#8ab4f8] transition enabled:hover:bg-[#8ab4f8]/15 disabled:opacity-40"
+          >
+            <Send className="h-4 w-4" />
+          </button>
+        </div>
       </form>
     </aside>
   )
 }
 
-function ChatMessage({ m }) {
+function ChatMessage({ m, prev }) {
   const time = m.created_at
     ? new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : ''
+  // Group consecutive messages from the same user within 2 minutes — same
+  // sender + same minute window means we drop the name/time header to read
+  // as a single conversation block (Meet does this too).
+  const sameAsPrev =
+    prev &&
+    prev.name === m.name &&
+    prev.created_at &&
+    m.created_at &&
+    new Date(m.created_at) - new Date(prev.created_at) < 2 * 60 * 1000
+
   return (
-    <div>
-      <div className="flex items-baseline gap-2 mb-0.5">
-        <span
-          className="text-xs font-semibold"
-          style={{ color: m.color || '#a3a3a3' }}
-        >
-          {m.name || 'Guest'}
-        </span>
-        <span className="text-[10px] text-zinc-500">{time}</span>
-      </div>
-      <div className="text-sm text-zinc-200 whitespace-pre-wrap break-words">
+    <div className="text-[13px]">
+      {!sameAsPrev && (
+        <div className="mb-1 flex items-baseline gap-2 px-1">
+          <span className="font-semibold" style={{ color: m.color || '#a3a3a3' }}>
+            {m.name || 'Guest'}
+          </span>
+          <span className="text-[11px] text-zinc-500">{time}</span>
+        </div>
+      )}
+      <div className="rounded-2xl rounded-tl-md bg-white/[0.04] px-3 py-2 leading-snug text-zinc-200 break-words whitespace-pre-wrap">
         {m.body}
       </div>
     </div>

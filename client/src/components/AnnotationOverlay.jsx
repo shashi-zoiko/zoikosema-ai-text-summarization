@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Icon from './Icon'
+import { cn } from '../lib/cn'
 
 const COLORS = ['#ef4f6b', '#fbbf24', '#34d399', '#7c8cff', '#ffffff']
 
@@ -203,48 +204,55 @@ export default function AnnotationOverlay({ onAnnotate, remoteAnnotations, onCle
   }
 
   return (
-    <div className="annot-overlay">
-      <div className="annot-toolbar">
+    <div className="pointer-events-auto absolute inset-0 z-[15]">
+      <div className="absolute left-1/2 top-2.5 z-20 flex -translate-x-1/2 items-center gap-[3px] rounded-pill border border-line-strong px-2 py-1 shadow-lg backdrop-blur-md"
+           style={{ background: 'rgba(15,15,23,0.9)' }}>
         {[
           { id: 'pen', icon: 'pen', label: 'Draw' },
           { id: 'highlight', icon: 'palette', label: 'Highlight' },
           { id: 'arrow', icon: 'arrow', label: 'Arrow' },
           { id: 'pointer', icon: 'pointer', label: 'Laser pointer' },
         ].map(t => (
-          <button
+          <ToolBtn
             key={t.id}
-            className={'annot-btn' + (tool === t.id ? ' active' : '')}
+            active={tool === t.id}
             onClick={() => setTool(t.id)}
             title={t.label}
           >
             <Icon name={t.icon} size={15} />
-          </button>
+          </ToolBtn>
         ))}
 
-        <div className="annot-divider" />
+        <Divider />
 
         {COLORS.map(c => (
           <button
             key={c}
-            className={'annot-color' + (c === color ? ' active' : '')}
-            style={{ background: c }}
             onClick={() => setColor(c)}
+            style={{ background: c }}
+            className={cn(
+              'h-[18px] w-[18px] cursor-pointer rounded-full border-2 transition-transform duration-150',
+              'hover:scale-[1.2]',
+              c === color
+                ? 'border-white shadow-[0_0_6px_rgba(255,255,255,0.3)]'
+                : 'border-transparent'
+            )}
           />
         ))}
 
-        <div className="annot-divider" />
+        <Divider />
 
-        <button className="annot-btn" onClick={handleClear} title="Clear annotations">
+        <ToolBtn onClick={handleClear} title="Clear annotations">
           <Icon name="trash" size={15} />
-        </button>
-        <button className="annot-btn" onClick={onClose} title="Stop annotating">
+        </ToolBtn>
+        <ToolBtn onClick={onClose} title="Stop annotating">
           <Icon name="close" size={15} />
-        </button>
+        </ToolBtn>
       </div>
 
       <canvas
         ref={canvasRef}
-        className="annot-canvas"
+        className="absolute inset-0 h-full w-full touch-none"
         onPointerDown={handleDown}
         onPointerMove={handleMove}
         onPointerUp={handleUp}
@@ -252,13 +260,41 @@ export default function AnnotationOverlay({ onAnnotate, remoteAnnotations, onCle
         style={{ cursor: tool === 'pointer' ? 'none' : 'crosshair' }}
       />
 
-      {/* Laser pointer dot */}
+      {/* Laser pointer dot — pulsing red glow via zk-pointer-pulse (index.css). */}
       {pointerPos && (
         <div
-          className="annot-pointer"
-          style={{ left: `${pointerPos.x}%`, top: `${pointerPos.y}%` }}
+          className="zk-pointer-pulse pointer-events-none absolute z-[25] h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+          style={{
+            left: `${pointerPos.x}%`,
+            top: `${pointerPos.y}%`,
+            background: '#ef4f6b',
+            boxShadow: '0 0 16px 4px rgba(239,79,107,0.5)',
+          }}
         />
       )}
     </div>
   )
+}
+
+/* ────────────────────── pieces ────────────────────── */
+
+function ToolBtn({ children, active, onClick, title }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'grid h-[30px] w-[30px] place-items-center !rounded-sm !border-0 !p-0 !shadow-none transition',
+        active
+          ? '!bg-[var(--accent-gradient-soft)] !text-accent'
+          : '!bg-transparent !text-fg-muted hover:!bg-white/8 hover:!text-fg'
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function Divider() {
+  return <div className="mx-1 h-[18px] w-px bg-line" />
 }

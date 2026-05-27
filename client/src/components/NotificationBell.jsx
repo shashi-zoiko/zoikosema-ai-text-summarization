@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, getWsBase } from '../api/client'
 import Icon from './Icon'
-import './NotificationBell.css'
+import { cn } from '../lib/cn'
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * NotificationBell — bell button + popover with realtime notifications.
+ * Companion NotificationBell.css gone; everything's Tailwind. Logic
+ * unchanged from the previous version.
+ * ──────────────────────────────────────────────────────────────────────── */
 
 function timeAgo(iso) {
   try {
@@ -34,9 +40,6 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false)
   const [notifications, setNotifications] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
-  // Pending meeting invites keyed by meeting_code so we can render an inline
-  // Accept/Decline pair next to the matching notification without a second
-  // round-trip per row.
   const [invitesByCode, setInvitesByCode] = useState({})
   const dropdownRef = useRef(null)
   const wsRef = useRef(null)
@@ -58,20 +61,17 @@ export default function NotificationBell() {
           if (inv.meeting_code) map[inv.meeting_code] = inv
         }
         setInvitesByCode(map)
-      } catch { /* best-effort fetch */ }
+      } catch {}
     }
     load()
     return () => { cancelled = true }
   }, [])
 
-  // Real-time WS connection
   useEffect(() => {
     const token = localStorage.getItem('zoiko_token')
     if (!token) return
-
     const ws = new WebSocket(`${getWsBase()}/ws/notifications?token=${encodeURIComponent(token)}`)
     wsRef.current = ws
-
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)
@@ -81,7 +81,6 @@ export default function NotificationBell() {
         }
       } catch {}
     }
-
     const keepalive = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'ping' }))
@@ -89,20 +88,16 @@ export default function NotificationBell() {
         clearInterval(keepalive)
       }
     }, 30000)
-
     return () => {
       clearInterval(keepalive)
       try { ws.close() } catch {}
     }
   }, [])
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return
     const handler = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setOpen(false)
-      }
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -142,9 +137,6 @@ export default function NotificationBell() {
     try { return notif.data ? JSON.parse(notif.data) : {} } catch { return {} }
   }
 
-  // Accept / decline use stopPropagation so the click doesn't also bubble to
-  // the parent button which would navigate to the meeting before the request
-  // resolves. The accept flow does navigate on success — that's the desired UX.
   const acceptInvite = async (e, notif, invite) => {
     e.stopPropagation()
     try {
@@ -174,32 +166,41 @@ export default function NotificationBell() {
   }
 
   return (
-    <div className="notif-bell" ref={dropdownRef}>
+    <div className="relative" ref={dropdownRef}>
       <button
-        className="notif-bell-btn"
         onClick={() => setOpen(!open)}
         title="Notifications"
+        className="relative grid h-9 w-9 cursor-pointer place-items-center rounded-md border border-transparent bg-transparent text-fg-dim transition active:translate-y-0 active:scale-95 hover:-translate-y-px hover:border-line hover:bg-[color-mix(in_srgb,var(--c-fg)_5%,transparent)] hover:text-fg"
       >
         <Icon name={unreadCount > 0 ? 'bellDot' : 'bell'} size={18} />
         {unreadCount > 0 && (
-          <span className="notif-bell-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
+          <span
+            className="pulse-ring absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-lg px-1 text-[10px] font-bold leading-none text-white shadow-[0_0_0_2px_var(--c-bg-1)]"
+            style={{ background: 'var(--c-danger)' }}
+          >
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </span>
         )}
       </button>
 
       {open && (
-        <div className="notif-dropdown">
-          <div className="notif-dropdown-head">
-            <span className="notif-dropdown-title">Notifications</span>
+        <div className="scale-in absolute right-0 top-[calc(100%+8px)] z-[200] flex max-h-[440px] w-[360px] origin-top-right flex-col overflow-hidden rounded-lg border border-line bg-bg-1 shadow-xl">
+          <div className="flex items-center justify-between border-b border-line px-4 pt-3.5 pb-2.5">
+            <span className="text-[14px] font-semibold">Notifications</span>
             {unreadCount > 0 && (
-              <button className="ghost notif-mark-all" onClick={markAllRead}>
+              <button
+                className="ghost text-[12px] text-accent"
+                style={{ padding: '2px 6px' }}
+                onClick={markAllRead}
+              >
                 Mark all read
               </button>
             )}
           </div>
 
-          <div className="notif-dropdown-list">
+          <div className="max-h-[380px] overflow-y-auto">
             {notifications.length === 0 ? (
-              <div className="notif-empty">
+              <div className="flex flex-col items-center gap-2 px-4 py-10 text-[13px] text-fg-muted">
                 <Icon name="inbox" size={28} />
                 <span>No notifications yet</span>
               </div>
@@ -210,39 +211,14 @@ export default function NotificationBell() {
                   ? invitesByCode[data.meeting_code]
                   : null
                 return (
-                  <button
+                  <NotifItem
                     key={n.id}
-                    className={'notif-item' + (n.is_read ? '' : ' unread')}
+                    notif={n}
+                    invite={invite}
                     onClick={() => handleClick(n)}
-                  >
-                    <div className="notif-item-icon">
-                      <Icon name={NOTIF_ICONS[n.type] || 'bell'} size={16} />
-                    </div>
-                    <div className="notif-item-body">
-                      <div className="notif-item-title">{n.title}</div>
-                      {n.body && <div className="notif-item-text">{n.body}</div>}
-                      <div className="notif-item-time">{timeAgo(n.created_at)}</div>
-                      {invite && (
-                        <div className="notif-item-actions">
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            className="notif-action accept"
-                            onClick={(e) => acceptInvite(e, n, invite)}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') acceptInvite(e, n, invite) }}
-                          >Accept</span>
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            className="notif-action decline"
-                            onClick={(e) => declineInvite(e, n, invite)}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') declineInvite(e, n, invite) }}
-                          >Decline</span>
-                        </div>
-                      )}
-                    </div>
-                    {!n.is_read && <span className="notif-item-dot" />}
-                  </button>
+                    onAccept={(e) => acceptInvite(e, n, invite)}
+                    onDecline={(e) => declineInvite(e, n, invite)}
+                  />
                 )
               })
             )}
@@ -250,5 +226,68 @@ export default function NotificationBell() {
         </div>
       )}
     </div>
+  )
+}
+
+/* ────────────────────── pieces ────────────────────── */
+
+function NotifItem({ notif, invite, onClick, onAccept, onDecline }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'flex w-full cursor-pointer items-start gap-3 border-b border-line px-4 py-3 text-left transition last:border-b-0',
+        notif.is_read
+          ? 'bg-transparent hover:bg-[color-mix(in_srgb,var(--c-fg)_4%,transparent)]'
+          : 'bg-[rgba(124,140,255,0.06)] hover:bg-[rgba(124,140,255,0.10)]'
+      )}
+    >
+      <div
+        className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-sm border bg-accent-soft text-accent"
+        style={{ borderColor: 'color-mix(in srgb, var(--c-accent) 15%, transparent)' }}
+      >
+        <Icon name={NOTIF_ICONS[notif.type] || 'bell'} size={16} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="mb-0.5 text-[13px] font-medium leading-[1.4]">{notif.title}</div>
+        {notif.body && (
+          <div
+            className="overflow-hidden text-[12px] leading-[1.4] text-fg-muted"
+            style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}
+          >
+            {notif.body}
+          </div>
+        )}
+        <div className="mt-1 text-[11px] text-fg-muted/70">{timeAgo(notif.created_at)}</div>
+        {invite && (
+          <div className="mt-2 flex gap-1.5">
+            <InviteAction tone="accept" onClick={onAccept}>Accept</InviteAction>
+            <InviteAction tone="decline" onClick={onDecline}>Decline</InviteAction>
+          </div>
+        )}
+      </div>
+      {!notif.is_read && (
+        <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-accent" />
+      )}
+    </button>
+  )
+}
+
+function InviteAction({ children, tone, onClick }) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(e) }}
+      className={cn(
+        'inline-flex cursor-pointer select-none items-center justify-center rounded-sm border px-2.5 py-1 text-[12px] font-semibold transition',
+        tone === 'accept'
+          ? 'border-transparent bg-accent text-white hover:brightness-110'
+          : 'border-line bg-transparent text-fg-dim hover:bg-[color-mix(in_srgb,var(--c-fg)_5%,transparent)] hover:text-fg'
+      )}
+    >
+      {children}
+    </span>
   )
 }
