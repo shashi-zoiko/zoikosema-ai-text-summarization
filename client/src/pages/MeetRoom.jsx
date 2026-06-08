@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getApiBase, getWsBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -6,16 +6,34 @@ import useSpeakerDetection from '../hooks/useSpeakerDetection'
 import useMediaDevices from '../hooks/useMediaDevices'
 import MeetingDock from '../components/meeting/MeetingDock'
 import PeerTile from '../components/meeting/PeerTile'
+import { PinButton, PinnedNameIcon } from '../components/meeting/PinControls'
 import {
-  Check, Copy, Lock, ShieldCheck, Crown, MicOff, VideoOff, MonitorUp, Hand,
+  Check, Copy, Lock, ShieldCheck, Crown, MicOff, VideoOff, MonitorUp, MonitorX, Hand,
   X, Send, MessageSquare, Users, Settings as SettingsIcon, Clock,
-  PhoneOff, Pin,
+  PhoneOff,
 } from 'lucide-react'
 
-const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-]
+// STUN handles the common case (cone NAT). A TURN relay is REQUIRED for
+// symmetric NAT, carrier-grade NAT, and many corporate/mobile networks —
+// without it those peers never establish a media path and every remote tile
+// stays blank even though signaling succeeds. Wire real TURN credentials via
+// build-time env (VITE_TURN_URLS is comma-separated, e.g.
+// "turn:turn.example.com:3478,turns:turn.example.com:5349").
+const ICE_SERVERS = (() => {
+  const servers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ]
+  const turnUrls = import.meta.env.VITE_TURN_URLS
+  if (turnUrls) {
+    servers.push({
+      urls: turnUrls.split(',').map((u) => u.trim()).filter(Boolean),
+      username: import.meta.env.VITE_TURN_USERNAME || undefined,
+      credential: import.meta.env.VITE_TURN_CREDENTIAL || undefined,
+    })
+  }
+  return servers
+})()
 
 const QUALITY_PRESETS = {
   high:   { width: 1280, height: 720,  frameRate: 30, maxBitrate: 2_500_000 },
@@ -126,13 +144,9 @@ export default function MeetRoom() {
   const [speakingPeers, setSpeakingPeers] = useState(new Set())
   const [qualityLevel, setQualityLevel] = useState('high')
 
-  // Screen-share UI state
-  const [showSharePicker, setShowSharePicker] = useState(false)
-  // Current share mode lives in a ref because no UI reads it — only the
-  // start/stop handlers care, and they don't need a re-render when it
-  // changes. Was previously useState which forced a re-render on every
-  // share toggle for nothing.
-  const shareModeRef = useRef(null) // 'screen' | 'window' | 'tab'
+  // Screen-share: no in-app picker state anymore. "Present now" goes straight
+  // to the browser-native getDisplayMedia dialog (entire screen / window /
+  // tab) — that picker is the single source of truth for surface selection.
 
   // Recording state
   const [isRecording, setIsRecording] = useState(false)
@@ -329,6 +343,7 @@ export default function MeetRoom() {
   const createPeerConnection = useCallback((remotePeerId, remoteInfo) => {
     if (pcsRef.current[remotePeerId]) return pcsRef.current[remotePeerId]
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
+    pc.__remotePeerId = remotePeerId
 
     // Screen share takes priority over camera when present. Otherwise a peer
     // who joins (or reconnects) mid-share would receive our camera track —
@@ -351,13 +366,20 @@ export default function MeetRoom() {
     const camStream = processedStreamRef.current || localStreamRef.current
     const screenStream = screenStreamRef.current
     if (screenStream) {
+      // Late joiner arriving mid-share. Group EVERYTHING (mic audio + screen
+      // video + screen audio) into one MediaStream so the remote sees a single
+      // stream-per-peer — same invariant startScreenShare maintains. Falling
+      // back to screenStream only when there's no camera/mic stream at all
+      // (presenter joined fully muted + camera off). Mixing stream ids here is
+      // what produced "screen lands in a second blank tile" for new arrivals.
+      const groupStream = camStream || screenStream
       const sv = screenStream.getVideoTracks()[0]
-      if (sv) pc.__videoSender = pc.addTrack(sv, screenStream)
+      if (sv) pc.__videoSender = pc.addTrack(sv, groupStream)
       if (camStream) {
         for (const t of camStream.getAudioTracks()) pc.__audioSender = pc.addTrack(t, camStream)
       }
       const sa = screenStream.getAudioTracks()[0]
-      if (sa) pc.addTrack(sa, screenStream)
+      if (sa) pc.addTrack(sa, groupStream)
     } else if (camStream) {
       for (const t of camStream.getAudioTracks()) pc.__audioSender = pc.addTrack(t, camStream)
       if (videoOnRef.current) {
@@ -399,10 +421,16 @@ export default function MeetRoom() {
     pc.ontrack = (e) => {
       const [remoteStream] = e.streams
       if (!remoteStream) return
+      if (import.meta.env.DEV) {
+        console.debug('[ontrack]', { peer: remotePeerId, kind: e.track.kind, trackId: e.track.id, muted: e.track.muted, streamId: remoteStream.id, videoTracks: remoteStream.getVideoTracks().length })
+      }
       // ontrack fires once per track. During renegotiation it can fire again
-      // with the same MediaStream already attached. Skipping the setState in
-      // that case prevents PeerTile re-running its effect (which would null
-      // + reattach srcObject and cause a brief audio glitch).
+      // with the same MediaStream already attached. We skip the setState in
+      // that case to avoid an unnecessary re-render — PeerTile picks up a
+      // late-added track (e.g. peer enabled their camera after joining
+      // camera-off) via the stream's `addtrack` event, which it subscribes
+      // to specifically for this case. So even though we short-circuit here,
+      // the remote tile still updates.
       if (pc.__attachedStreamId === remoteStream.id) return
       pc.__attachedStreamId = remoteStream.id
       updatePeer(remotePeerId, { ...(remoteInfo || {}), peer_id: remotePeerId, stream: remoteStream })
@@ -1157,55 +1185,59 @@ export default function MeetRoom() {
 
   // ── Screen sharing (multi-mode, multi-presenter) ──────────────────────
 
-  const startScreenShare = useCallback(async (mode) => {
-    setShowSharePicker(false)
+  const startScreenShare = useCallback(async () => {
     // Re-entry guard: a fast double-click on "share" or rapid start/stop
     // can leave senders in an undefined state. The lock makes start/stop
     // mutually exclusive without depending on React state.
     if (screenLockRef.current) return
     screenLockRef.current = true
+    const dev = import.meta.env.DEV
+    const log = (...args) => { if (dev) console.debug('[screen-share]', ...args) }
     try {
-      const constraints = { video: true, audio: true }
-      // Browser handles mode selection via the native picker; we pass the
-      // preferCurrentTab / selfBrowserSurface hints when available
-      if (mode === 'tab') {
-        constraints.video = { displaySurface: 'browser' }
-        if (navigator.mediaDevices.getDisplayMedia.length !== undefined) {
-          constraints.preferCurrentTab = false
-          constraints.selfBrowserSurface = 'include'
-        }
-      } else if (mode === 'window') {
-        constraints.video = { displaySurface: 'window' }
-      } else {
-        constraints.video = { displaySurface: 'monitor' }
-      }
-
-      const stream = await navigator.mediaDevices.getDisplayMedia(constraints)
+      // The browser-native picker is the SINGLE source of truth for what gets
+      // shared (entire screen / window / tab). We do NOT pre-constrain the
+      // displaySurface — that would gray out the other tabs in the native
+      // picker and defeat the user's choice. Just ask for video + (optional)
+      // system audio and let the OS/browser dialog drive the selection.
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
       // Tell the encoder this is detailed/static-ish content so it preserves
       // sharp text instead of smoothing it like a face. Wrapped in try/catch
       // because contentHint is read-only in older browsers.
       const screenTrack = stream.getVideoTracks()[0]
       try { screenTrack.contentHint = 'detail' } catch {}
+      log('capture started', { trackId: screenTrack?.id, streamId: stream.id, live: screenTrack?.readyState })
 
       screenStreamRef.current = stream
 
-      // Swap video on every existing peer. If a sender doesn't exist yet
-      // (PC built before media was ready), fall back to addTrack so the
-      // screen still goes through instead of silently dropping. With perfect
-      // negotiation, addTrack auto-fires onnegotiationneeded — no manual
-      // createOffer loop required.
+      // CRITICAL: publish the screen video into the SAME MediaStream the
+      // remote already associates with this peer (the mic/camera stream).
+      // Using a fresh stream id here makes the remote's `ontrack` build a
+      // second MediaStream and swap `peer.stream` to a video-only stream —
+      // which silently drops our microphone audio sink on the far side and,
+      // pre-fix, rendered the share in the wrong/blank tile. Grouping into
+      // the canonical stream keeps one stream-per-peer (audio + screen video).
+      const canonicalStream = processedStreamRef.current || localStreamRef.current || stream
       const screenAudioTrack = stream.getAudioTracks()[0]
+      let published = 0
       for (const pc of Object.values(pcsRef.current)) {
+        const targetPeer = pc.__remotePeerId
         // Use the pinned __videoSender (set in createPeerConnection) so
         // we always reuse the same sender across mute cycles. Looking up
         // by `s.track?.kind === 'video'` would miss it whenever the camera
         // is currently off (track is null), and we'd addTrack a duplicate.
         let vSender = pc.__videoSender
         if (vSender) {
-          try { await vSender.replaceTrack(screenTrack) } catch (e) { console.error('replaceTrack(screen) failed', e) }
+          // Camera-on share: hot-swap the screen onto the existing video
+          // sender. No renegotiation, no stream change on the remote — the
+          // far side just sees the same track's content change to the screen.
+          try { await vSender.replaceTrack(screenTrack); published++ } catch (e) { console.error('[screen-share] replaceTrack failed', e) }
         } else {
-          try { pc.__videoSender = pc.addTrack(screenTrack, stream) } catch (e) { console.error('addTrack(screen) failed', e) }
-          vSender = pc.__videoSender
+          // Camera-off share: no video sender exists yet. addTrack into the
+          // canonical stream so the remote adds the screen video to the
+          // EXISTING peer.stream (fires `addtrack`, PeerTile rebinds) instead
+          // of creating a rogue second stream. Auto-fires negotiationneeded.
+          try { pc.__videoSender = pc.addTrack(screenTrack, canonicalStream); vSender = pc.__videoSender; published++ }
+          catch (e) { console.error('[screen-share] addTrack failed', e) }
         }
         // Screen content needs more bits than a talking head to stay
         // readable — keep this independent of the adaptive-quality loop.
@@ -1219,20 +1251,27 @@ export default function MeetRoom() {
           } catch {}
         }
         if (screenAudioTrack) {
-          try { pc.addTrack(screenAudioTrack, stream) } catch {}
+          try { pc.addTrack(screenAudioTrack, canonicalStream) } catch {}
         }
+        log('published to peer', { peer: targetPeer, sender: !!vSender })
       }
+      log('publish complete', { peers: Object.keys(pcsRef.current).length, published })
 
-      if (selfVideoRef.current) selfVideoRef.current.srcObject = stream
+      if (selfVideoRef.current) {
+        try { selfVideoRef.current.srcObject = null } catch {}
+        try { selfVideoRef.current.srcObject = stream } catch {}
+      }
 
       screenTrack.onended = stopScreenShare
       screenOnRef.current = true
       setScreenOn(true)
-      shareModeRef.current = mode
       broadcastMediaState({ audio: audioOnRef.current, video: videoOnRef.current, screen: true })
-      sendSignal({ type: 'screen-share-started', share_mode: mode })
-    } catch {
+      sendSignal({ type: 'screen-share-started', share_mode: 'screen' })
+    } catch (e) {
       // user cancelled the picker, or getDisplayMedia rejected
+      if (dev && e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') {
+        console.debug('[screen-share] getDisplayMedia rejected', e)
+      }
     } finally {
       screenLockRef.current = false
     }
@@ -1242,7 +1281,10 @@ export default function MeetRoom() {
   const stopScreenShare = useCallback(async () => {
     if (screenLockRef.current) return
     screenLockRef.current = true
+    const dev = import.meta.env.DEV
+    const log = (...args) => { if (dev) console.debug('[screen-share]', ...args) }
     try {
+    log('stopping', { streamId: screenStreamRef.current?.id })
     const oldScreen = screenStreamRef.current
     // Drop the screen audio sender (if we added one) before tearing down
     // the stream — otherwise the sender lingers with a stopped track and
@@ -1281,9 +1323,9 @@ export default function MeetRoom() {
     await applyBitrateLimit(QUALITY_PRESETS[qualityLevel])
     screenOnRef.current = false
     setScreenOn(false)
-    shareModeRef.current = null
     broadcastMediaState({ audio: audioOnRef.current, video: videoOnRef.current, screen: false })
     sendSignal({ type: 'screen-share-stopped' })
+    log('stopped, layout restored', { camRestored: !!camTrack })
     } finally {
       screenLockRef.current = false
     }
@@ -1466,6 +1508,17 @@ export default function MeetRoom() {
     })
   }, [])
 
+  // Reconcile the pin against the live roster. If the pinned peer leaves, is
+  // kicked, or is dropped on reconnect, clear the stale pin so the layout
+  // gracefully reverts to active-speaker. Covers every removal path (peer-left,
+  // connection-failed, welcome rebuild) without touching each one. 'self' is
+  // never in `peers`, so it is exempt.
+  useEffect(() => {
+    if (pinnedPeerId && pinnedPeerId !== 'self' && !peers[pinnedPeerId]) {
+      setPinnedPeerId(null)
+    }
+  }, [peers, pinnedPeerId])
+
   const setPermission = (key, value) => {
     sendSignal({ type: 'set-permissions', [key]: value })
   }
@@ -1548,90 +1601,28 @@ export default function MeetRoom() {
   const selfInitial = (user.name || '?').trim().charAt(0).toUpperCase() || '?'
   const selfBg = user.avatar_color || '#3a6ff3'
 
-  const SelfTile = ({ size }) => {
-    const showVideo = videoOn || screenOn
-    const isSpotlight = size === 'spotlight'
-    const isMini = size === 'mini'
-    const speaking = speakingPeers.has('self')
-    return (
-      <div
-        className={
-          'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#3c4043] ' +
-          (speaking ? 'ring-2 ring-[#8ab4f8]' : 'ring-1 ring-white/5')
-        }
-      >
-        {showVideo ? (
-          <video
-            ref={attachSelfVideoEl}
-            autoPlay
-            playsInline
-            muted
-            className={
-              'absolute inset-0 h-full w-full ' +
-              (screenOn ? 'object-contain bg-black' : 'object-cover -scale-x-100')
-            }
-          />
-        ) : (
-          // Same colored-gradient treatment as PeerTile so self looks like
-          // any other tile when the camera is off.
-          <div
-            className="absolute inset-0 grid place-items-center"
-            style={{
-              background: `radial-gradient(circle at 50% 35%, ${selfBg} 0%, color-mix(in srgb, ${selfBg} 55%, #000) 100%)`,
-            }}
-          >
-            <div
-              className={
-                'grid place-items-center rounded-full font-semibold text-white ring-1 ring-white/15 backdrop-blur-sm bg-white/[0.08] ' +
-                (isSpotlight ? 'h-36 w-36 text-5xl' : isMini ? 'h-10 w-10 text-base' : 'h-24 w-24 text-3xl')
-              }
-            >{selfInitial}</div>
-          </div>
-        )}
-
-        {handRaised && !isMini && (
-          <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow-md">
-            <Hand className="h-4 w-4" />
-          </div>
-        )}
-
-        {/* Self mic-off badge — top-right like Meet */}
-        {!audioOn && !isMini && (
-          <div className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm" title="You are muted">
-            <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />
-          </div>
-        )}
-
-        {!isMini && (
-          <button
-            onClick={() => togglePin('self')}
-            className={
-              'absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full transition ' +
-              (pinnedPeerId === 'self'
-                ? 'bg-[#8ab4f8]/20 text-[#8ab4f8] opacity-100'
-                : 'bg-black/55 text-white/85 opacity-0 backdrop-blur hover:bg-black/70 group-hover/tile:opacity-100')
-            }
-            title={pinnedPeerId === 'self' ? 'Unpin' : 'Pin to main view'}
-            aria-label="Pin"
-          >
-            <Pin className="h-4 w-4" />
-          </button>
-        )}
-
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
-          <div className="flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
-            <span className="truncate">{user.name} (You){screenOn ? ' · Presenting' : ''}</span>
-            {isHost && <Crown className="h-3 w-3 text-amber-300" />}
-            {!isHost && myRole === 'co_host' && <ShieldCheck className="h-3 w-3 text-cyan-300" />}
-          </div>
-          {!audioOn && (
-            <div className="grid h-7 w-7 place-items-center rounded-full bg-[#ea4335] text-white shadow">
-              <MicOff className="h-3.5 w-3.5" />
-            </div>
-          )}
-        </div>
-      </div>
-    )
+  // Stable prop bag for SelfTile. SelfTile is a top-level memoized component
+  // (see bottom of file) — NOT an inline function. Defining it inline used to
+  // give it a fresh identity on every render, which made React unmount and
+  // remount the whole tile (and its <video>) on every state change. Speaker
+  // detection / clock ticks re-render constantly, so the self camera
+  // detached + reattached its stream repeatedly — the blink/flicker. Spreading
+  // this bag keeps every prop reference stable, so memo skips re-renders and
+  // the <video> stays mounted with a steady srcObject.
+  const selfTileProps = {
+    showVideo: videoOn || screenOn,
+    screenOn,
+    speaking: speakingPeers.has('self'),
+    handRaised,
+    audioOn,
+    pinned: pinnedPeerId === 'self',
+    onTogglePin: togglePin,
+    attachVideoEl: attachSelfVideoEl,
+    name: user.name,
+    initial: selfInitial,
+    bg: selfBg,
+    isHost,
+    role: myRole,
   }
 
   const renderSpeakerView = () => {
@@ -1641,7 +1632,7 @@ export default function MeetRoom() {
     return (
       <div className="flex h-full flex-col gap-3 p-4">
         <div className="group/tile relative min-h-0 flex-1">
-          {isSelfSpeaker ? <SelfTile size="spotlight" /> : (
+          {isSelfSpeaker ? <SelfTile {...selfTileProps} size="spotlight" /> : (
             <PeerTile
               peer={speakerPeer}
               spotlight
@@ -1654,7 +1645,7 @@ export default function MeetRoom() {
         <div className="flex shrink-0 gap-2 overflow-x-auto pb-1">
           {!isSelfSpeaker && (
             <div className="group/tile relative h-28 w-44 shrink-0">
-              <SelfTile size="mini" />
+              <SelfTile {...selfTileProps} size="mini" />
             </div>
           )}
           {thumbnailPeers.map((p) => (
@@ -1691,7 +1682,7 @@ export default function MeetRoom() {
     <div className={`mx-auto h-full w-full ${maxWidthFor(tileCount)} p-4`}>
       <div className={`grid h-full auto-rows-fr gap-3 ${gridColsFor(tileCount)}`}>
         <div className="group/tile relative">
-          <SelfTile />
+          <SelfTile {...selfTileProps} />
         </div>
         {peerList.map((p) => (
           <div key={p.peer_id} className="group/tile relative">
@@ -1699,7 +1690,7 @@ export default function MeetRoom() {
               peer={p}
               speaking={speakingPeers.has(p.peer_id)}
               pinned={pinnedPeerId === p.peer_id}
-              onTogglePin={() => togglePin(p.peer_id)}
+              onTogglePin={togglePin}
             />
           </div>
         ))}
@@ -1729,7 +1720,7 @@ export default function MeetRoom() {
         {/* ── Hero (shared content) ─────────────────────────────── */}
         <div className="group/tile zk-stage-hero relative min-h-0 min-w-0 flex-1">
           {isSelfPresenter ? (
-            <SelfTile size="spotlight" />
+            <SelfTile {...selfTileProps} size="spotlight" />
           ) : (
             <PeerTile
               peer={presenterPeer}
@@ -1753,7 +1744,7 @@ export default function MeetRoom() {
         >
           {showSelfInStrip && (
             <div className="group/tile zk-strip-tile relative h-24 w-40 shrink-0 lg:h-auto lg:w-full lg:aspect-video">
-              <SelfTile size="mini" />
+              <SelfTile {...selfTileProps} size="mini" />
             </div>
           )}
           {stripPeers.map((p) => (
@@ -1781,7 +1772,7 @@ export default function MeetRoom() {
     : ''
 
   return (
-    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#202124] text-zinc-100">
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#f1f3f4] text-[#202124]">
       {/* ── Top bar ──────────────────────────────────────────────── */}
       {/* No border / no background — sits transparently over the stage like
           Meet does. Recording / lock pills float on the left, code + copy
@@ -1805,12 +1796,12 @@ export default function MeetRoom() {
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[13px] tracking-wide text-zinc-300">{code}</span>
+          <span className="font-mono text-[13px] tracking-wide text-[#444746]">{code}</span>
           <button
             onClick={copyInvite}
             title="Copy invite link"
             aria-label="Copy invite link"
-            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-zinc-200 transition hover:bg-white/10"
+            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3 text-[12px] font-medium text-[#444746] shadow-sm transition hover:bg-[#f1f3f4]"
           >
             {inviteCopied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
             {inviteCopied ? 'Copied' : 'Copy link'}
@@ -1831,13 +1822,36 @@ export default function MeetRoom() {
               : renderGridView()}
         </div>
 
+        {/* ── "You're presenting" banner ──────────────────────────── */}
+        {/* Discoverable stop control while self is sharing. Floats at the top
+            of the stage (out of the way of the shared content) with an
+            explicit "Stop presenting" action — same affordance as Meet/Zoom,
+            so users never have to hunt for how to end a share. */}
+        {screenOn && (
+          <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
+            <div className="pointer-events-auto flex items-center gap-3 rounded-full bg-white/95 py-1.5 pl-4 pr-1.5 text-sm text-[#202124] shadow-lg ring-1 ring-black/[0.06] backdrop-blur">
+              <span className="inline-flex items-center gap-2">
+                <MonitorUp className="h-4 w-4 text-[#1a73e8]" />
+                You’re presenting
+              </span>
+              <button
+                onClick={stopScreenShare}
+                className="inline-flex items-center gap-1.5 rounded-full bg-[#ea4335] px-3 py-1.5 text-[13px] font-medium text-white transition hover:bg-[#f25c52]"
+              >
+                <MonitorX className="h-4 w-4" />
+                Stop presenting
+              </button>
+            </div>
+          </div>
+        )}
+
         {sidebar && (
-          <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-[#2a2c2f] shadow-lg ring-1 ring-white/5">
-            <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-4">
-              <h2 className="text-[15px] font-medium text-zinc-100">{sidebarTitle}</h2>
+          <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_-16px_rgba(0,0,0,0.25)] ring-1 ring-black/[0.06]">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-4">
+              <h2 className="text-[15px] font-medium text-[#202124]">{sidebarTitle}</h2>
               <button
                 onClick={() => setSidebar(null)}
-                className="grid h-8 w-8 place-items-center rounded-full text-zinc-400 hover:bg-white/5 hover:text-zinc-100"
+                className="grid h-8 w-8 place-items-center rounded-full text-[#5f6368] hover:bg-black/[0.06] hover:text-[#202124]"
                 aria-label="Close panel"
               >
                 <X className="h-4 w-4" />
@@ -1848,19 +1862,19 @@ export default function MeetRoom() {
               <>
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
                   {chatMessages.length === 0 && (
-                    <p className="px-2 py-6 text-center text-[13px] text-zinc-500">
+                    <p className="px-2 py-6 text-center text-[13px] text-[#5f6368]">
                       Messages can be seen only by people in the call and are deleted when the call ends.
                     </p>
                   )}
                   {chatMessages.map((m, i) => (
                     <div key={i} className="text-[13px]">
                       <div className="mb-0.5 flex items-baseline gap-2">
-                        <span className="font-semibold text-zinc-100" style={{ color: m.color }}>{m.name}</span>
-                        <span className="text-[11px] text-zinc-500">
+                        <span className="font-semibold text-[#202124]" style={{ color: m.color }}>{m.name}</span>
+                        <span className="text-[11px] text-[#5f6368]">
                           {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
-                      <div className="rounded-2xl rounded-tl-md bg-white/[0.04] px-3 py-2 leading-snug text-zinc-200">{m.body}</div>
+                      <div className="rounded-2xl rounded-tl-md bg-[#f1f3f4] px-3 py-2 leading-snug text-[#202124]">{m.body}</div>
                     </div>
                   ))}
                   <div ref={chatEndRef} />
@@ -1868,21 +1882,21 @@ export default function MeetRoom() {
                 {(() => {
                   const chatBlocked = !chatEnabled && !isHostOrCohost
                   return (
-                    <div className="shrink-0 border-t border-white/5 p-3">
-                      <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 focus-within:border-[#8ab4f8]/60">
+                    <div className="shrink-0 border-t border-black/[0.06] p-3">
+                      <div className="flex items-center gap-2 rounded-full border border-black/[0.08] bg-[#f1f3f4] px-3 py-1.5 focus-within:border-[#1a73e8]">
                         <input
                           placeholder={chatBlocked ? 'Chat is disabled by the host' : 'Send a message'}
                           value={chatDraft}
                           onChange={(e) => setChatDraft(e.target.value)}
                           disabled={chatBlocked}
                           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendChat() } }}
-                          className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 outline-none disabled:cursor-not-allowed"
+                          className="min-w-0 flex-1 bg-transparent text-sm text-[#202124] placeholder:text-[#9aa0a6] outline-none disabled:cursor-not-allowed"
                         />
                         <button
                           onClick={sendChat}
                           disabled={chatBlocked || !chatDraft.trim()}
                           aria-label="Send"
-                          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#8ab4f8] transition enabled:hover:bg-[#8ab4f8]/15 disabled:opacity-40"
+                          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#1a73e8] transition enabled:hover:bg-[#1a73e8]/10 disabled:opacity-40"
                         >
                           <Send className="h-4 w-4" />
                         </button>
@@ -1896,14 +1910,14 @@ export default function MeetRoom() {
             {sidebar === 'people' && (
               <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
                 {isHostOrCohost && waitingList.length > 0 && (
-                  <div className="mb-3 rounded-xl bg-amber-500/[0.06] p-2 ring-1 ring-amber-400/15">
+                  <div className="mb-3 rounded-xl bg-amber-500/[0.1] p-2 ring-1 ring-amber-500/25">
                     <div className="flex items-center justify-between px-2 py-1">
-                      <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-amber-300">
+                      <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-amber-700">
                         <Clock className="h-3 w-3" /> Waiting · {waitingList.length}
                       </span>
                       <button
                         onClick={admitAll}
-                        className="rounded-full px-2 py-1 text-[11.5px] font-medium text-amber-200 hover:bg-amber-400/10"
+                        className="rounded-full px-2 py-1 text-[11.5px] font-medium text-amber-700 hover:bg-amber-500/15"
                       >Admit all</button>
                     </div>
                     {waitingList.map((w) => (
@@ -1930,7 +1944,7 @@ export default function MeetRoom() {
                   </div>
                 )}
 
-                <div className="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                <div className="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">
                   In the meeting
                 </div>
 
@@ -1954,7 +1968,7 @@ export default function MeetRoom() {
                           <button
                             onClick={() => promoteUser(p.user_id)}
                             title={p.role === 'co_host' ? 'Remove co-host' : 'Make co-host'}
-                            className="grid h-7 w-7 place-items-center rounded-full text-zinc-300 hover:bg-white/10"
+                            className="grid h-7 w-7 place-items-center rounded-full text-[#5f6368] hover:bg-black/[0.06]"
                           ><ShieldCheck className="h-3.5 w-3.5" /></button>
                         )}
                         <button
@@ -1968,7 +1982,7 @@ export default function MeetRoom() {
                 ))}
 
                 {isHostOrCohost && (
-                  <div className="mt-4 space-y-1 border-t border-white/5 px-1 pt-3">
+                  <div className="mt-4 space-y-1 border-t border-black/[0.06] px-1 pt-3">
                     <HostButton
                       active={meetingLocked}
                       onClick={toggleLock}
@@ -2003,11 +2017,11 @@ export default function MeetRoom() {
             {sidebar === 'settings' && (
               <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4">
                 <div>
-                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Camera</label>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">Camera</label>
                   <select
                     value={videoDeviceId}
                     onChange={(e) => switchVideoDevice(e.target.value)}
-                    className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-zinc-100 focus:border-[#8ab4f8]/60 focus:outline-none"
+                    className="w-full rounded-lg border border-black/[0.08] bg-[#f1f3f4] px-3 py-2 text-sm text-[#202124] focus:border-[#1a73e8] focus:outline-none"
                   >
                     {devices.video.length === 0 && <option value="">No cameras found</option>}
                     {devices.video.map((d) => (
@@ -2016,11 +2030,11 @@ export default function MeetRoom() {
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Microphone</label>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">Microphone</label>
                   <select
                     value={audioDeviceId}
                     onChange={(e) => switchAudioDevice(e.target.value)}
-                    className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-zinc-100 focus:border-[#8ab4f8]/60 focus:outline-none"
+                    className="w-full rounded-lg border border-black/[0.08] bg-[#f1f3f4] px-3 py-2 text-sm text-[#202124] focus:border-[#1a73e8] focus:outline-none"
                   >
                     {devices.audio.length === 0 && <option value="">No microphones found</option>}
                     {devices.audio.map((d) => (
@@ -2028,15 +2042,15 @@ export default function MeetRoom() {
                     ))}
                   </select>
                 </div>
-                <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
-                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Stream quality</div>
-                  <div className="flex items-center gap-2 text-sm text-zinc-200">
+                <div className="rounded-lg border border-black/[0.06] bg-[#f1f3f4] p-3">
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">Stream quality</div>
+                  <div className="flex items-center gap-2 text-sm text-[#202124]">
                     <span className={
                       'inline-block h-2 w-2 rounded-full ' +
-                      (qualityLevel === 'high' ? 'bg-emerald-400' : qualityLevel === 'medium' ? 'bg-amber-400' : 'bg-[#ea4335]')
+                      (qualityLevel === 'high' ? 'bg-emerald-500' : qualityLevel === 'medium' ? 'bg-amber-500' : 'bg-[#ea4335]')
                     } />
                     {qualityLevel === 'high' ? '720p HD' : qualityLevel === 'medium' ? '480p SD' : '240p'}
-                    <span className="ml-1 text-[11.5px] text-zinc-500">(adapts to network)</span>
+                    <span className="ml-1 text-[11.5px] text-[#5f6368]">(adapts to network)</span>
                   </div>
                 </div>
               </div>
@@ -2080,8 +2094,6 @@ export default function MeetRoom() {
         screenOn={screenOn}
         screenshareEnabled={screenshareEnabled}
         isHostOrCohost={isHostOrCohost}
-        showSharePicker={showSharePicker}
-        setShowSharePicker={setShowSharePicker}
         startScreenShare={startScreenShare}
         stopScreenShare={stopScreenShare}
         isRecording={isRecording}
@@ -2117,34 +2129,134 @@ export default function MeetRoom() {
       {permissionToast && (
         <div
           role="alert"
-          className="pointer-events-none absolute left-1/2 top-20 z-40 -translate-x-1/2 rounded-full bg-zinc-900/95 px-4 py-2 text-sm font-medium text-white ring-1 ring-white/10 shadow-lg"
+          className="pointer-events-none absolute left-1/2 top-20 z-40 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-medium text-[#202124] ring-1 ring-black/[0.08] shadow-lg"
         >{permissionToast}</div>
       )}
     </div>
   )
 }
 
+/**
+ * Local self-view tile. Top-level + memoized ON PURPOSE — see the
+ * `selfTileProps` comment in MeetRoom. Keeping it here (stable component
+ * identity) is what lets React reconcile it in place across re-renders
+ * instead of unmounting/remounting the <video> every time, which was the
+ * camera blink/flicker root cause.
+ *
+ * Uses a callback ref (`attachVideoEl`) rather than useRef+useEffect for the
+ * same reason PeerTile does: the <video> is conditionally mounted, so the ref
+ * must fire on every mount to (re)bind srcObject.
+ */
+const SelfTile = memo(function SelfTile({
+  size,
+  showVideo,
+  screenOn,
+  speaking,
+  handRaised,
+  audioOn,
+  pinned,
+  onTogglePin,
+  attachVideoEl,
+  name,
+  initial,
+  bg,
+  isHost,
+  role,
+}) {
+  const isSpotlight = size === 'spotlight'
+  const isMini = size === 'mini'
+  return (
+    <div
+      className={
+        'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#e8eaed] ' +
+        (speaking ? 'ring-2 ring-[#1a73e8]' : 'ring-1 ring-black/[0.06]')
+      }
+    >
+      {showVideo ? (
+        <video
+          ref={attachVideoEl}
+          autoPlay
+          playsInline
+          muted
+          className={
+            'absolute inset-0 h-full w-full ' +
+            (screenOn ? 'object-contain bg-black' : 'object-cover -scale-x-100')
+          }
+        />
+      ) : (
+        <div
+          className="absolute inset-0 grid place-items-center"
+          style={{
+            background: `radial-gradient(circle at 50% 35%, ${bg} 0%, color-mix(in srgb, ${bg} 55%, #000) 100%)`,
+          }}
+        >
+          <div
+            className={
+              'grid place-items-center rounded-full font-semibold text-white ring-1 ring-white/15 backdrop-blur-sm bg-white/[0.08] ' +
+              (isSpotlight ? 'h-36 w-36 text-5xl' : isMini ? 'h-10 w-10 text-base' : 'h-24 w-24 text-3xl')
+            }
+          >{initial}</div>
+        </div>
+      )}
+
+      {handRaised && !isMini && (
+        <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow-md">
+          <Hand className="h-4 w-4" />
+        </div>
+      )}
+
+      {!audioOn && !isMini && (
+        <div className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm" title="You are muted">
+          <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />
+        </div>
+      )}
+
+      <PinButton
+        pinned={pinned}
+        onClick={(e) => { e.stopPropagation(); onTogglePin('self') }}
+        mini={isMini}
+        shifted={!audioOn && !isMini}
+        groupName="tile"
+      />
+
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
+        <div className="flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
+          {pinned && <PinnedNameIcon mini={isMini} />}
+          <span className="truncate">{name} (You){screenOn ? ' · Presenting' : ''}</span>
+          {isHost && <Crown className="h-3 w-3 text-amber-300" />}
+          {!isHost && role === 'co_host' && <ShieldCheck className="h-3 w-3 text-cyan-300" />}
+        </div>
+        {!audioOn && (
+          <div className="grid h-7 w-7 place-items-center rounded-full bg-[#ea4335] text-white shadow">
+            <MicOff className="h-3.5 w-3.5" />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+})
+
 function ParticipantRow({ name, color, role, states, actions }) {
   const initial = (name || '?').trim().charAt(0).toUpperCase() || '?'
   return (
-    <div className="group flex items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-white/[0.04]">
+    <div className="group flex items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-black/[0.04]">
       <div
         className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[13px] font-semibold text-white"
         style={{ backgroundColor: color || '#3a6ff3' }}
       >{initial}</div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-zinc-100">
+        <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-[#202124]">
           <span className="truncate">{name}</span>
-          {role === 'host' && <Crown className="h-3 w-3 shrink-0 text-amber-300" title="Host" />}
-          {role === 'co_host' && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-300" title="Co-host" />}
+          {role === 'host' && <Crown className="h-3 w-3 shrink-0 text-amber-500" title="Host" />}
+          {role === 'co_host' && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-600" title="Co-host" />}
         </div>
       </div>
       {states && (
-        <div className="flex items-center gap-1 text-zinc-400">
-          {states.hand && <Hand className="h-3.5 w-3.5 text-amber-300" />}
-          {states.screen && <MonitorUp className="h-3.5 w-3.5 text-[#8ab4f8]" />}
+        <div className="flex items-center gap-1 text-[#5f6368]">
+          {states.hand && <Hand className="h-3.5 w-3.5 text-amber-500" />}
+          {states.screen && <MonitorUp className="h-3.5 w-3.5 text-[#1a73e8]" />}
           {!states.audio && <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />}
-          {!states.video && <VideoOff className="h-3.5 w-3.5 text-zinc-500" />}
+          {!states.video && <VideoOff className="h-3.5 w-3.5 text-[#9aa0a6]" />}
         </div>
       )}
       {actions && <div className="ml-1 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">{actions}</div>}
@@ -2158,10 +2270,10 @@ function HostButton({ active, onClick, icon, label }) {
       onClick={onClick}
       className={
         'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ' +
-        (active ? 'bg-[#8ab4f8]/15 text-[#8ab4f8]' : 'text-zinc-200 hover:bg-white/[0.05]')
+        (active ? 'bg-[#c2e7ff]/50 text-[#0b57d0]' : 'text-[#202124] hover:bg-black/[0.05]')
       }
     >
-      <span className="grid h-8 w-8 place-items-center rounded-lg bg-white/[0.04]">{icon}</span>
+      <span className="grid h-8 w-8 place-items-center rounded-lg bg-black/[0.04]">{icon}</span>
       <span className="flex-1 truncate">{label}</span>
     </button>
   )
@@ -2177,7 +2289,7 @@ function HostButton({ active, onClick, icon, label }) {
 function DockDeviceMenu({ title, devices, current, onPick }) {
   return (
     <div className="py-1.5">
-      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">
         {title}
       </div>
       <ul className="max-h-[260px] overflow-y-auto">
@@ -2190,8 +2302,8 @@ function DockDeviceMenu({ title, devices, current, onPick }) {
                 className={
                   'flex w-full items-start gap-2.5 px-3 py-2 text-left text-[13px] transition ' +
                   (active
-                    ? 'bg-[#8ab4f8]/12 text-[#8ab4f8]'
-                    : 'text-zinc-100 hover:bg-white/[0.06]')
+                    ? 'bg-[#c2e7ff]/50 text-[#0b57d0]'
+                    : 'text-[#202124] hover:bg-black/[0.05]')
                 }
               >
                 <span className="mt-1 grid h-2 w-2 shrink-0 place-items-center">

@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
-import { Crown, Hand, MicOff, Pin, ShieldCheck } from 'lucide-react'
+import { Crown, Hand, MicOff, ShieldCheck } from 'lucide-react'
+import { PinButton, PinnedNameIcon } from './PinControls.jsx'
 
 /**
  * Google Meet–style participant tile.
@@ -36,17 +37,45 @@ function PeerTile({
   // `mute`. Catching this means the tile clears the moment frames stop —
   // even if the `media-state` WS event is delayed. Otherwise Chromium keeps
   // the last decoded frame painted forever (the "ghost face" bug).
+  //
+  // CRITICAL: we also listen to the *stream's* addtrack/removetrack events.
+  // When a peer turns their camera on AFTER we already built the PC (joined
+  // camera-off, then enabled), the new video track is added to the SAME
+  // remote MediaStream via renegotiation. ontrack short-circuits on the
+  // known stream id, so the only signal we get is the stream's `addtrack`.
+  // Without rebinding here, that late track's `unmute` is never observed and
+  // the tile stays on the avatar placeholder forever.
   const subscribeTrack = useCallback((callback) => {
-    if (!peer.stream) return () => {}
-    const vt = peer.stream.getVideoTracks()[0]
-    if (!vt) return () => {}
-    vt.addEventListener('mute', callback)
-    vt.addEventListener('unmute', callback)
-    vt.addEventListener('ended', callback)
+    const stream = peer.stream
+    if (!stream) return () => {}
+    let boundTrack = null
+    const bind = () => {
+      const vt = stream.getVideoTracks()[0] || null
+      if (vt === boundTrack) return
+      if (boundTrack) {
+        boundTrack.removeEventListener('mute', callback)
+        boundTrack.removeEventListener('unmute', callback)
+        boundTrack.removeEventListener('ended', callback)
+      }
+      boundTrack = vt
+      if (vt) {
+        vt.addEventListener('mute', callback)
+        vt.addEventListener('unmute', callback)
+        vt.addEventListener('ended', callback)
+      }
+    }
+    const onStreamChange = () => { bind(); callback() }
+    bind()
+    stream.addEventListener('addtrack', onStreamChange)
+    stream.addEventListener('removetrack', onStreamChange)
     return () => {
-      vt.removeEventListener('mute', callback)
-      vt.removeEventListener('unmute', callback)
-      vt.removeEventListener('ended', callback)
+      stream.removeEventListener('addtrack', onStreamChange)
+      stream.removeEventListener('removetrack', onStreamChange)
+      if (boundTrack) {
+        boundTrack.removeEventListener('mute', callback)
+        boundTrack.removeEventListener('unmute', callback)
+        boundTrack.removeEventListener('ended', callback)
+      }
     }
   }, [peer.stream])
 
@@ -100,24 +129,44 @@ function PeerTile({
     }
   }, [peer.stream])
 
-  useEffect(() => {
-    const el = videoRef.current
+  // Callback ref — NOT useEffect. The <video> below is conditionally mounted
+  // (only when the peer's camera is active). A remote track arrives `muted`
+  // (no RTP yet), so on first render videoOff is true and the element does
+  // not exist. When the track later `unmute`s the element mounts, but
+  // `peer.stream` has not changed — so a `useEffect([peer.stream])` would NOT
+  // re-run and srcObject would never be assigned, leaving a permanently blank
+  // remote tile. THIS was the "others can't see my camera" root cause.
+  //
+  // A callback ref fires every time the node mounts or unmounts, so srcObject
+  // is (re)attached the instant the element appears, and cleared when it
+  // leaves (preventing Chromium from compositing the last decoded frame onto
+  // a detached node — the "ghost face").
+  const attachVideoEl = useCallback((el) => {
+    const prev = videoRef.current
+    if (prev && prev !== el) { try { prev.srcObject = null } catch {} }
+    videoRef.current = el
     if (!el) return
-    // Null first so Chromium tears down the previous audio/video decoders
-    // before the new stream attaches. Skipping this is the root cause of
-    // the "audio doubles for a beat after rejoin" symptom.
-    if (el.srcObject !== peer.stream) {
-      el.srcObject = null
-      if (peer.stream) el.srcObject = peer.stream
-    }
-    return () => {
-      if (el) el.srcObject = null
+    // Null first so Chromium tears down the previous decoder before binding
+    // the new stream (avoids a 1-frame ghost / "audio doubles after rejoin").
+    if (peer.stream) {
+      if (el.srcObject !== peer.stream) {
+        try { el.srcObject = null } catch {}
+        try { el.srcObject = peer.stream } catch {}
+      }
+    } else {
+      try { el.srcObject = null } catch {}
     }
   }, [peer.stream])
 
-  const videoOff = peer.video === false || trackInactive
-  const audioOff = peer.audio === false
   const isScreen = !!peer.screen
+  // When the peer is screen-sharing, the live video sender carries the SCREEN
+  // track — NOT the camera — so `peer.video` (the camera flag) is irrelevant.
+  // A presenter who shares with their camera OFF still has video:false in
+  // media-state; gating on it here would render the avatar placeholder over a
+  // perfectly good screen track (the "remote can't see the share" bug). During
+  // a share we only care whether the track itself is live (trackInactive).
+  const videoOff = isScreen ? trackInactive : (peer.video === false || trackInactive)
+  const audioOff = peer.audio === false
 
   const initial = useMemo(() => {
     const n = (peer.name || '?').trim()
@@ -129,8 +178,8 @@ function PeerTile({
   return (
     <div
       className={
-        'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#3c4043] ' +
-        (speaking ? 'ring-2 ring-[#8ab4f8]' : 'ring-1 ring-white/5') +
+        'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#e8eaed] ' +
+        (speaking ? 'ring-2 ring-[#1a73e8]' : 'ring-1 ring-black/[0.06]') +
         (spotlight ? ' shadow-lg shadow-black/40' : '')
       }
     >
@@ -141,7 +190,7 @@ function PeerTile({
 
       {!videoOff && peer.stream ? (
         <video
-          ref={videoRef}
+          ref={attachVideoEl}
           autoPlay
           playsInline
           muted
@@ -193,22 +242,17 @@ function PeerTile({
         </div>
       )}
 
-      {/* Pin button (top-right too — slides left when mic-off badge shown) */}
-      {onTogglePin && !mini && (
-        <button
+      {/* Pin button — rendered on every tile (mini included). Mic-off lives in
+          the top-right on full tiles, so the pin slides left to clear it; on
+          mini tiles the mic-off indicator moves to the name row, so no shift. */}
+      {onTogglePin && (
+        <PinButton
+          pinned={pinned}
           onClick={(e) => { e.stopPropagation(); onTogglePin(peer.peer_id) }}
-          className={
-            'absolute top-3 grid h-9 w-9 place-items-center rounded-full transition ' +
-            (audioOff ? 'right-12 ' : 'right-3 ') +
-            (pinned
-              ? 'bg-[#8ab4f8]/20 text-[#8ab4f8] opacity-100'
-              : 'bg-black/55 text-white/85 opacity-0 backdrop-blur hover:bg-black/70 group-hover/tile:opacity-100')
-          }
-          title={pinned ? 'Unpin' : 'Pin to main view'}
-          aria-label={pinned ? 'Unpin' : 'Pin to main view'}
-        >
-          <Pin className="h-4 w-4" />
-        </button>
+          mini={mini}
+          shifted={audioOff && !mini}
+          groupName="tile"
+        />
       )}
 
       {/* Bottom name pill */}
@@ -217,6 +261,7 @@ function PeerTile({
           'flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 font-medium text-white backdrop-blur-sm ' +
           (mini ? 'text-[11px]' : 'text-[12.5px]')
         }>
+          {pinned && <PinnedNameIcon mini={mini} />}
           <span className="truncate">{peer.name || '…'}{isScreen ? ' · Presenting' : ''}</span>
           {peer.role === 'host' && <Crown className="h-3 w-3 shrink-0 text-amber-300" />}
           {peer.role === 'co_host' && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-300" />}

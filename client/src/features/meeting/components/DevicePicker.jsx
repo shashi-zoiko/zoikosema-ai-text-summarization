@@ -69,11 +69,11 @@ export default function DevicePicker({ onClose }) {
     <div className="fixed inset-0 bg-black/60 grid place-items-center z-40" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-105 max-w-[90vw] bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-100 shadow-xl"
+        className="w-105 max-w-[90vw] bg-white border border-black/[0.06] rounded-2xl text-[#202124] shadow-[0_40px_80px_-20px_rgba(0,0,0,0.35)]"
       >
-        <header className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+        <header className="flex items-center justify-between px-4 py-3 border-b border-black/[0.06]">
           <h2 className="text-sm font-semibold">Devices</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100">
+          <button onClick={onClose} className="p-1 rounded-full hover:bg-black/[0.06] text-[#5f6368] hover:text-[#202124]">
             <X size={18} />
           </button>
         </header>
@@ -82,9 +82,9 @@ export default function DevicePicker({ onClose }) {
             const opts = devices.filter((d) => d.kind === kind)
             return (
               <div key={kind}>
-                <label className="block text-xs text-zinc-400 mb-1">{label}</label>
+                <label className="block text-xs text-[#5f6368] mb-1">{label}</label>
                 <select
-                  className="w-full bg-zinc-800 text-sm rounded px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-black/[0.08] bg-[#f1f3f4] text-[#202124] text-sm rounded-lg px-3 py-2 outline-none focus:border-[#1a73e8] focus:ring-2 focus:ring-[#1a73e8]/30"
                   value={active[kind] || ''}
                   onChange={(e) => choose(kind, e.target.value)}
                 >

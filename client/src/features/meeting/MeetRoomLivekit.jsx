@@ -317,7 +317,7 @@ export default function MeetRoomLivekit() {
       video
       onDisconnected={handleDisconnected}
       onError={(e) => setError(e?.message || String(e))}
-      className="h-screen w-screen flex flex-col bg-[#202124] text-white"
+      className="h-screen w-screen flex flex-col bg-[#f1f3f4] text-[#202124]"
     >
       <Header
         code={code}
@@ -448,7 +448,6 @@ function LivekitDockAdapter({
   const audioInputs = useMediaDeviceSelect({ kind: 'audioinput' })
   const videoInputs = useMediaDeviceSelect({ kind: 'videoinput' })
   const [clock, setClock] = useState(() => fmtClock(new Date()))
-  const [showSharePicker, setShowSharePicker] = useState(false)
 
   useEffect(() => {
     const t = setInterval(() => setClock(fmtClock(new Date())), 30_000)
@@ -520,8 +519,6 @@ function LivekitDockAdapter({
       screenOn={screenOn}
       screenshareEnabled={screenshareEnabled}
       isHostOrCohost={isHostOrCohost}
-      showSharePicker={showSharePicker}
-      setShowSharePicker={setShowSharePicker}
       startScreenShare={startShare}
       stopScreenShare={stopShare}
       isRecording={isRecording}
@@ -564,6 +561,8 @@ function LivekitDockAdapter({
 }
 
 function RoundDockExtra({ active, onClick, label, badge, children }) {
+  // Light styling matched to MeetingDock's capsule buttons so LiveKit-only
+  // extras (whiteboard, waiting room) read as part of the same material.
   return (
     <button
       type="button"
@@ -572,15 +571,16 @@ function RoundDockExtra({ active, onClick, label, badge, children }) {
       aria-pressed={active}
       title={label}
       className={
-        'relative grid h-11 w-11 place-items-center rounded-full transition active:scale-[0.97] ' +
+        'relative grid h-[52px] w-[52px] place-items-center rounded-full transition active:scale-[0.94] ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
         (active
-          ? 'bg-[#a8c7fa] text-[#202124] hover:bg-[#bdd5fc]'
-          : 'bg-[#3c4043] text-white hover:bg-[#4a4f55]')
+          ? 'bg-[#c2e7ff] text-[#001d35] hover:bg-[#aed6fb]'
+          : 'text-[#444746] hover:bg-black/[0.06] hover:text-[#1f1f1f]')
       }
     >
       {children}
       {badge > 0 && (
-        <span className="pointer-events-none absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#ea4335] px-1 text-[10px] font-bold leading-none text-white">
+        <span className="pointer-events-none absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#ea4335] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white">
           {badge > 99 ? '99+' : badge}
         </span>
       )}
@@ -600,7 +600,7 @@ function fmtClock(d) {
 function LkDockDeviceMenu({ title, devices, current, onPick }) {
   return (
     <div className="py-1.5">
-      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">
         {title}
       </div>
       <ul className="max-h-[260px] overflow-y-auto">
@@ -613,8 +613,8 @@ function LkDockDeviceMenu({ title, devices, current, onPick }) {
                 className={
                   'flex w-full items-start gap-2.5 px-3 py-2 text-left text-[13px] transition ' +
                   (active
-                    ? 'bg-[#8ab4f8]/12 text-[#8ab4f8]'
-                    : 'text-zinc-100 hover:bg-white/[0.06]')
+                    ? 'bg-[#c2e7ff]/50 text-[#0b57d0]'
+                    : 'text-[#202124] hover:bg-black/[0.05]')
                 }
               >
                 <span className="mt-1 grid h-2 w-2 shrink-0 place-items-center">
@@ -675,12 +675,12 @@ function Header({ code, ctrlConnected, recording, isHostOrCohost, meeting, onLoc
       </div>
 
       <div className="flex items-center gap-2">
-        <span className="font-mono text-[13px] tracking-wide text-zinc-300">{code}</span>
+        <span className="font-mono text-[13px] tracking-wide text-[#444746]">{code}</span>
         <button
           onClick={copyLink}
           title="Copy invite link"
           aria-label="Copy invite link"
-          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-zinc-200 transition hover:bg-white/10"
+          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3 text-[12px] font-medium text-[#444746] shadow-sm transition hover:bg-[#f1f3f4]"
         >
           {copied ? '✓ Copied' : 'Copy link'}
         </button>
@@ -789,7 +789,7 @@ function ToastStack({ toasts }) {
           key={t.id}
           className={
             'px-4 py-2 rounded shadow text-sm ' +
-            (t.kind === 'error' ? 'bg-red-600/95 text-white' : 'bg-zinc-800 text-zinc-100')
+            (t.kind === 'error' ? 'bg-red-600/95 text-white' : 'bg-white text-[#202124] ring-1 ring-black/[0.06]')
           }
         >
           {t.text}
@@ -801,7 +801,7 @@ function ToastStack({ toasts }) {
 
 function Splash({ text, children }) {
   return (
-    <div className="h-screen w-screen grid place-items-center bg-zinc-950 text-zinc-200">
+    <div className="h-screen w-screen grid place-items-center bg-[#f1f3f4] text-[#202124]">
       <div className="text-center">
         <div className="text-base">{text}</div>
         {children}

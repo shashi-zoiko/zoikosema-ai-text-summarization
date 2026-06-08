@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Bot, BarChart3, ChevronDown, Command, Home, LogOut, MessageSquareText,
-  Moon, Search, Settings, ShieldCheck, Sparkles, Sun, Users2, Video,
+  BarChart3, ChevronDown, Home, LogOut, MessageSquareText,
+  Moon, Settings, ShieldCheck, Sparkles, Sun, Users2, Video,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme, THEMES } from '../theme/ThemeProvider'
@@ -11,7 +11,6 @@ import { cn } from '../lib/cn'
 import Avatar from './ui/Avatar'
 import Logo from './ui/Logo'
 import IconButton from './ui/IconButton'
-import Kbd from './ui/Kbd'
 import ThemeToggle from './ui/ThemeToggle'
 import NotificationBell from './NotificationBell'
 import DesktopStatus from './DesktopStatus'
@@ -175,21 +174,6 @@ function MenuItem({ icon, children, danger, onClick }) {
   )
 }
 
-function CommandBar() {
-  return (
-    <button
-      className="group hidden h-9 items-center gap-2 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-2)] px-3 text-[12.5px] text-[var(--c-fg-muted)] transition hover:border-[var(--c-line-strong)] hover:text-[var(--c-fg-dim)] md:flex md:w-[260px] xl:w-[340px]"
-      onClick={() => {}}
-    >
-      <Search className="h-3.5 w-3.5" />
-      <span>Search meetings, channels, people…</span>
-      <span className="ml-auto inline-flex items-center gap-1">
-        <Kbd>⌘</Kbd><Kbd>K</Kbd>
-      </span>
-    </button>
-  )
-}
-
 export default function Layout() {
   const { user } = useAuth()
   const location = useLocation()
@@ -239,21 +223,6 @@ export default function Layout() {
               <SideLink key={item.to} {...item} />
             ))}
           </NavSection>
-          <NavSection label="AI">
-            <button
-              className="group/ai relative flex w-full items-center gap-3 overflow-hidden rounded-xl px-2.5 py-2 text-left text-[13px] font-medium text-[var(--c-fg-dim)] transition hover:bg-white/5 hover:text-[var(--c-fg)]"
-            >
-              <span
-                aria-hidden
-                className="pointer-events-none absolute inset-0 -translate-x-full bg-[linear-gradient(120deg,transparent_30%,color-mix(in_srgb,var(--c-accent)_22%,transparent)_50%,transparent_70%)] transition-transform duration-700 ease-out group-hover/ai:translate-x-full"
-              />
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg gradient-accent text-white shadow-[0_4px_14px_-4px_var(--c-accent-ring)] transition-transform duration-200 group-hover/ai:scale-110 group-hover/ai:rotate-3">
-                <Bot className="h-4 w-4" />
-              </span>
-              <span>Ask AI</span>
-              <span className="ml-auto"><Kbd>⌘ J</Kbd></span>
-            </button>
-          </NavSection>
           {user && (
             <NavSection label="Manage">
               {SECONDARY.map((item) => (
@@ -289,7 +258,6 @@ export default function Layout() {
         >
           <Breadcrumbs path={location.pathname} />
           <div className="ml-auto flex items-center gap-2.5">
-            <CommandBar />
             <ThemeToggle />
             <UserMenu />
           </div>

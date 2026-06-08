@@ -47,15 +47,15 @@ export default function ParticipantsPanel({
   }, [all, roles, raisedHands])
 
   return (
-    <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-[#2a2c2f] text-zinc-100 shadow-lg ring-1 ring-white/5">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-4">
+    <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-[#202124] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.25)] ring-1 ring-black/[0.06]">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-4">
         <h2 className="text-[15px] font-medium">
-          People <span className="text-zinc-500">· {sorted.length}</span>
+          People <span className="text-[#5f6368]">· {sorted.length}</span>
         </h2>
         <button
           onClick={onClose}
           aria-label="Close people panel"
-          className="grid h-8 w-8 place-items-center rounded-full text-zinc-400 transition hover:bg-white/5 hover:text-zinc-100"
+          className="grid h-8 w-8 place-items-center rounded-full text-[#5f6368] transition hover:bg-black/[0.06] hover:text-[#202124]"
         >
           <X className="h-4 w-4" />
         </button>
@@ -102,27 +102,27 @@ const ParticipantRow = memo(function ParticipantRow({
   const canPromote = isHost && !isSelf && !isRowHost
 
   return (
-    <li className="group flex items-center gap-3 rounded-xl px-2 py-2 transition hover:bg-white/[0.04]">
+    <li className="group flex items-center gap-3 rounded-xl px-2 py-2 transition hover:bg-black/[0.04]">
       <div
         className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[13px] font-semibold text-white"
         style={{ backgroundColor: avatarColor }}
       >{initial}</div>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-zinc-100">
+        <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-[#202124]">
           <span className="truncate">{name}{isSelf && ' (you)'}</span>
-          {isRowHost && <Crown className="h-3 w-3 shrink-0 text-amber-300" title="Host" />}
-          {isRowCohost && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-300" title="Co-host" />}
-          {raised && <Hand className="h-3 w-3 shrink-0 text-amber-300" title="Hand raised" />}
+          {isRowHost && <Crown className="h-3 w-3 shrink-0 text-amber-500" title="Host" />}
+          {isRowCohost && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-600" title="Co-host" />}
+          {raised && <Hand className="h-3 w-3 shrink-0 text-amber-500" title="Hand raised" />}
         </div>
         {ROLE_LABEL[role] && (
-          <div className="text-[11px] text-zinc-500">{ROLE_LABEL[role]}</div>
+          <div className="text-[11px] text-[#5f6368]">{ROLE_LABEL[role]}</div>
         )}
       </div>
 
-      <div className="flex items-center gap-1 text-zinc-400">
-        {micMuted && <MicOff className="h-3.5 w-3.5 text-zinc-500" />}
-        {camOff && <VideoOff className="h-3.5 w-3.5 text-zinc-500" />}
+      <div className="flex items-center gap-1 text-[#5f6368]">
+        {micMuted && <MicOff className="h-3.5 w-3.5 text-[#9aa0a6]" />}
+        {camOff && <VideoOff className="h-3.5 w-3.5 text-[#9aa0a6]" />}
       </div>
 
       <div className="ml-1 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
@@ -160,8 +160,8 @@ function RowBtn({ onClick, title, destructive, children }) {
       className={
         'grid h-7 w-7 place-items-center rounded-full transition ' +
         (destructive
-          ? 'text-[#ea4335] hover:bg-[#ea4335]/15'
-          : 'text-zinc-300 hover:bg-white/[0.06] hover:text-zinc-100')
+          ? 'text-[#ea4335] hover:bg-[#ea4335]/12'
+          : 'text-[#5f6368] hover:bg-black/[0.06] hover:text-[#202124]')
       }
     >
       {children}

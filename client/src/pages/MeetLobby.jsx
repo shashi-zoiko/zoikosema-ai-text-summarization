@@ -328,7 +328,7 @@ export default function MeetLobby() {
       <div className="mx-auto grid w-full max-w-[1200px] gap-8 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
         {/* ── Preview ───────────────────────────────────────────── */}
         <div className="flex flex-col gap-4">
-          <div className="relative isolate aspect-video w-full overflow-hidden rounded-2xl bg-[#202124] shadow-xl ring-1 ring-black/5">
+          <div className="relative isolate aspect-video w-full overflow-hidden rounded-2xl bg-[#e8eaed] shadow-xl ring-1 ring-black/[0.06]">
             {/* Video — ALWAYS mounted so the ref is stable. Visibility is
                 controlled with classes, not conditional rendering. */}
             <video
@@ -346,25 +346,25 @@ export default function MeetLobby() {
             {!showVideo && (
               <div className="absolute inset-0 grid place-items-center">
                 {permState === PERM.granted && !videoOn && (
-                  <div className="flex flex-col items-center gap-3 text-white">
+                  <div className="flex flex-col items-center gap-3 text-[#202124]">
                     <div
-                      className="grid h-28 w-28 place-items-center rounded-full text-3xl font-semibold"
+                      className="grid h-28 w-28 place-items-center rounded-full text-3xl font-semibold text-white shadow-sm"
                       style={{ backgroundColor: user?.avatar_color || '#3a6ff3' }}
                     >{initial}</div>
-                    <div className="inline-flex items-center gap-2 text-[13px] text-white/70">
+                    <div className="inline-flex items-center gap-2 text-[13px] text-[#5f6368]">
                       <CameraOff className="h-4 w-4" /> Camera is off
                     </div>
                   </div>
                 )}
                 {permState === PERM.pending && (
-                  <div className="flex flex-col items-center gap-3 text-white/85">
+                  <div className="flex flex-col items-center gap-3 text-[#5f6368]">
                     <Loader2 className="h-7 w-7 animate-spin" />
                     <span className="text-[13px] font-medium">Starting camera…</span>
                   </div>
                 )}
                 {permState === PERM.denied && (
                   <PermError
-                    icon={<CameraOff className="h-7 w-7 text-red-300" />}
+                    icon={<CameraOff className="h-7 w-7 text-[#ea4335]" />}
                     title="Camera and mic are blocked"
                     detail={permDetail}
                     onRetry={acquire}
@@ -372,7 +372,7 @@ export default function MeetLobby() {
                 )}
                 {permState === PERM.unavailable && (
                   <PermError
-                    icon={<Monitor className="h-7 w-7 text-white/80" />}
+                    icon={<Monitor className="h-7 w-7 text-[#5f6368]" />}
                     title="Can't reach your camera"
                     detail={permDetail}
                     onRetry={acquire}
@@ -397,8 +397,8 @@ export default function MeetLobby() {
             )}
 
             {/* Mic + Camera toggle dock (center bottom) */}
-            <div className="absolute inset-x-0 bottom-3 flex justify-center">
-              <div className="flex items-center gap-3 rounded-full bg-black/45 px-2 py-2 backdrop-blur-sm">
+            <div className="absolute inset-x-0 bottom-4 flex justify-center">
+              <div className="flex items-center gap-3 rounded-full bg-white/85 px-2.5 py-2.5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.4)] ring-1 ring-black/[0.06] backdrop-blur-xl">
                 <ToggleButton
                   on={audioOn}
                   onClick={toggleAudio}
@@ -565,10 +565,11 @@ function ToggleButton({ on, onClick, disabled, label, iconOn, iconOff }) {
       title={label}
       aria-pressed={!on}
       className={
-        'grid h-11 w-11 place-items-center rounded-full transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-[18px] [&_svg]:w-[18px] ' +
+        'grid h-[52px] w-[52px] place-items-center rounded-full transition active:scale-[0.94] disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 ' +
         (on
-          ? 'bg-white/15 text-white hover:bg-white/25'
-          : 'bg-[#ea4335] text-white hover:bg-[#d33b2c]')
+          ? 'text-[#444746] hover:bg-black/[0.06] hover:text-[#1f1f1f]'
+          : 'bg-[#ea4335] text-white shadow-[0_4px_12px_-4px_rgba(234,67,53,0.6)] hover:bg-[#d93829]')
       }
     >{on ? iconOn : iconOff}</button>
   )
@@ -598,15 +599,15 @@ function AudioMeter({ level }) {
 
 function PermError({ icon, title, detail, onRetry }) {
   return (
-    <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center text-white">
-      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-white/8 ring-1 ring-white/15">{icon}</div>
+    <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center text-[#202124]">
+      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-black/[0.04] ring-1 ring-black/[0.08]">{icon}</div>
       <div>
         <div className="text-[14.5px] font-medium">{title}</div>
-        <div className="mt-1 text-[12.5px] leading-relaxed text-white/65">{detail}</div>
+        <div className="mt-1 text-[12.5px] leading-relaxed text-[#5f6368]">{detail}</div>
       </div>
       <button
         onClick={onRetry}
-        className="rounded-full bg-white/10 px-4 py-2 text-[12.5px] font-medium text-white transition hover:bg-white/20"
+        className="rounded-full border border-black/[0.08] bg-white px-4 py-2 text-[12.5px] font-medium text-[#202124] shadow-sm transition hover:bg-[#f1f3f4]"
       >Retry</button>
     </div>
   )

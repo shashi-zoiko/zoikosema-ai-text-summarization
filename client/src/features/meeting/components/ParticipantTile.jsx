@@ -6,8 +6,9 @@ import {
   useTrackMutedIndicator,
 } from '@livekit/components-react'
 import { ConnectionQuality, Track } from 'livekit-client'
-import { Hand, MicOff, Pin, PinOff } from 'lucide-react'
+import { Hand, MicOff } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
+import { PinButton, PinnedNameIcon } from '../../../components/meeting/PinControls.jsx'
 
 function identityToUserId(identity) {
   if (!identity || !identity.startsWith('u:')) return null
@@ -62,8 +63,8 @@ function ParticipantTileImpl({ trackRef, isHero }) {
       onDoubleClick={onPinToggle}
       title="Double-click to pin"
       className={
-        'group relative isolate aspect-video overflow-hidden rounded-2xl bg-[#3c4043] transition-shadow ' +
-        (isSpeaking ? 'ring-2 ring-[#8ab4f8]' : 'ring-1 ring-white/5')
+        'group relative isolate aspect-video overflow-hidden rounded-2xl bg-[#e8eaed] transition-shadow ' +
+        (isSpeaking ? 'ring-2 ring-[#1a73e8]' : 'ring-1 ring-black/[0.06]')
       }
     >
       {hasVideo ? (
@@ -98,27 +99,21 @@ function ParticipantTileImpl({ trackRef, isHero }) {
         </div>
       )}
 
-      {/* Pin button — hover-revealed, slides left when mic-off badge present */}
-      <button
+      {/* Pin button — hover-revealed on desktop, always visible on touch,
+          slides left to clear the mic-off badge when present. */}
+      <PinButton
+        pinned={isPinned}
         onClick={onPinToggle}
-        aria-label={isPinned ? 'Unpin' : 'Pin'}
-        title={isPinned ? 'Unpin' : 'Pin to main view'}
-        className={
-          'absolute top-3 grid h-9 w-9 place-items-center rounded-full transition ' +
-          (micMuted ? 'right-12 ' : 'right-3 ') +
-          (isPinned
-            ? 'bg-[#8ab4f8]/20 text-[#8ab4f8] opacity-100'
-            : 'bg-black/55 text-white/85 opacity-0 backdrop-blur hover:bg-black/70 group-hover:opacity-100')
-        }
-      >
-        {isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-      </button>
+        shifted={micMuted}
+        groupName=""
+      />
 
       <QualityBars quality={quality} />
 
       {/* Bottom name pill */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
         <div className="flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[12.5px] font-medium text-white backdrop-blur-sm">
+          {isPinned && <PinnedNameIcon />}
           <span className="truncate">{displayName}</span>
         </div>
       </div>
