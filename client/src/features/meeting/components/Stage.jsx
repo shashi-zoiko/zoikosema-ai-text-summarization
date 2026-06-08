@@ -11,6 +11,7 @@ import { useRoomStore } from '../state/roomStore.js'
  */
 export default function Stage() {
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
+  const setPinned = useRoomStore((s) => s.setPinned)
 
   const tracks = useTracks(
     [
@@ -29,7 +30,30 @@ export default function Stage() {
   const heroIdentity = pinnedIdentity || screen?.participant?.identity
   const heroFromCam = cams.find((t) => t.participant.identity === heroIdentity)
   const hero = screen ?? heroFromCam
-  const others = hero ? cams.filter((t) => t.participant.identity !== hero.participant.identity) : cams
+  let others = hero ? cams.filter((t) => t.participant.identity !== hero.participant.identity) : cams
+
+  // A screen share keeps the main stage — it is never replaced by a pinned
+  // participant (Meet/Zoom behaviour). But the pin is still honoured: surface
+  // the pinned participant FIRST in the filmstrip so they stay prominent
+  // alongside the shared content. When the share stops, `hero` falls back to
+  // the pinned camera automatically (see heroFromCam above).
+  if (screen && pinnedIdentity && others.length > 1) {
+    others = [...others].sort((a, b) =>
+      (b.participant.identity === pinnedIdentity ? 1 : 0) -
+      (a.participant.identity === pinnedIdentity ? 1 : 0),
+    )
+  }
+
+  // If the pinned participant leaves (or stops publishing and is no longer
+  // tracked), drop the stale pin so the layout returns to normal instead of
+  // holding an empty hero or silently re-pinning a recycled identity.
+  useEffect(() => {
+    if (!pinnedIdentity) return
+    const present =
+      cams.some((t) => t.participant.identity === pinnedIdentity) ||
+      screen?.participant?.identity === pinnedIdentity
+    if (!present) setPinned(null)
+  }, [pinnedIdentity, cams, screen, setPinned])
 
   // Push per-subscriber video quality so the hero stays sharp and tiny tiles
   // don't waste bandwidth on a 720p stream.

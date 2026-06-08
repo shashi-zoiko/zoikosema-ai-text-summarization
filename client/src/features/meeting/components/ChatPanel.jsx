@@ -34,13 +34,13 @@ export default function ChatPanel({ messages, onSend, onClose, disabled }) {
   }
 
   return (
-    <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-[#2a2c2f] text-zinc-100 shadow-lg ring-1 ring-white/5">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-4">
+    <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-[#202124] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.25)] ring-1 ring-black/[0.06]">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-4">
         <h2 className="text-[15px] font-medium">In-call messages</h2>
         <button
           onClick={onClose}
           aria-label="Close chat"
-          className="grid h-8 w-8 place-items-center rounded-full text-zinc-400 transition hover:bg-white/5 hover:text-zinc-100"
+          className="grid h-8 w-8 place-items-center rounded-full text-[#5f6368] transition hover:bg-black/[0.06] hover:text-[#202124]"
         >
           <X className="h-4 w-4" />
         </button>
@@ -48,7 +48,7 @@ export default function ChatPanel({ messages, onSend, onClose, disabled }) {
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
         {messages.length === 0 ? (
-          <p className="px-3 py-8 text-center text-[13px] leading-relaxed text-zinc-500">
+          <p className="px-3 py-8 text-center text-[13px] leading-relaxed text-[#5f6368]">
             Messages can be seen only by people in the call and are deleted
             when the call ends.
           </p>
@@ -66,9 +66,9 @@ export default function ChatPanel({ messages, onSend, onClose, disabled }) {
 
       <form
         onSubmit={submit}
-        className="shrink-0 border-t border-white/5 p-3"
+        className="shrink-0 border-t border-black/[0.06] p-3"
       >
-        <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 transition focus-within:border-[#8ab4f8]/60">
+        <div className="flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-[#f1f3f4] px-3 py-1.5 transition focus-within:border-[#1a73e8]">
           <input
             ref={inputRef}
             type="text"
@@ -77,13 +77,13 @@ export default function ChatPanel({ messages, onSend, onClose, disabled }) {
             placeholder={disabled ? 'Chat is disabled by the host' : 'Send a message'}
             disabled={disabled}
             maxLength={2000}
-            className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed"
+            className="min-w-0 flex-1 bg-transparent text-sm text-[#202124] outline-none placeholder:text-[#9aa0a6] disabled:cursor-not-allowed"
           />
           <button
             type="submit"
             disabled={disabled || !draft.trim()}
             aria-label="Send"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#8ab4f8] transition enabled:hover:bg-[#8ab4f8]/15 disabled:opacity-40"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#1a73e8] transition enabled:hover:bg-[#1a73e8]/10 disabled:opacity-40"
           >
             <Send className="h-4 w-4" />
           </button>
@@ -114,10 +114,10 @@ function ChatMessage({ m, prev }) {
           <span className="font-semibold" style={{ color: m.color || '#a3a3a3' }}>
             {m.name || 'Guest'}
           </span>
-          <span className="text-[11px] text-zinc-500">{time}</span>
+          <span className="text-[11px] text-[#5f6368]">{time}</span>
         </div>
       )}
-      <div className="rounded-2xl rounded-tl-md bg-white/[0.04] px-3 py-2 leading-snug text-zinc-200 break-words whitespace-pre-wrap">
+      <div className="rounded-2xl rounded-tl-md bg-[#f1f3f4] px-3 py-2 leading-snug text-[#202124] break-words whitespace-pre-wrap">
         {m.body}
       </div>
     </div>

@@ -328,6 +328,14 @@ h4 { line-height: 1.40; font-weight: 600; }
     will-change: transform, opacity;
   }
 
+  /* Participant-tile pin toggle (shared PinButton). On desktop it stays
+     hover-revealed via the Tailwind group-hover utilities baked into the
+     button. Touch devices have no hover state, so force it visible there so
+     the control is always reachable on phones / tablets. */
+  @media (hover: none), (pointer: coarse) {
+    .zk-pin-btn { opacity: 1 !important; }
+  }
+
   /* Laser-pointer pulse (used by AnnotationOverlay). */
   @keyframes zk-pointer-pulse {
     0%   { opacity: 1;   transform: translate(-50%, -50%) scale(1);   }

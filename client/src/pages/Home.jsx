@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  ArrowRight, ArrowUpRight, Bot, Calendar, CalendarPlus, Clock, Download,
-  Lock, MessageSquareText, Mic, Pencil, Radio, Share2, Sparkles, Trash2, Users2,
-  Video, Zap,
+  ArrowRight, Calendar, Check, ChevronDown, Clock,
+  Copy, Download, Link2, Lock, MessageSquareText, Pencil, Plus, Radio, Share2,
+  Sparkles, Trash2, Video,
 } from 'lucide-react'
 import { api, getApiBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -53,44 +54,63 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/* ────────────────────────── action tiles ────────────────────────── */
-
-const SECONDARY_TILES = [
-  {
-    key: 'schedule',
-    title: 'Schedule meeting',
-    desc: 'Plan for later, send invites.',
-    icon: <CalendarPlus />,
-    bg: 'linear-gradient(160deg,#7B86FF 0%,#5B67F2 55%,#3F4ACB 100%)',
-    glow: 'rgba(91,103,242,0.55)',
-  },
-  {
-    key: 'chat',
-    title: 'Team chat',
-    desc: 'Channels, threads, DMs.',
-    icon: <MessageSquareText />,
-    bg: 'linear-gradient(160deg,#7EE2C2 0%,#3FBF9B 55%,#1F9D7B 100%)',
-    glow: 'rgba(63,191,155,0.5)',
-  },
-  {
-    key: 'ai',
-    title: 'AI assistant',
-    desc: 'Recap, action items, search.',
-    icon: <Bot />,
-    bg: 'linear-gradient(160deg,#E07BFF 0%,#B658F0 55%,#7C3CC8 100%)',
-    glow: 'rgba(182,88,240,0.55)',
-  },
-  {
-    key: 'invite',
-    title: 'Invite teammates',
-    desc: 'Grow your workspace.',
-    icon: <Users2 />,
-    bg: 'linear-gradient(160deg,#FFB877 0%,#F08A44 55%,#D86919 100%)',
-    glow: 'rgba(240,138,68,0.5)',
-  },
-]
-
 /* ────────────────────────── page ────────────────────────── */
+
+/* Single row inside the "New meeting" dropdown. */
+function MeetMenuItem({ icon, label, onClick }) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[14px] font-medium text-[var(--c-fg)] transition hover:bg-[var(--c-accent-soft)] hover:text-[var(--c-accent)]"
+    >
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--c-bg-2)] text-[var(--c-fg-dim)]">
+        {icon}
+      </span>
+      <span className="truncate">{label}</span>
+    </button>
+  )
+}
+
+/* Style-3 emerald button surface, reused by both hero + join CTAs. */
+const EMERALD_BTN =
+  'bg-[linear-gradient(135deg,#1f7a54_0%,#0f4a34_100%)] ' +
+  'shadow-[0_10px_26px_-10px_rgba(16,83,52,0.65)] hover:brightness-[1.06]'
+
+/* Layered mountain/pine scene — the signature visual of Style 3. Pure SVG so
+   it scales crisply and ships no image asset. */
+function MountainScene() {
+  return (
+    <svg viewBox="0 0 280 180" className="h-[180px] w-[280px]" role="img" aria-label="Meeting illustration">
+      <defs>
+        <linearGradient id="zk-sky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#eafaf2" />
+          <stop offset="100%" stopColor="#cfeede" />
+        </linearGradient>
+        <linearGradient id="zk-mtnA" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#bfe6d2" />
+          <stop offset="100%" stopColor="#9ed4ba" />
+        </linearGradient>
+        <linearGradient id="zk-mtnB" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#56a883" />
+          <stop offset="100%" stopColor="#2f7d5b" />
+        </linearGradient>
+      </defs>
+      <rect width="280" height="180" fill="url(#zk-sky)" />
+      <circle cx="208" cy="46" r="20" fill="#ffffff" opacity="0.7" />
+      <path d="M0 120 L48 78 L92 112 L140 68 L188 110 L236 74 L280 104 L280 180 L0 180 Z" fill="url(#zk-mtnA)" opacity="0.85" />
+      <path d="M138 68 L150 86 L126 86 Z" fill="#eafaf2" opacity="0.9" />
+      <path d="M0 150 L44 112 L86 146 L138 100 L186 144 L240 110 L280 138 L280 180 L0 180 Z" fill="url(#zk-mtnB)" />
+      {[[38, 152], [60, 158], [212, 150], [234, 157]].map(([x, y], i) => (
+        <g key={i} transform={`translate(${x} ${y})`}>
+          <path d="M0 -24 L9 2 L-9 2 Z" fill="#1f6f4d" />
+          <path d="M0 -15 L7 5 L-7 5 Z" fill="#2a8761" />
+          <rect x="-1.5" y="4" width="3" height="6" fill="#3f5a4a" />
+        </g>
+      ))}
+    </svg>
+  )
+}
 
 export default function Home() {
   const { user } = useAuth()
@@ -100,8 +120,35 @@ export default function Home() {
   const [recent, setRecent] = useState([])
   const [recordings, setRecordings] = useState([])
   const [busy, setBusy] = useState(false)
-  const [showMeetOptions, setShowMeetOptions] = useState(false)
-  const [meetPassword, setMeetPassword] = useState('')
+  // Google Meet-style "New meeting" dropdown + "create for later" link modal.
+  const [showNewMenu, setShowNewMenu] = useState(false)
+  // Anchor + screen position for the portal-rendered dropdown (the hero Card
+  // is `overflow-hidden`, so an in-flow absolute menu gets clipped — we render
+  // it into a body portal with fixed positioning instead).
+  const newBtnRef = useRef(null)
+  const [newMenuPos, setNewMenuPos] = useState({ top: 0, left: 0 })
+  const openNewMenu = () => {
+    const r = newBtnRef.current?.getBoundingClientRect()
+    if (r) setNewMenuPos({ top: r.bottom + 8, left: r.left })
+    setShowNewMenu(true)
+  }
+  // Keep the menu anchored if the user scrolls/resizes while it's open.
+  useEffect(() => {
+    if (!showNewMenu) return
+    const reposition = () => {
+      const r = newBtnRef.current?.getBoundingClientRect()
+      if (r) setNewMenuPos({ top: r.bottom + 8, left: r.left })
+    }
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [showNewMenu])
+  const [creatingLater, setCreatingLater] = useState(false)
+  const [laterMeeting, setLaterMeeting] = useState(null)
+  const [linkCopied, setLinkCopied] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
   const [schedTitle, setSchedTitle] = useState('')
   const [schedDate, setSchedDate] = useState('')
@@ -127,17 +174,49 @@ export default function Home() {
     api('/api/recordings').then(setRecordings).catch(() => {})
   }, [])
 
+  const meetingLink = (c) => `${window.location.origin}/meet/${c}`
+
+  // "Start an instant meeting" — mint a meeting and join it immediately.
   const startInstant = async () => {
+    setShowNewMenu(false)
     setBusy(true)
     try {
-      const body = { title: 'Instant meeting' }
-      if (meetPassword.trim()) body.password = meetPassword.trim()
-      const meeting = await api('/api/meetings', { method: 'POST', body })
+      const meeting = await api('/api/meetings', { method: 'POST', body: { title: 'Instant meeting' } })
       navigate(`/meet/${meeting.code}`)
     } catch (e) {
       toast({ variant: 'error', title: 'Could not start meeting', description: e.message })
     } finally {
       setBusy(false)
+    }
+  }
+
+  // "Create a meeting for later" — mint a meeting and surface its shareable
+  // link WITHOUT joining, mirroring Google Meet. The host copies the link now
+  // and joins whenever from the link or Recent meetings.
+  const createForLater = async () => {
+    setShowNewMenu(false)
+    setCreatingLater(true)
+    try {
+      const meeting = await api('/api/meetings', { method: 'POST', body: { title: 'Meeting' } })
+      setLinkCopied(false)
+      setLaterMeeting(meeting)
+      // Refresh Recent so the new meeting appears there too.
+      api('/api/meetings/recent').then(setRecent).catch(() => {})
+    } catch (e) {
+      toast({ variant: 'error', title: 'Could not create meeting', description: e.message })
+    } finally {
+      setCreatingLater(false)
+    }
+  }
+
+  const copyMeetingLink = async () => {
+    if (!laterMeeting) return
+    try {
+      await navigator.clipboard.writeText(meetingLink(laterMeeting.code))
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 1800)
+    } catch {
+      toast({ variant: 'error', title: 'Copy failed', description: 'Select the link and copy it manually.' })
     }
   }
 
@@ -271,12 +350,6 @@ export default function Home() {
   )
   const upcomingCount = recent.filter((m) => m.scheduled_at && new Date(m.scheduled_at) > new Date()).length
 
-  const SECONDARY_ACTIONS = {
-    schedule: () => setShowSchedule(true),
-    chat: () => navigate('/chat'),
-    ai: () => navigate('/chat'),
-    invite: () => navigate('/admin'),
-  }
 
   return (
     <div className="relative isolate mx-auto w-full max-w-[1320px] px-4 py-6 sm:px-8 sm:py-10">
@@ -323,15 +396,15 @@ export default function Home() {
       >
         {/* ── Instant meeting (featured) ── */}
         <motion.div variants={fadeUp} className="lg:col-span-2">
-          <Card glow className="group/hero relative overflow-hidden p-6 sm:p-7">
+          <Card className="group/hero relative overflow-hidden p-6 sm:p-7 bg-[linear-gradient(150deg,#e9f6ef_0%,#f3faf6_45%,#ffffff_100%)] border border-[#cfe8db] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_18px_48px_-22px_rgba(16,83,52,0.35)] transition-all duration-300 hover:-translate-y-0.5 hover:border-[#9fd6bd] hover:shadow-[0_24px_52px_-20px_rgba(16,83,52,0.42)]">
             {/* layered ambient inside the card */}
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-0 opacity-[0.65] transition-opacity duration-500 group-hover/hero:opacity-90"
+              className="pointer-events-none absolute inset-0 opacity-[0.7] transition-opacity duration-500 group-hover/hero:opacity-90"
               style={{
                 background:
-                  'radial-gradient(700px 220px at 0% 0%, color-mix(in srgb, var(--c-accent) 22%, transparent), transparent 55%),' +
-                  'radial-gradient(420px 200px at 100% 100%, color-mix(in srgb, var(--c-accent-3) 18%, transparent), transparent 60%)',
+                  'radial-gradient(700px 220px at 0% 0%, rgba(31,122,82,0.10), transparent 55%),' +
+                  'radial-gradient(420px 200px at 100% 100%, rgba(95,174,140,0.14), transparent 60%)',
               }}
             />
             <div className="relative flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
@@ -339,63 +412,79 @@ export default function Home() {
                 <motion.div
                   whileHover={{ scale: 1.04 }}
                   transition={{ type: 'spring', stiffness: 320, damping: 20 }}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-[var(--c-line)] bg-[var(--c-bg-2)] px-2.5 py-1 text-[11px] font-semibold text-[var(--c-fg-dim)]"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700"
                 >
                   <span className="relative inline-flex h-1.5 w-1.5">
-                    <span className="absolute inset-0 animate-ping rounded-full bg-[var(--c-success)] opacity-70" />
-                    <span className="relative h-1.5 w-1.5 rounded-full bg-[var(--c-success)]" />
+                    <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500 opacity-70" />
+                    <span className="relative h-1.5 w-1.5 rounded-full bg-emerald-500" />
                   </span>
                   Ready to host
                 </motion.div>
-                <h2 className="text-[24px] font-bold tracking-tight">Start an instant meeting</h2>
-                <p className="text-[13.5px] leading-relaxed text-[var(--c-fg-dim)]">
+                <h2 className="text-[24px] font-bold tracking-tight text-[#0f2a20]">Start an instant meeting</h2>
+                <p className="text-[13.5px] leading-relaxed text-[#3f5a4a]">
                   HD video, screen share, captions, recording — share the link with anyone, no install required.
                 </p>
-                <AnimatePresence initial={false}>
-                  {showMeetOptions && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-                      className="overflow-hidden"
+                <div className="pt-1">
+                  <div ref={newBtnRef} className="relative inline-block">
+                    <Button
+                      size="lg"
+                      className={EMERALD_BTN}
+                      loading={busy || creatingLater}
+                      onClick={() => (showNewMenu ? setShowNewMenu(false) : openNewMenu())}
+                      asMotion
+                      aria-haspopup="menu"
+                      aria-expanded={showNewMenu}
+                      leftIcon={!(busy || creatingLater) && <Video className="h-4 w-4" />}
+                      rightIcon={!(busy || creatingLater) && (
+                        <ChevronDown className={cn('h-4 w-4 transition-transform', showNewMenu && 'rotate-180')} />
+                      )}
                     >
-                      <div className="pt-1">
-                        <Input
-                          type="password"
-                          placeholder="Optional meeting password"
-                          value={meetPassword}
-                          onChange={(e) => setMeetPassword(e.target.value)}
-                          leftIcon={<Lock />}
-                          autoComplete="off"
-                        />
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <Button
-                    size="lg"
-                    loading={busy}
-                    onClick={startInstant}
-                    asMotion
-                    leftIcon={!busy && <Zap className="h-4 w-4" />}
-                  >
-                    {busy ? 'Starting…' : 'Start instant meeting'}
-                  </Button>
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    onClick={() => setShowMeetOptions((v) => !v)}
-                    leftIcon={<Lock className="h-4 w-4" />}
-                    asMotion
-                  >
-                    {showMeetOptions ? 'Hide options' : 'Set password'}
-                  </Button>
+                      {busy ? 'Starting…' : creatingLater ? 'Creating…' : 'New meeting'}
+                    </Button>
+
+                    {/* Rendered in a body portal so the hero Card's overflow-hidden
+                        doesn't clip the menu (which previously showed an empty box). */}
+                    {createPortal(
+                      <AnimatePresence>
+                        {showNewMenu && (
+                          <>
+                            {/* Click-away layer — closes the menu on any outside click. */}
+                            <button
+                              aria-hidden
+                              tabIndex={-1}
+                              className="fixed inset-0 z-[60] cursor-default"
+                              onClick={() => setShowNewMenu(false)}
+                            />
+                            <motion.div
+                              role="menu"
+                              initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                              style={{ top: newMenuPos.top, left: newMenuPos.left }}
+                              className="fixed z-[61] w-[272px] overflow-hidden rounded-2xl border border-[var(--c-line-strong)] bg-[var(--c-surface)] p-1.5 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)]"
+                            >
+                              <MeetMenuItem
+                                icon={<Link2 className="h-[18px] w-[18px]" />}
+                                label="Create a meeting for later"
+                                onClick={createForLater}
+                              />
+                              <MeetMenuItem
+                                icon={<Plus className="h-[18px] w-[18px]" />}
+                                label="Start an instant meeting"
+                                onClick={startInstant}
+                              />
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>,
+                      document.body
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Camera-grid preview */}
+              {/* Mountain scene — signature of Style 3 */}
               <motion.div
                 initial={{ opacity: 0, y: 8, scale: 0.96 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -405,31 +494,10 @@ export default function Home() {
                 <div
                   aria-hidden
                   className="absolute -inset-6 rounded-full opacity-40 blur-3xl transition-opacity duration-500 group-hover/hero:opacity-60"
-                  style={{ background: 'radial-gradient(closest-side, var(--c-accent-3), transparent)' }}
+                  style={{ background: 'radial-gradient(closest-side, #6fce9f, transparent)' }}
                 />
-                <div className="relative grid h-[180px] w-[280px] grid-cols-3 grid-rows-2 gap-1.5 overflow-hidden rounded-2xl border border-[var(--c-line-strong)] bg-[var(--c-bg-2)] p-1.5 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.5)]">
-                  {[0,1,2,3,4,5].map((i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, scale: 0.85 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: 0.25 + i * 0.06, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                      className={cn(
-                        'relative overflow-hidden rounded-lg border border-[var(--c-line)]',
-                        i === 0 ? 'row-span-2 col-span-2' : ''
-                      )}
-                      style={{
-                        background: `linear-gradient(135deg, ${['#6366f1','#a78bfa','#ec4899','#10b981','#f59e0b','#06b6d4'][i]}40, transparent)`,
-                      }}
-                    >
-                      <div className="absolute inset-0 bg-[radial-gradient(closest-side,rgba(255,255,255,0.12),transparent)]" />
-                      {i === 0 && (
-                        <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded bg-black/45 px-1.5 py-0.5 text-[9px] font-medium text-white backdrop-blur-sm">
-                          <Mic className="h-2.5 w-2.5" /> You
-                        </div>
-                      )}
-                    </motion.div>
-                  ))}
+                <div className="relative overflow-hidden rounded-2xl border border-[#cfe8db] shadow-[0_24px_60px_-24px_rgba(16,83,52,0.4)]">
+                  <MountainScene />
                 </div>
               </motion.div>
             </div>
@@ -438,21 +506,21 @@ export default function Home() {
 
         {/* ── Join with code ── */}
         <motion.div variants={fadeUp}>
-          <Card className="group/join h-full p-6">
+          <Card className="group/join flex h-full flex-col p-6 bg-[linear-gradient(150deg,#eef8f2_0%,#ffffff_60%)] border border-[#cfe8db] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_14px_40px_-22px_rgba(16,83,52,0.3)] transition-all duration-300 hover:-translate-y-0.5 hover:border-[#9fd6bd] hover:shadow-[0_22px_48px_-20px_rgba(16,83,52,0.4)]">
             <div className="flex items-center gap-3">
               <motion.div
                 whileHover={{ rotate: -8, scale: 1.08 }}
                 transition={{ type: 'spring', stiffness: 320, damping: 18 }}
-                className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--c-accent-soft)] text-[var(--c-accent)] shadow-[0_4px_14px_-4px_var(--c-accent-ring)]"
+                className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#1f7a54_0%,#0f4a34_100%)] text-white shadow-[0_6px_18px_-6px_rgba(16,83,52,0.6)]"
               >
                 <ArrowRight className="h-5 w-5" />
               </motion.div>
               <div>
-                <div className="text-[15px] font-semibold tracking-tight">Join with code</div>
-                <div className="text-[12px] text-[var(--c-fg-muted)]">Enter the link or code someone shared.</div>
+                <div className="text-[15px] font-semibold tracking-tight text-[#0f2a20]">Join with code</div>
+                <div className="text-[12px] text-[#5b7566]">Enter the link or code someone shared.</div>
               </div>
             </div>
-            <form onSubmit={joinCode} className="mt-5 space-y-3">
+            <form onSubmit={joinCode} className="mt-auto space-y-3 pt-6">
               <Input
                 placeholder="abc-defg-hij"
                 value={code}
@@ -462,6 +530,7 @@ export default function Home() {
               <Button
                 type="submit"
                 block
+                className={EMERALD_BTN}
                 disabled={!code.trim()}
                 rightIcon={<ArrowRight className="h-4 w-4" />}
                 asMotion
@@ -471,23 +540,6 @@ export default function Home() {
             </form>
           </Card>
         </motion.div>
-      </motion.section>
-
-      {/* ============ Secondary actions (colorful tiles) ============ */}
-      <motion.section
-        variants={stagger(0.06)}
-        initial="initial"
-        animate="animate"
-        className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
-      >
-        {SECONDARY_TILES.map((t, i) => (
-          <ActionTile
-            key={t.key}
-            tile={t}
-            index={i + 1}
-            onClick={SECONDARY_ACTIONS[t.key]}
-          />
-        ))}
       </motion.section>
 
       {/* ============ Recent meetings ============ */}
@@ -655,6 +707,40 @@ export default function Home() {
         )}
       </Section>
 
+      {/* ============ Meeting-link modal (Create for later) ============ */}
+      <Modal
+        open={!!laterMeeting}
+        onClose={() => setLaterMeeting(null)}
+        title="Here's your meeting link"
+        description="Copy this link and send it to people you want to meet with. Save it so you can use it later, too."
+        size="sm"
+        footer={<Button onClick={() => setLaterMeeting(null)}>Done</Button>}
+      >
+        {laterMeeting && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 rounded-xl border border-[var(--c-line-strong)] bg-[var(--c-bg-2)] p-2 pl-3.5">
+              <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--c-fg)]">
+                {meetingLink(laterMeeting.code)}
+              </span>
+              <Button
+                size="sm"
+                variant={linkCopied ? 'success' : 'secondary'}
+                onClick={copyMeetingLink}
+                leftIcon={linkCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              >
+                {linkCopied ? 'Copied' : 'Copy'}
+              </Button>
+            </div>
+            <button
+              onClick={() => { const c = laterMeeting.code; setLaterMeeting(null); navigate(`/meet/${c}`) }}
+              className="text-[13px] font-medium text-[var(--c-accent)] transition hover:underline"
+            >
+              Join this meeting now →
+            </button>
+          </div>
+        )}
+      </Modal>
+
       {/* ============ Schedule modal ============ */}
       <Modal
         open={showSchedule}
@@ -815,49 +901,6 @@ export default function Home() {
 }
 
 /* ────────────────────────── pieces ────────────────────────── */
-
-function ActionTile({ tile, index, onClick }) {
-  return (
-    <motion.button
-      variants={fadeUp}
-      whileHover={{ y: -6 }}
-      whileTap={{ scale: 0.97 }}
-      transition={{ type: 'spring', stiffness: 320, damping: 22 }}
-      onClick={onClick}
-      className="group/tile relative isolate flex aspect-[5/3] flex-col justify-between overflow-hidden rounded-2xl p-4 text-left text-white outline-none focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)]"
-      style={{ background: tile.bg }}
-    >
-      {/* Soft hover halo */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute -inset-4 -z-10 opacity-0 blur-2xl transition-opacity duration-300 group-hover/tile:opacity-80"
-        style={{ background: tile.glow }}
-      />
-      {/* Shine sweep */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -translate-x-full bg-[linear-gradient(120deg,transparent_30%,rgba(255,255,255,0.28)_50%,transparent_70%)] transition-transform duration-700 ease-out group-hover/tile:translate-x-full"
-      />
-      <div className="flex items-start justify-between">
-        <motion.span
-          whileHover={{ rotate: -8, scale: 1.08 }}
-          transition={{ type: 'spring', stiffness: 320, damping: 18 }}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur-sm [&_svg]:h-5 [&_svg]:w-5"
-        >
-          {tile.icon}
-        </motion.span>
-        <ArrowUpRight className="h-4 w-4 -translate-y-0 translate-x-0 text-white/70 transition-all duration-200 group-hover/tile:-translate-y-0.5 group-hover/tile:translate-x-0.5 group-hover/tile:text-white" />
-      </div>
-      <div>
-        <div className="text-[10.5px] font-bold tabular-nums tracking-[0.14em] text-white/65">
-          {String(index).padStart(2, '0')}
-        </div>
-        <div className="mt-1 text-[14.5px] font-bold tracking-tight">{tile.title}</div>
-        <div className="text-[11.5px] font-medium leading-snug text-white/80">{tile.desc}</div>
-      </div>
-    </motion.button>
-  )
-}
 
 function Section({ title, sub, action, children }) {
   return (
