@@ -12,14 +12,14 @@ const AUTO_DISMISS_MS = 4500
 
 const TONE_BORDER = {
   ok:    'border-[color-mix(in_srgb,#10b981_35%,transparent)]',
-  ready: 'border-[color-mix(in_srgb,#8a7bff_35%,transparent)]',
+  ready: 'border-[color-mix(in_srgb,#15936b_35%,transparent)]',
   err:   'border-[color-mix(in_srgb,#ef4444_35%,transparent)]',
   info:  'border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)]',
 }
 
 const TONE_ICON_BG = {
   ok:    'linear-gradient(135deg, #10b981, #059669)',
-  ready: 'linear-gradient(135deg, #8a7bff, #d670ff)',
+  ready: 'linear-gradient(135deg, #15936b, #34d399)',
   err:   'linear-gradient(135deg, #ef4444, #dc2626)',
   info:  'var(--accent-gradient)',
   '':    'var(--accent-gradient)',

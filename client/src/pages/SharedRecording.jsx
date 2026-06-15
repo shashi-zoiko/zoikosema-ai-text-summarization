@@ -95,7 +95,7 @@ export default function SharedRecording() {
             style={{
               padding: '10px 16px',
               borderRadius: 10,
-              background: 'var(--c-accent, #5b67f2)',
+              background: 'var(--c-accent, #1f7a54)',
               color: '#fff',
               fontWeight: 600,
               fontSize: 13,

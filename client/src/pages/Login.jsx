@@ -80,7 +80,7 @@ export default function Login() {
               Welcome back
             </h1>
             <p className="mt-1.5 text-[13.5px] font-medium text-[var(--c-fg-muted)]">
-              <span className="bg-[linear-gradient(120deg,#5b67f2,#8a7bff_50%,#d670ff)] bg-clip-text text-transparent">
+              <span className="bg-[linear-gradient(120deg,#1f7a54,#15936b_50%,#34d399)] bg-clip-text text-transparent">
                 Meet · Chat · Collaborate
               </span>
             </p>
@@ -198,7 +198,7 @@ export default function Login() {
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-x-3 -bottom-2 h-8 rounded-full opacity-40 blur-xl transition-opacity duration-300 group-hover/cta:opacity-90"
-                style={{ background: 'linear-gradient(90deg, #5b67f2, #d670ff)' }}
+                style={{ background: 'linear-gradient(90deg, #1f7a54, #34d399)' }}
               />
               <motion.button
                 type="submit"
@@ -206,7 +206,7 @@ export default function Login() {
                 whileHover={{ scale: busy ? 1 : 1.015 }}
                 whileTap={{ scale: busy ? 1 : 0.985 }}
                 transition={{ type: 'spring', stiffness: 360, damping: 22 }}
-                className="group/cta relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(135deg,#5b67f2_0%,#8a7bff_55%,#d670ff_100%)] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(91,103,242,0.55),inset_0_1px_0_rgba(255,255,255,0.22)] outline-none transition-[filter,box-shadow] duration-200 hover:brightness-[1.08] hover:saturate-110 hover:shadow-[0_18px_36px_-10px_rgba(91,103,242,0.65),inset_0_1px_0_rgba(255,255,255,0.28)] focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)] disabled:cursor-not-allowed disabled:opacity-80"
+                className="group/cta relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(135deg,#1f7a54_0%,#15936b_55%,#34d399_100%)] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(31,122,84,0.55),inset_0_1px_0_rgba(255,255,255,0.22)] outline-none transition-[filter,box-shadow] duration-200 hover:brightness-[1.08] hover:saturate-110 hover:shadow-[0_18px_36px_-10px_rgba(31,122,84,0.65),inset_0_1px_0_rgba(255,255,255,0.28)] focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)] disabled:cursor-not-allowed disabled:opacity-80"
               >
                 {/* Shine sweep */}
                 <span

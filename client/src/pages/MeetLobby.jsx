@@ -56,6 +56,8 @@ export default function MeetLobby() {
 
   const [audioOn, setAudioOn] = useState(true)
   const [videoOn, setVideoOn] = useState(true)
+  const audioOnRef = useRef(true)
+  const videoOnRef = useRef(true)
   const [permState, setPermState] = useState(PERM.pending)
   const [permDetail, setPermDetail] = useState('')
 
@@ -85,6 +87,33 @@ export default function MeetLobby() {
   // others stop the stream they just acquired and bail before commit.
   const acquireSeqRef = useRef(0)
 
+  const videoConstraints = useCallback(() => ({
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    frameRate: { ideal: 30 },
+    ...(videoDeviceId ? { deviceId: { exact: videoDeviceId } } : {}),
+  }), [videoDeviceId])
+
+  const applyMediaError = useCallback((e) => {
+    const name = e?.name || ''
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+      setPermState(PERM.denied)
+      setPermDetail('Camera and microphone are blocked. Click the lock icon in your browser address bar to allow them, then click Retry.')
+    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      setPermState(PERM.unavailable)
+      setPermDetail('No camera or microphone detected. Connect one and click Retry.')
+    } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+      setPermState(PERM.unavailable)
+      setPermDetail('Your camera is in use by another application. Close it (Zoom, Teams, etc.) and click Retry.')
+    } else if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+      setPermState(PERM.unavailable)
+      setPermDetail('The selected camera does not support 720p. Pick a different camera below and click Retry.')
+    } else {
+      setPermState(PERM.denied)
+      setPermDetail(e?.message || 'Could not access camera or microphone.')
+    }
+  }, [])
+
   const acquire = useCallback(async () => {
     const seq = ++acquireSeqRef.current
     setPermState((s) => (s === PERM.granted ? s : PERM.pending))
@@ -111,12 +140,7 @@ export default function MeetLobby() {
         autoGainControl: true,
         ...(audioDeviceId ? { deviceId: { exact: audioDeviceId } } : {}),
       },
-      video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 30 },
-        ...(videoDeviceId ? { deviceId: { exact: videoDeviceId } } : {}),
-      },
+      video: videoOnRef.current ? videoConstraints() : false,
     }
 
     try {
@@ -131,8 +155,8 @@ export default function MeetLobby() {
 
       streamRef.current = next
       // Apply current toggle state to fresh tracks.
-      next.getAudioTracks().forEach((t) => (t.enabled = audioOn))
-      next.getVideoTracks().forEach((t) => (t.enabled = videoOn))
+      next.getAudioTracks().forEach((t) => (t.enabled = audioOnRef.current))
+      next.getVideoTracks().forEach((t) => (t.enabled = true))
       setStream(next)
       setPermState(PERM.granted)
       setPermDetail('')
@@ -140,29 +164,43 @@ export default function MeetLobby() {
       refreshDevices()
     } catch (e) {
       if (seq !== acquireSeqRef.current) return
-      const name = e?.name || ''
-      if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
-        setPermState(PERM.denied)
-        setPermDetail('Camera and microphone are blocked. Click the lock icon in your browser address bar to allow them, then click Retry.')
-      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-        setPermState(PERM.unavailable)
-        setPermDetail('No camera or microphone detected. Connect one and click Retry.')
-      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
-        setPermState(PERM.unavailable)
-        setPermDetail('Your camera is in use by another application. Close it (Zoom, Teams, etc.) and click Retry.')
-      } else if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
-        setPermState(PERM.unavailable)
-        setPermDetail('The selected camera does not support 720p. Pick a different camera below and click Retry.')
-      } else {
-        setPermState(PERM.denied)
-        setPermDetail(e?.message || 'Could not access camera or microphone.')
-      }
+      applyMediaError(e)
       setStream(null)
     }
-    // audioOn / videoOn intentionally omitted: changing them doesn't need a
-    // fresh stream, just .enabled = next on the existing tracks.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioDeviceId, videoDeviceId, refreshDevices])
+  }, [audioDeviceId, applyMediaError, refreshDevices, videoConstraints])
+
+  const acquireVideoOnly = useCallback(async () => {
+    const seq = ++acquireSeqRef.current
+    setPermState(PERM.pending)
+
+    try {
+      const cameraStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints() })
+      if (seq !== acquireSeqRef.current || !videoOnRef.current) {
+        cameraStream.getTracks().forEach((t) => { try { t.stop() } catch {} })
+        return
+      }
+
+      const current = streamRef.current || new MediaStream()
+      current.getVideoTracks().forEach((track) => {
+        try { current.removeTrack(track) } catch {}
+        try { track.stop() } catch {}
+      })
+      cameraStream.getVideoTracks().forEach((track) => {
+        track.enabled = true
+        current.addTrack(track)
+      })
+      streamRef.current = current
+      setStream(new MediaStream(current.getTracks()))
+      setPermState(PERM.granted)
+      setPermDetail('')
+      refreshDevices()
+    } catch (e) {
+      if (seq !== acquireSeqRef.current) return
+      videoOnRef.current = false
+      setVideoOn(false)
+      applyMediaError(e)
+    }
+  }, [applyMediaError, refreshDevices, videoConstraints])
 
   // Acquire on mount, re-acquire when device selection changes.
   useEffect(() => {
@@ -195,17 +233,33 @@ export default function MeetLobby() {
     }
   }, [stream])
 
-  // Track toggles flip `.enabled` on existing tracks (no re-acquire). This
-  // is how Meet does it — the camera light stays on but no frames flow.
+  // Keep the mic track live when muted, but fully stop camera tracks when
+  // video is off so the hardware indicator turns off like Google Meet.
   const toggleAudio = () => {
     const next = !audioOn
+    audioOnRef.current = next
     setAudioOn(next)
     streamRef.current?.getAudioTracks().forEach((t) => (t.enabled = next))
   }
   const toggleVideo = () => {
     const next = !videoOn
+    videoOnRef.current = next
     setVideoOn(next)
-    streamRef.current?.getVideoTracks().forEach((t) => (t.enabled = next))
+    if (next) {
+      acquireVideoOnly()
+      return
+    }
+
+    acquireSeqRef.current++
+    const current = streamRef.current
+    if (!current) return
+    current.getVideoTracks().forEach((track) => {
+      try { current.removeTrack(track) } catch {}
+      try { track.stop() } catch {}
+    })
+    const audioOnly = new MediaStream(current.getAudioTracks())
+    streamRef.current = audioOnly
+    setStream(audioOnly)
   }
 
   // Close keepalive ws on unmount.
@@ -298,22 +352,22 @@ export default function MeetLobby() {
   if (waitingStatus === 'pending') {
     return (
       <Shell>
-        <div className="w-full max-w-md rounded-3xl border border-zinc-200 bg-white p-8 text-center shadow-xl dark:border-white/10 dark:bg-[#1f2227]">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#1a73e8] text-white">
+        <div className="zk-glass zk-dock-enter w-full max-w-md rounded-3xl border border-white/60 p-8 text-center">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-b from-[#3b8bff] to-[#1a73e8] text-white shadow-[0_10px_24px_-8px_rgba(26,115,232,0.6)]">
             <Loader2 className="h-7 w-7 animate-spin" />
           </div>
-          <h2 className="mt-5 text-xl font-semibold text-zinc-900 dark:text-zinc-100">Asking to be let in</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+          <h2 className="mt-5 text-xl font-semibold text-zinc-900">Asking to be let in</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-zinc-500">
             You'll join automatically once the host lets you in. This usually takes a few seconds.
           </p>
-          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[12px] dark:border-white/10 dark:bg-white/[0.04]">
+          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[12px]">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-            <span className="text-zinc-500 dark:text-zinc-400">Code</span>
-            <span className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">{code}</span>
+            <span className="text-zinc-500">Code</span>
+            <span className="font-mono font-semibold text-zinc-900">{code}</span>
           </div>
           <button
             onClick={cancelWaiting}
-            className="mt-6 rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-white/15 dark:bg-transparent dark:text-zinc-100 dark:hover:bg-white/5"
+            className="mt-6 rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50"
           >Cancel</button>
         </div>
       </Shell>
@@ -325,10 +379,11 @@ export default function MeetLobby() {
   // ─────────────────────────────────────────────────────────────────
   return (
     <Shell>
-      <div className="mx-auto grid w-full max-w-[1200px] gap-8 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+      <div className="zk-glass zk-dock-enter mx-auto w-full max-w-[1200px] rounded-[28px] border border-white/60 p-5 sm:p-7">
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
         {/* ── Preview ───────────────────────────────────────────── */}
         <div className="flex flex-col gap-4">
-          <div className="relative isolate aspect-video w-full overflow-hidden rounded-2xl bg-[#e8eaed] shadow-xl ring-1 ring-black/[0.06]">
+          <div className="zk-tile zk-tile-spotlight relative isolate aspect-video w-full overflow-hidden rounded-[20px] bg-[#dfe3e8] ring-1 ring-black/[0.05]">
             {/* Video — ALWAYS mounted so the ref is stable. Visibility is
                 controlled with classes, not conditional rendering. */}
             <video
@@ -383,24 +438,25 @@ export default function MeetLobby() {
 
             {/* Name pill (bottom-left) */}
             {user && (
-              <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-md bg-black/55 px-2.5 py-1 text-[12.5px] font-medium text-white backdrop-blur-sm">
+              <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-lg bg-black/45 px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
                 {user.name}
               </div>
             )}
 
             {/* Audio meter (top-right) */}
             {permState === PERM.granted && (
-              <div className="pointer-events-none absolute top-3 right-3 flex h-7 items-center gap-1.5 rounded-md bg-black/55 px-2 backdrop-blur-sm">
-                {audioOn ? <Mic className="h-3.5 w-3.5 text-white" /> : <MicOff className="h-3.5 w-3.5 text-red-400" />}
+              <div className="pointer-events-none absolute top-3 right-3 flex h-7 items-center gap-1.5 rounded-lg bg-black/45 px-2 ring-1 ring-white/10 backdrop-blur-md">
+                {audioOn ? <Mic className="h-3.5 w-3.5 text-emerald-300" /> : <MicOff className="h-3.5 w-3.5 text-red-400" />}
                 <AudioMeter level={audioOn ? audioLevel : 0} />
               </div>
             )}
 
             {/* Mic + Camera toggle dock (center bottom) */}
             <div className="absolute inset-x-0 bottom-4 flex justify-center">
-              <div className="flex items-center gap-3 rounded-full bg-white/85 px-2.5 py-2.5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.4)] ring-1 ring-black/[0.06] backdrop-blur-xl">
+              <div className="zk-dock flex items-center gap-3 rounded-full px-2.5 py-2.5">
                 <ToggleButton
                   on={audioOn}
+                  tone="mic"
                   onClick={toggleAudio}
                   disabled={permState !== PERM.granted}
                   label={audioOn ? 'Turn off microphone' : 'Turn on microphone'}
@@ -409,6 +465,7 @@ export default function MeetLobby() {
                 />
                 <ToggleButton
                   on={videoOn}
+                  tone="cam"
                   onClick={toggleVideo}
                   disabled={permState !== PERM.granted}
                   label={videoOn ? 'Turn off camera' : 'Turn on camera'}
@@ -444,17 +501,17 @@ export default function MeetLobby() {
 
         {/* ── Join panel ───────────────────────────────────────── */}
         <aside className="flex flex-col items-center justify-center text-center">
-          <h1 className="text-[28px] font-medium leading-tight tracking-tight text-zinc-900 dark:text-zinc-100">
+          <h1 className="text-[28px] font-medium leading-tight tracking-tight text-zinc-900">
             {meeting?.title || 'Ready to join?'}
           </h1>
           {user && (
-            <p className="mt-1.5 text-[13.5px] text-zinc-500 dark:text-zinc-400">
-              Joining as <span className="font-medium text-zinc-700 dark:text-zinc-300">{user.name}</span>
+            <p className="mt-1.5 text-[13.5px] text-zinc-500">
+              Joining as <span className="font-medium text-zinc-700">{user.name}</span>
             </p>
           )}
 
           {meeting?.scheduled_at && (
-            <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300">
+            <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-600">
               <Calendar className="h-3.5 w-3.5 text-[#1a73e8]" />
               {new Date(meeting.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
               {meeting.timezone_name ? ` · ${meeting.timezone_name}` : ''}
@@ -462,7 +519,7 @@ export default function MeetLobby() {
           )}
 
           {meeting?.waiting_room_enabled && meeting?.host_id !== user?.id && (
-            <div className="mt-4 flex max-w-md items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left text-[12.5px] text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-300">
+            <div className="mt-4 flex max-w-md items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left text-[12.5px] text-amber-800">
               <Info className="mt-0.5 h-4 w-4 shrink-0" />
               <span>This meeting uses a waiting room — the host will let you in.</span>
             </div>
@@ -470,7 +527,7 @@ export default function MeetLobby() {
 
           {needsPassword && (
             <div className="mt-4 w-full max-w-md">
-              <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 focus-within:border-[#1a73e8] dark:border-white/10 dark:bg-white/[0.04]">
+              <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 focus-within:border-[#1a73e8]">
                 <Lock className="h-4 w-4 shrink-0 text-zinc-400" />
                 <input
                   type="password"
@@ -478,14 +535,14 @@ export default function MeetLobby() {
                   value={meetingPwd}
                   onChange={(e) => setMeetingPwd(e.target.value)}
                   autoComplete="off"
-                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-400 dark:text-zinc-100"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-400"
                 />
               </div>
             </div>
           )}
 
           {err && (
-            <div className="mt-4 flex max-w-md items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-left text-[12.5px] text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-300">
+            <div className="mt-4 flex max-w-md items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-left text-[12.5px] text-red-700">
               <X className="mt-0.5 h-4 w-4 shrink-0" />
               <span className="font-medium">{err}</span>
             </div>
@@ -496,20 +553,20 @@ export default function MeetLobby() {
             <button
               onClick={join}
               disabled={!meeting || (needsPassword && !meetingPwd) || permState === PERM.pending}
-              className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-[#1a73e8] px-6 text-[15px] font-medium text-white shadow-sm transition hover:bg-[#1765c1] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+              className="zk-press inline-flex h-12 items-center justify-center gap-2 rounded-full bg-gradient-to-b from-[#3b8bff] to-[#1a73e8] px-6 text-[15px] font-medium text-white shadow-[0_10px_26px_-8px_rgba(26,115,232,0.65),inset_0_1px_0_rgba(255,255,255,0.25)] hover:from-[#3b8bff] hover:to-[#1765c1] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
               <Video className="h-4 w-4" /> Join now
             </button>
             <button
               onClick={() => navigate('/')}
-              className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 bg-white px-6 text-[14px] font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-white/15 dark:bg-transparent dark:text-zinc-100 dark:hover:bg-white/5"
+              className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 bg-white px-6 text-[14px] font-medium text-zinc-800 transition hover:bg-zinc-50"
             >Cancel</button>
           </div>
 
           {/* Share link */}
-          <div className="mt-6 flex w-full max-w-md items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/[0.03]">
+          <div className="mt-6 flex w-full max-w-md items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2">
             <LinkIcon className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-            <code className="min-w-0 flex-1 truncate text-left font-mono text-[12px] text-zinc-500 dark:text-zinc-400">
+            <code className="min-w-0 flex-1 truncate text-left font-mono text-[12px] text-zinc-500">
               {`${window.location.origin}/meet/${code}`}
             </code>
             <button
@@ -517,14 +574,15 @@ export default function MeetLobby() {
               className={
                 'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11.5px] font-medium transition ' +
                 (copied
-                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                  : 'text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-white/5')
+                  ? 'bg-emerald-500/15 text-emerald-600'
+                  : 'text-zinc-500 hover:bg-zinc-100')
               }
             >
               {copied ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
             </button>
           </div>
         </aside>
+      </div>
       </div>
     </Shell>
   )
@@ -536,15 +594,15 @@ export default function MeetLobby() {
 
 function Shell({ children }) {
   return (
-    <div className="relative flex min-h-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-[#0f1217] dark:text-zinc-100">
-      <header className="flex h-14 shrink-0 items-center justify-between px-6">
+    <div className="zk-room-bg relative flex min-h-screen flex-col text-zinc-900">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/60 bg-white/70 px-6 backdrop-blur-xl">
         <div className="flex items-center gap-2">
           <div className="grid h-8 w-8 place-items-center rounded-lg bg-[#1a73e8] text-white">
             <Video className="h-4 w-4" />
           </div>
           <span className="text-[15px] font-medium tracking-tight">Zoiko Meet</span>
         </div>
-        <div className="inline-flex items-center gap-1.5 text-[12.5px] text-zinc-500 dark:text-zinc-400">
+        <div className="inline-flex items-center gap-1.5 text-[12.5px] text-zinc-500">
           <Clock className="h-3.5 w-3.5" />
           {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
@@ -556,7 +614,11 @@ function Shell({ children }) {
   )
 }
 
-function ToggleButton({ on, onClick, disabled, label, iconOn, iconOff }) {
+function ToggleButton({ on, tone, onClick, disabled, label, iconOn, iconOff }) {
+  const onPalette = tone === 'cam'
+    ? 'bg-blue-600/[0.13] text-blue-700 hover:bg-blue-600/[0.2] shadow-[0_0_0_1px_rgba(37,99,235,0.22),0_6px_18px_-8px_rgba(37,99,235,0.5)]'
+    : 'bg-emerald-500/[0.14] text-emerald-700 hover:bg-emerald-500/[0.22] shadow-[0_0_0_1px_rgba(16,163,74,0.22),0_6px_18px_-8px_rgba(16,163,74,0.5)]'
+  const offPalette = 'bg-[#ea4335]/[0.14] text-[#d93829] hover:bg-[#ea4335]/[0.22] shadow-[0_0_0_1px_rgba(234,67,53,0.24),0_6px_18px_-8px_rgba(234,67,53,0.5)]'
   return (
     <button
       onClick={onClick}
@@ -565,11 +627,9 @@ function ToggleButton({ on, onClick, disabled, label, iconOn, iconOff }) {
       title={label}
       aria-pressed={!on}
       className={
-        'grid h-[52px] w-[52px] place-items-center rounded-full transition active:scale-[0.94] disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 ' +
-        (on
-          ? 'text-[#444746] hover:bg-black/[0.06] hover:text-[#1f1f1f]'
-          : 'bg-[#ea4335] text-white shadow-[0_4px_12px_-4px_rgba(234,67,53,0.6)] hover:bg-[#d93829]')
+        'zk-press grid h-[52px] w-[52px] place-items-center rounded-full disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-white ' +
+        (on ? onPalette : offPalette)
       }
     >{on ? iconOn : iconOff}</button>
   )
@@ -620,16 +680,16 @@ function DevicePicker({ label, icon, devices, value, onChange, disabled, fallbac
     <label
       className={
         'relative flex h-12 cursor-pointer items-center gap-2.5 rounded-full border bg-white px-4 transition ' +
-        'border-zinc-200 hover:border-zinc-300 dark:border-white/10 dark:bg-white/[0.04] dark:hover:border-white/20 ' +
+        'border-zinc-200 hover:border-zinc-300 ' +
         (disabled ? 'pointer-events-none cursor-not-allowed opacity-50' : '')
       }
     >
-      <span className="grid h-7 w-7 place-items-center rounded-full bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-300">
+      <span className="grid h-7 w-7 place-items-center rounded-full bg-zinc-100 text-zinc-500">
         {icon}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-500">{label}</div>
-        <div className="truncate text-[13px] text-zinc-800 dark:text-zinc-100">{display}</div>
+        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-500">{label}</div>
+        <div className="truncate text-[13px] text-zinc-800">{display}</div>
       </div>
       <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" />
       <select

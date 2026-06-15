@@ -10,7 +10,7 @@ import { PinButton, PinnedNameIcon } from '../components/meeting/PinControls'
 import {
   Check, Copy, Lock, ShieldCheck, Crown, MicOff, VideoOff, MonitorUp, MonitorX, Hand,
   X, Send, MessageSquare, Users, Settings as SettingsIcon, Clock,
-  PhoneOff,
+  PhoneOff, Search, UserPlus, Mic, Volume2,
 } from 'lucide-react'
 
 // STUN handles the common case (cone NAT). A TURN relay is REQUIRED for
@@ -111,6 +111,7 @@ export default function MeetRoom() {
   const [screenOn, setScreenOn] = useState(false)
   const [handRaised, setHandRaised] = useState(false)
   const [sidebar, setSidebar] = useState(null)
+  const [peopleQuery, setPeopleQuery] = useState('')
   const [chatMessages, setChatMessages] = useState([])
   const [chatDraft, setChatDraft] = useState('')
   const [reactions, setReactions] = useState([])
@@ -1772,7 +1773,7 @@ export default function MeetRoom() {
     : ''
 
   return (
-    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#f1f3f4] text-[#202124]">
+    <div className="zk-room-bg relative flex h-screen w-screen flex-col overflow-hidden text-[#202124]">
       {/* ── Top bar ──────────────────────────────────────────────── */}
       {/* No border / no background — sits transparently over the stage like
           Meet does. Recording / lock pills float on the left, code + copy
@@ -1829,14 +1830,17 @@ export default function MeetRoom() {
             so users never have to hunt for how to end a share. */}
         {screenOn && (
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
-            <div className="pointer-events-auto flex items-center gap-3 rounded-full bg-white/95 py-1.5 pl-4 pr-1.5 text-sm text-[#202124] shadow-lg ring-1 ring-black/[0.06] backdrop-blur">
-              <span className="inline-flex items-center gap-2">
-                <MonitorUp className="h-4 w-4 text-[#1a73e8]" />
+            <div className="zk-glass zk-toast-in pointer-events-auto flex items-center gap-3 rounded-full border border-black/[0.06] py-1.5 pl-4 pr-1.5 text-sm text-[#202124]">
+              <span className="inline-flex items-center gap-2 font-medium">
+                <span className="relative grid h-2 w-2 place-items-center">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-500 opacity-70" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
+                </span>
                 You’re presenting
               </span>
               <button
                 onClick={stopScreenShare}
-                className="inline-flex items-center gap-1.5 rounded-full bg-[#ea4335] px-3 py-1.5 text-[13px] font-medium text-white transition hover:bg-[#f25c52]"
+                className="zk-press inline-flex items-center gap-1.5 rounded-full bg-gradient-to-b from-[#f0584c] to-[#d93829] px-3 py-1.5 text-[13px] font-medium text-white shadow-[0_6px_16px_-6px_rgba(234,67,53,0.7)] hover:from-[#f0584c] hover:to-[#c5301f]"
               >
                 <MonitorX className="h-4 w-4" />
                 Stop presenting
@@ -1846,7 +1850,7 @@ export default function MeetRoom() {
         )}
 
         {sidebar && (
-          <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_-16px_rgba(0,0,0,0.25)] ring-1 ring-black/[0.06]">
+          <aside className="zk-glass m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl ring-1 ring-black/[0.06]">
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-4">
               <h2 className="text-[15px] font-medium text-[#202124]">{sidebarTitle}</h2>
               <button
@@ -1860,30 +1864,55 @@ export default function MeetRoom() {
 
             {sidebar === 'chat' && (
               <>
-                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+                <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
                   {chatMessages.length === 0 && (
-                    <p className="px-2 py-6 text-center text-[13px] text-[#5f6368]">
-                      Messages can be seen only by people in the call and are deleted when the call ends.
-                    </p>
-                  )}
-                  {chatMessages.map((m, i) => (
-                    <div key={i} className="text-[13px]">
-                      <div className="mb-0.5 flex items-baseline gap-2">
-                        <span className="font-semibold text-[#202124]" style={{ color: m.color }}>{m.name}</span>
-                        <span className="text-[11px] text-[#5f6368]">
-                          {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
+                    <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+                      <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[#1a73e8]/10 text-[#1a73e8]">
+                        <MessageSquare className="h-5 w-5" />
                       </div>
-                      <div className="rounded-2xl rounded-tl-md bg-[#f1f3f4] px-3 py-2 leading-snug text-[#202124]">{m.body}</div>
+                      <p className="text-[13px] leading-relaxed text-[#5f6368]">
+                        Messages are visible only to people in the call and are deleted when the call ends.
+                      </p>
                     </div>
-                  ))}
+                  )}
+                  {chatMessages.map((m, i) => {
+                    const prev = chatMessages[i - 1]
+                    const grouped = prev && prev.name === m.name
+                      && (new Date(m.created_at) - new Date(prev.created_at)) < 5 * 60 * 1000
+                    const initial = (m.name || '?').trim().charAt(0).toUpperCase() || '?'
+                    return (
+                      <div key={i} className={'flex gap-2.5 px-1 ' + (grouped ? 'mt-0.5' : 'mt-3')}>
+                        {grouped ? (
+                          <div className="w-8 shrink-0" />
+                        ) : (
+                          <div
+                            className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full text-[12px] font-semibold text-white shadow-sm ring-1 ring-white/30"
+                            style={{ backgroundColor: m.color || '#3a6ff3' }}
+                          >{initial}</div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          {!grouped && (
+                            <div className="mb-1 flex items-baseline gap-2">
+                              <span className="text-[13px] font-semibold text-[#202124]">{m.name}</span>
+                              <span className="text-[11px] text-[#9aa0a6]">
+                                {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                          )}
+                          <div className="w-fit max-w-full rounded-2xl rounded-tl-md bg-white px-3 py-2 text-[13px] leading-snug text-[#202124] shadow-sm ring-1 ring-black/[0.05]">
+                            {m.body}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
                   <div ref={chatEndRef} />
                 </div>
                 {(() => {
                   const chatBlocked = !chatEnabled && !isHostOrCohost
                   return (
                     <div className="shrink-0 border-t border-black/[0.06] p-3">
-                      <div className="flex items-center gap-2 rounded-full border border-black/[0.08] bg-[#f1f3f4] px-3 py-1.5 focus-within:border-[#1a73e8]">
+                      <div className="flex items-center gap-2 rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 shadow-sm transition focus-within:border-[#1a73e8] focus-within:ring-2 focus-within:ring-[#1a73e8]/15">
                         <input
                           placeholder={chatBlocked ? 'Chat is disabled by the host' : 'Send a message'}
                           value={chatDraft}
@@ -1896,7 +1925,7 @@ export default function MeetRoom() {
                           onClick={sendChat}
                           disabled={chatBlocked || !chatDraft.trim()}
                           aria-label="Send"
-                          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#1a73e8] transition enabled:hover:bg-[#1a73e8]/10 disabled:opacity-40"
+                          className="zk-press grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-b from-[#3b8bff] to-[#1a73e8] text-white shadow-[0_4px_12px_-4px_rgba(26,115,232,0.6)] disabled:from-[#c8d2e0] disabled:to-[#c8d2e0] disabled:shadow-none disabled:hover:translate-y-0"
                         >
                           <Send className="h-4 w-4" />
                         </button>
@@ -1907,8 +1936,37 @@ export default function MeetRoom() {
               </>
             )}
 
-            {sidebar === 'people' && (
-              <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+            {sidebar === 'people' && (() => {
+              const q = peopleQuery.trim().toLowerCase()
+              const selfMatches = !q || `${user.name} (you)`.includes(q)
+              const filteredPeers = peerList.filter((p) => !q || (p.name || '').toLowerCase().includes(q))
+              return (
+              <div className="flex min-h-0 flex-1 flex-col">
+                {/* Sticky search + invite */}
+                <div className="shrink-0 space-y-2 px-3 pb-2 pt-3">
+                  <div className="flex items-center gap-2 rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 shadow-sm transition focus-within:border-[#1a73e8] focus-within:ring-2 focus-within:ring-[#1a73e8]/15">
+                    <Search className="h-4 w-4 shrink-0 text-[#9aa0a6]" />
+                    <input
+                      value={peopleQuery}
+                      onChange={(e) => setPeopleQuery(e.target.value)}
+                      placeholder="Search people"
+                      className="min-w-0 flex-1 bg-transparent text-[13px] text-[#202124] placeholder:text-[#9aa0a6] outline-none"
+                    />
+                    {peopleQuery && (
+                      <button onClick={() => setPeopleQuery('')} aria-label="Clear search" className="grid h-5 w-5 place-items-center rounded-full text-[#9aa0a6] hover:bg-black/[0.06]">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    onClick={copyInvite}
+                    className="zk-press flex w-full items-center justify-center gap-2 rounded-full border border-[#1a73e8]/25 bg-[#1a73e8]/[0.08] px-3 py-2 text-[13px] font-medium text-[#1a73e8] hover:bg-[#1a73e8]/[0.14]"
+                  >
+                    {inviteCopied ? <><Check className="h-4 w-4" /> Invite link copied</> : <><UserPlus className="h-4 w-4" /> Add people</>}
+                  </button>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
                 {isHostOrCohost && waitingList.length > 0 && (
                   <div className="mb-3 rounded-xl bg-amber-500/[0.1] p-2 ring-1 ring-amber-500/25">
                     <div className="flex items-center justify-between px-2 py-1">
@@ -1930,7 +1988,7 @@ export default function MeetRoom() {
                             <button
                               onClick={() => admitUser(w.user_id)}
                               title="Admit"
-                              className="grid h-7 w-7 place-items-center rounded-full text-emerald-400 hover:bg-emerald-400/15"
+                              className="grid h-7 w-7 place-items-center rounded-full text-emerald-500 hover:bg-emerald-500/15"
                             ><Check className="h-3.5 w-3.5" /></button>
                             <button
                               onClick={() => denyUser(w.user_id)}
@@ -1945,22 +2003,26 @@ export default function MeetRoom() {
                 )}
 
                 <div className="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">
-                  In the meeting
+                  In the meeting · {tileCount}
                 </div>
 
+                {selfMatches && (
                 <ParticipantRow
                   name={`${user.name} (You)`}
                   color={user.avatar_color}
                   role={isHost ? 'host' : myRole === 'co_host' ? 'co_host' : null}
+                  speaking={speakingPeers.has('self')}
                   states={{ audio: audioOn, video: videoOn, screen: screenOn, hand: handRaised }}
                 />
+                )}
 
-                {peerList.map((p) => (
+                {filteredPeers.map((p) => (
                   <ParticipantRow
                     key={p.peer_id}
                     name={p.name}
                     color={p.color}
                     role={p.role}
+                    speaking={speakingPeers.has(p.peer_id)}
                     states={{ audio: p.audio !== false, video: p.video !== false, screen: !!p.screen, hand: !!p.hand }}
                     actions={isHostOrCohost && p.user_id ? (
                       <>
@@ -2011,48 +2073,54 @@ export default function MeetRoom() {
                     )}
                   </div>
                 )}
+                </div>
               </div>
-            )}
+              )
+            })()}
 
             {sidebar === 'settings' && (
-              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4">
-                <div>
-                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">Camera</label>
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+                <SettingsCard icon={<MonitorUp className="h-4 w-4" />} tint="#1a73e8" label="Camera">
                   <select
                     value={videoDeviceId}
                     onChange={(e) => switchVideoDevice(e.target.value)}
-                    className="w-full rounded-lg border border-black/[0.08] bg-[#f1f3f4] px-3 py-2 text-sm text-[#202124] focus:border-[#1a73e8] focus:outline-none"
+                    className="w-full appearance-none rounded-xl border border-black/[0.08] bg-white/80 px-3 py-2.5 text-sm text-[#202124] shadow-sm transition focus:border-[#1a73e8] focus:outline-none focus:ring-2 focus:ring-[#1a73e8]/15"
                   >
                     {devices.video.length === 0 && <option value="">No cameras found</option>}
                     {devices.video.map((d) => (
                       <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${d.deviceId.slice(0, 8)}`}</option>
                     ))}
                   </select>
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">Microphone</label>
+                </SettingsCard>
+
+                <SettingsCard icon={<Mic className="h-4 w-4" />} tint="#16a34a" label="Microphone">
                   <select
                     value={audioDeviceId}
                     onChange={(e) => switchAudioDevice(e.target.value)}
-                    className="w-full rounded-lg border border-black/[0.08] bg-[#f1f3f4] px-3 py-2 text-sm text-[#202124] focus:border-[#1a73e8] focus:outline-none"
+                    className="w-full appearance-none rounded-xl border border-black/[0.08] bg-white/80 px-3 py-2.5 text-sm text-[#202124] shadow-sm transition focus:border-[#1a73e8] focus:outline-none focus:ring-2 focus:ring-[#1a73e8]/15"
                   >
                     {devices.audio.length === 0 && <option value="">No microphones found</option>}
                     {devices.audio.map((d) => (
                       <option key={d.deviceId} value={d.deviceId}>{d.label || `Mic ${d.deviceId.slice(0, 8)}`}</option>
                     ))}
                   </select>
-                </div>
-                <div className="rounded-lg border border-black/[0.06] bg-[#f1f3f4] p-3">
-                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">Stream quality</div>
-                  <div className="flex items-center gap-2 text-sm text-[#202124]">
+                </SettingsCard>
+
+                <SettingsCard icon={<Volume2 className="h-4 w-4" />} tint="#7c3aed" label="Stream quality">
+                  <div className="flex items-center gap-2.5 rounded-xl border border-black/[0.06] bg-white/60 px-3 py-2.5 text-sm text-[#202124]">
                     <span className={
-                      'inline-block h-2 w-2 rounded-full ' +
+                      'relative grid h-2.5 w-2.5 place-items-center rounded-full ' +
                       (qualityLevel === 'high' ? 'bg-emerald-500' : qualityLevel === 'medium' ? 'bg-amber-500' : 'bg-[#ea4335]')
-                    } />
-                    {qualityLevel === 'high' ? '720p HD' : qualityLevel === 'medium' ? '480p SD' : '240p'}
-                    <span className="ml-1 text-[11.5px] text-[#5f6368]">(adapts to network)</span>
+                    }>
+                      <span className={
+                        'absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ' +
+                        (qualityLevel === 'high' ? 'bg-emerald-500' : qualityLevel === 'medium' ? 'bg-amber-500' : 'bg-[#ea4335]')
+                      } />
+                    </span>
+                    <span className="font-medium">{qualityLevel === 'high' ? '720p HD' : qualityLevel === 'medium' ? '480p SD' : '240p'}</span>
+                    <span className="ml-auto text-[11.5px] text-[#9aa0a6]">adapts to network</span>
                   </div>
-                </div>
+                </SettingsCard>
               </div>
             )}
           </aside>
@@ -2118,7 +2186,7 @@ export default function MeetRoom() {
           {reactions.map((r) => (
             <span
               key={r.id}
-              className="zk-reaction-rise absolute bottom-24 select-none text-4xl"
+              className="zk-reaction-rise absolute bottom-28 select-none text-5xl drop-shadow-[0_6px_16px_rgba(0,0,0,0.25)]"
               style={{ left: `${r.left}%` }}
             >{r.emoji}</span>
           ))}
@@ -2127,10 +2195,12 @@ export default function MeetRoom() {
 
       {/* ── Toast ───────────────────────────────────────────────── */}
       {permissionToast && (
-        <div
-          role="alert"
-          className="pointer-events-none absolute left-1/2 top-20 z-40 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-medium text-[#202124] ring-1 ring-black/[0.08] shadow-lg"
-        >{permissionToast}</div>
+        <div className="pointer-events-none absolute left-1/2 top-20 z-40 -translate-x-1/2">
+          <div
+            role="alert"
+            className="zk-glass zk-toast-in rounded-full border border-black/[0.06] px-4 py-2 text-sm font-medium text-[#202124]"
+          >{permissionToast}</div>
+        </div>
       )}
     </div>
   )
@@ -2168,8 +2238,9 @@ const SelfTile = memo(function SelfTile({
   return (
     <div
       className={
-        'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#e8eaed] ' +
-        (speaking ? 'ring-2 ring-[#1a73e8]' : 'ring-1 ring-black/[0.06]')
+        'zk-tile relative isolate flex h-full w-full overflow-hidden rounded-[20px] bg-[#dfe3e8] ' +
+        (speaking ? 'zk-tile-speaking ' : 'ring-1 ring-black/[0.06] ') +
+        (isSpotlight ? 'zk-tile-spotlight' : '')
       }
     >
       {showVideo ? (
@@ -2200,14 +2271,14 @@ const SelfTile = memo(function SelfTile({
       )}
 
       {handRaised && !isMini && (
-        <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow-md">
-          <Hand className="h-4 w-4" />
+        <div className="absolute left-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-gradient-to-b from-amber-300 to-amber-400 text-amber-950 shadow-[0_4px_12px_-3px_rgba(217,119,6,0.6),inset_0_1px_0_rgba(255,255,255,0.5)] ring-1 ring-white/40">
+          <Hand className="h-[18px] w-[18px]" />
         </div>
       )}
 
       {!audioOn && !isMini && (
-        <div className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm" title="You are muted">
-          <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />
+        <div className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/45 text-white shadow-sm ring-1 ring-white/15 backdrop-blur-md" title="You are muted">
+          <MicOff className="h-4 w-4 text-[#ff6b5e]" />
         </div>
       )}
 
@@ -2219,8 +2290,13 @@ const SelfTile = memo(function SelfTile({
         groupName="tile"
       />
 
+      {/* Bottom scrim for name legibility over bright video. */}
+      {showVideo && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/35 to-transparent" />
+      )}
+
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
-        <div className="flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
+        <div className="flex items-center gap-1.5 rounded-lg bg-black/45 px-2.5 py-1 text-xs font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
           {pinned && <PinnedNameIcon mini={isMini} />}
           <span className="truncate">{name} (You){screenOn ? ' · Presenting' : ''}</span>
           {isHost && <Crown className="h-3 w-3 text-amber-300" />}
@@ -2236,14 +2312,24 @@ const SelfTile = memo(function SelfTile({
   )
 })
 
-function ParticipantRow({ name, color, role, states, actions }) {
+function ParticipantRow({ name, color, role, states, speaking = false, actions }) {
   const initial = (name || '?').trim().charAt(0).toUpperCase() || '?'
   return (
-    <div className="group flex items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-black/[0.04]">
-      <div
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[13px] font-semibold text-white"
-        style={{ backgroundColor: color || '#3a6ff3' }}
-      >{initial}</div>
+    <div className="group flex items-center gap-3 rounded-xl px-2 py-1.5 transition-colors hover:bg-black/[0.04]">
+      <div className="relative shrink-0">
+        <div
+          className={
+            'grid h-9 w-9 place-items-center rounded-full text-[13px] font-semibold text-white shadow-sm ring-1 ring-white/30 ' +
+            (speaking ? 'ring-2 ring-emerald-400 ring-offset-1 ring-offset-white' : '')
+          }
+          style={{ backgroundColor: color || '#3a6ff3' }}
+        >{initial}</div>
+        {speaking && (
+          <span className="absolute -bottom-0.5 -right-0.5 grid h-3.5 w-3.5 place-items-center rounded-full bg-emerald-500 text-white ring-2 ring-white">
+            <Volume2 className="h-2 w-2" />
+          </span>
+        )}
+      </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-[#202124]">
           <span className="truncate">{name}</span>
@@ -2252,15 +2338,29 @@ function ParticipantRow({ name, color, role, states, actions }) {
         </div>
       </div>
       {states && (
-        <div className="flex items-center gap-1 text-[#5f6368]">
-          {states.hand && <Hand className="h-3.5 w-3.5 text-amber-500" />}
-          {states.screen && <MonitorUp className="h-3.5 w-3.5 text-[#1a73e8]" />}
-          {!states.audio && <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />}
-          {!states.video && <VideoOff className="h-3.5 w-3.5 text-[#9aa0a6]" />}
+        <div className="flex items-center gap-1">
+          {states.hand && <StatusChip tone="amber" title="Hand raised"><Hand className="h-3.5 w-3.5" /></StatusChip>}
+          {states.screen && <StatusChip tone="violet" title="Presenting"><MonitorUp className="h-3.5 w-3.5" /></StatusChip>}
+          {states.audio
+            ? <StatusChip tone="ghost" title="Mic on"><Mic className="h-3.5 w-3.5" /></StatusChip>
+            : <StatusChip tone="red" title="Muted"><MicOff className="h-3.5 w-3.5" /></StatusChip>}
+          {!states.video && <StatusChip tone="ghost" title="Camera off"><VideoOff className="h-3.5 w-3.5" /></StatusChip>}
         </div>
       )}
       {actions && <div className="ml-1 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">{actions}</div>}
     </div>
+  )
+}
+
+function StatusChip({ tone, title, children }) {
+  const palette = tone === 'amber' ? 'bg-amber-500/15 text-amber-600'
+    : tone === 'violet' ? 'bg-violet-500/15 text-violet-600'
+    : tone === 'red' ? 'bg-[#ea4335]/12 text-[#ea4335]'
+    : 'text-[#9aa0a6]'
+  return (
+    <span title={title} className={'grid h-6 w-6 place-items-center rounded-full ' + palette}>
+      {children}
+    </span>
   )
 }
 
@@ -2269,13 +2369,33 @@ function HostButton({ active, onClick, icon, label }) {
     <button
       onClick={onClick}
       className={
-        'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ' +
+        'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ' +
         (active ? 'bg-[#c2e7ff]/50 text-[#0b57d0]' : 'text-[#202124] hover:bg-black/[0.05]')
       }
     >
       <span className="grid h-8 w-8 place-items-center rounded-lg bg-black/[0.04]">{icon}</span>
       <span className="flex-1 truncate">{label}</span>
     </button>
+  )
+}
+
+/**
+ * Settings section card — a glass surface with a tinted icon header. Groups a
+ * single device select / control so the panel reads as discrete enterprise
+ * settings cards rather than a flat list of selects.
+ */
+function SettingsCard({ icon, tint, label, children }) {
+  return (
+    <div className="rounded-2xl border border-black/[0.05] bg-white/55 p-3 shadow-sm">
+      <div className="mb-2 flex items-center gap-2">
+        <span
+          className="grid h-7 w-7 place-items-center rounded-lg text-white"
+          style={{ background: `linear-gradient(180deg, ${tint}, color-mix(in srgb, ${tint} 78%, #000))` }}
+        >{icon}</span>
+        <span className="text-[12px] font-semibold uppercase tracking-wider text-[#5f6368]">{label}</span>
+      </div>
+      {children}
+    </div>
   )
 }
 

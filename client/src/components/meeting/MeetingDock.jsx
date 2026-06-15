@@ -6,27 +6,26 @@ import {
 } from 'lucide-react'
 
 /**
- * Meeting bottom dock — light theme, floating capsule.
+ * Meeting bottom dock — elevated light theme, floating glass capsule.
  *
- * Controls live in one floating white capsule that hovers over the (light)
- * stage. Buttons are large 52×52 circles — flush (transparent on the capsule,
- * filling on hover) like Meet / Teams / Zoom — with crisp dark icons. Mic and
- * camera each carry a slim caret that opens the device picker; a hairline
- * divider sets the red Leave button apart on the right. The clock/code (left)
- * and people/chat (right) sit as quiet side clusters and collapse on small
- * screens so the capsule stays centred.
+ * Controls live in one frosted-glass capsule (`.zk-dock`) that hovers over the
+ * ambient stage. Buttons are 52×52 circles with MEANINGFUL colour states:
+ *   mic        green when live, red when muted
+ *   camera     blue when on,    red when off
+ *   present    purple gradient + glow while sharing
+ *   raise hand cyan when raised
+ *   reactions  amber when the picker is open
+ *   captions / more   neutral glass → Meet-blue when active
+ *   leave      red gradient pill, larger than the rest, hover lift
  *
- * Design tokens (single, light theme — no dark variant):
- *   capsule       white/85 + blur, hairline ring, soft elevation
- *   button        flush transparent → black/6 on hover, ink-grey icon
- *   active         Meet selected blue  (#c2e7ff / #001d35)
- *   muted/off     solid red (#ea4335) — the one safety signal we keep
- *   leave         solid red pill, phone tilted 135°
+ * Every control lifts on hover and settles on press (`.zk-press`). Mic/camera
+ * carry a slim caret that opens the device picker; a hairline divider sets the
+ * Leave button apart. Clock/code (left) and people/chat (right) collapse on
+ * small screens so the capsule stays centred.
  *
  * Props are a superset of what either room needs — MeetRoom (mesh) and
  * MeetRoomLivekit feed the same dock. Optional slots (`extraCenterSlot`,
- * `extraRightSlot`) let the LiveKit room hang extras (recording, waiting room,
- * whiteboard) without forking the component.
+ * `extraRightSlot`) let the LiveKit room hang extras without forking.
  */
 function MeetingDock({
   clock, code,
@@ -52,27 +51,22 @@ function MeetingDock({
 
   return (
     <footer
-      className="relative z-30 grid h-[92px] shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 bg-transparent px-3 sm:px-5"
+      className="relative z-30 grid h-[96px] shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 bg-transparent px-3 sm:px-5"
       role="toolbar"
       aria-label="Meeting controls"
     >
       {/* ── Left: clock + code ───────────────────────────────────── */}
       <div className="hidden items-center gap-2.5 text-[13.5px] text-[#5f6368] md:flex">
         <span className="font-medium tabular-nums">{clock}</span>
-        <span className="text-[#9aa0a6]">|</span>
+        <span className="text-[#bcc0c6]">|</span>
         <span className="text-[#444746]">{code}</span>
       </div>
 
-      {/* ── Center: floating capsule ─────────────────────────────── */}
-      <div
-        className={
-          'flex items-center justify-self-center gap-1 rounded-full border border-black/[0.06] bg-white/85 p-2 ' +
-          'backdrop-blur-xl backdrop-saturate-150 ' +
-          'shadow-[0_14px_38px_-12px_rgba(0,0,0,0.28),0_2px_6px_-2px_rgba(0,0,0,0.12)]'
-        }
-      >
+      {/* ── Center: floating glass capsule ───────────────────────── */}
+      <div className="zk-dock zk-dock-enter flex items-center justify-self-center gap-1 rounded-[26px] p-2">
         <ComboPill
           on={audioOn}
+          tone="mic"
           onToggle={toggleAudio}
           label={audioOn ? 'Turn off microphone' : 'Turn on microphone'}
           kbd="ctrl+d"
@@ -83,6 +77,7 @@ function MeetingDock({
 
         <ComboPill
           on={videoOn}
+          tone="cam"
           onToggle={toggleVideo}
           label={videoOn ? 'Turn off camera' : 'Turn on camera'}
           kbd="ctrl+e"
@@ -92,7 +87,7 @@ function MeetingDock({
         />
 
         {/* Present now → straight to the browser-native share dialog. While
-            presenting this turns red as "Stop presenting". */}
+            presenting this glows purple; the icon flips to "stop". */}
         <RoundBtn
           label={
             sharingBlocked ? 'Screen sharing disabled by host'
@@ -102,7 +97,7 @@ function MeetingDock({
           onClick={screenOn ? stopScreenShare : startScreenShare}
           disabled={sharingBlocked}
           active={screenOn}
-          danger={screenOn}
+          tone="share"
         >
           {screenOn ? <MonitorX /> : <MonitorUp />}
         </RoundBtn>
@@ -121,6 +116,7 @@ function MeetingDock({
           label={handRaised ? 'Lower hand' : 'Raise hand'}
           onClick={toggleHand}
           active={handRaised}
+          tone="hand"
         >
           <Hand />
         </RoundBtn>
@@ -129,6 +125,7 @@ function MeetingDock({
           label="Send a reaction"
           onClick={() => setShowEmoji(!showEmoji)}
           active={showEmoji}
+          tone="react"
           popoverOpen={showEmoji}
           popover={
             <ReactionPicker
@@ -156,7 +153,7 @@ function MeetingDock({
         />
 
         {/* Hairline divider, then Leave. */}
-        <span aria-hidden className="mx-1.5 h-8 w-px rounded-full bg-black/10" />
+        <span aria-hidden className="mx-1.5 h-9 w-px rounded-full bg-black/10" />
         <LeaveBtn onClick={leave} />
       </div>
 
@@ -192,26 +189,34 @@ function MeetingDock({
 export default memo(MeetingDock)
 
 /* ────────────────────────────────────────────────────────────────────────
- * Shared button class strings — every control in the capsule reads as one
- * material. `BTN` is the 52px round shell; the palettes layer on top.
+ * Shared button shell + colour palettes. Every control reads as one material;
+ * the palette layers meaning on top. `.zk-press` gives the hover-lift / press.
  * ──────────────────────────────────────────────────────────────────────── */
 
 const BTN =
-  'relative grid h-[52px] w-[52px] place-items-center rounded-full ' +
-  'transition-[background,color,box-shadow,transform] duration-150 active:scale-[0.94] ' +
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 ' +
+  'zk-press relative grid h-[52px] w-[52px] place-items-center rounded-full ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-white ' +
   '[&_svg]:h-[22px] [&_svg]:w-[22px]'
 
 const BTN_NEUTRAL = 'text-[#444746] hover:bg-black/[0.06] hover:text-[#1f1f1f]'
-const BTN_ACTIVE  = 'bg-[#c2e7ff] text-[#001d35] hover:bg-[#aed6fb]'
-const BTN_DANGER  = 'bg-[#ea4335] text-white shadow-[0_4px_12px_-4px_rgba(234,67,53,0.6)] hover:bg-[#d93829]'
+const BTN_ACTIVE  = 'bg-[#c2e7ff] text-[#001d35] hover:bg-[#aed6fb] shadow-[0_0_0_1px_rgba(26,115,232,0.18),0_6px_16px_-8px_rgba(26,115,232,0.5)]'
+
+// Mic live → green; off → red tint. Camera on → blue; off → red tint.
+const BTN_MIC = 'bg-emerald-500/[0.14] text-emerald-700 hover:bg-emerald-500/[0.22] shadow-[0_0_0_1px_rgba(16,163,74,0.22),0_6px_18px_-8px_rgba(16,163,74,0.5)]'
+const BTN_CAM = 'bg-blue-600/[0.13] text-blue-700 hover:bg-blue-600/[0.2] shadow-[0_0_0_1px_rgba(37,99,235,0.22),0_6px_18px_-8px_rgba(37,99,235,0.5)]'
+const BTN_OFF = 'bg-[#ea4335]/[0.14] text-[#d93829] hover:bg-[#ea4335]/[0.22] shadow-[0_0_0_1px_rgba(234,67,53,0.24),0_6px_18px_-8px_rgba(234,67,53,0.5)]'
+
+// Tone palettes for the round center buttons when active.
+const BTN_SHARE = 'bg-gradient-to-b from-violet-500 to-violet-600 text-white hover:from-violet-500 hover:to-violet-700 shadow-[0_0_0_1px_rgba(124,58,237,0.35),0_10px_26px_-8px_rgba(124,58,237,0.7)]'
+const BTN_HAND  = 'bg-cyan-500/[0.16] text-cyan-700 hover:bg-cyan-500/[0.24] shadow-[0_0_0_1px_rgba(8,145,178,0.24),0_6px_18px_-8px_rgba(8,145,178,0.5)]'
+const BTN_REACT = 'bg-amber-500/[0.18] text-amber-700 hover:bg-amber-500/[0.26] shadow-[0_0_0_1px_rgba(217,119,6,0.26),0_6px_18px_-8px_rgba(217,119,6,0.5)]'
 
 /* ────────────────────────────────────────────────────────────────────────
  * Mic / camera combo: a round toggle + a slim caret (device picker).
  * The caret is omitted when no `deviceMenu` is provided.
  * ──────────────────────────────────────────────────────────────────────── */
 
-function ComboPill({ on, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
+function ComboPill({ on, tone, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
 
@@ -228,7 +233,7 @@ function ComboPill({ on, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
   }, [open])
 
   const hasMenu = !!deviceMenu
-  const palette = on ? BTN_NEUTRAL : BTN_DANGER
+  const palette = on ? (tone === 'cam' ? BTN_CAM : BTN_MIC) : BTN_OFF
 
   return (
     <div ref={wrapRef} className="relative flex items-center">
@@ -252,17 +257,17 @@ function ComboPill({ on, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
             aria-expanded={open}
             title="Device options"
             className={
-              'ml-0.5 grid h-[52px] w-6 place-items-center rounded-full text-[#5f6368] transition ' +
-              'hover:bg-black/[0.06] hover:text-[#1f1f1f] active:scale-95 [&_svg]:h-4 [&_svg]:w-4 ' +
+              'zk-press ml-0.5 grid h-[52px] w-6 place-items-center rounded-full text-[#5f6368] ' +
+              'hover:bg-black/[0.06] hover:text-[#1f1f1f] [&_svg]:h-4 [&_svg]:w-4 ' +
               (open ? 'bg-black/[0.06] text-[#1f1f1f]' : '')
             }
           >
-            <ChevronUp />
+            <ChevronUp className={open ? 'rotate-180 transition-transform' : 'transition-transform'} />
           </button>
           {open && (
             <div
               role="menu"
-              className="absolute bottom-[calc(100%+14px)] left-0 z-20 w-[300px] overflow-hidden rounded-2xl border border-black/[0.06] bg-white py-1 text-[#202124] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.35)]"
+              className="zk-glass zk-pop-in absolute bottom-[calc(100%+14px)] left-0 z-20 w-[300px] origin-bottom-left overflow-hidden rounded-2xl border border-black/[0.06] py-1 text-[#202124]"
               onClick={(e) => e.stopPropagation()}
             >
               {typeof deviceMenu === 'function' ? deviceMenu({ close: () => setOpen(false) }) : deviceMenu}
@@ -275,10 +280,12 @@ function ComboPill({ on, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
 }
 
 /* ────────────────────────────────────────────────────────────────────────
- * Round center button (present, captions, hand, emoji, more).
+ * Round center button (present, captions, hand, emoji, more). `tone` picks
+ * the active-state palette: share→purple, hand→cyan, react→amber, else Meet
+ * blue.
  * ──────────────────────────────────────────────────────────────────────── */
 
-function RoundBtn({ active, danger, disabled, onClick, label, children, popover, popoverOpen, ...rest }) {
+function RoundBtn({ active, tone, danger, disabled, onClick, label, children, popover, popoverOpen, ...rest }) {
   const wrapRef = useRef(null)
   useEffect(() => {
     if (!popoverOpen) return
@@ -287,7 +294,12 @@ function RoundBtn({ active, danger, disabled, onClick, label, children, popover,
     return () => window.removeEventListener('keydown', onKey)
   }, [popoverOpen, popover])
 
-  const palette = danger ? BTN_DANGER : active ? BTN_ACTIVE : BTN_NEUTRAL
+  const activePalette = danger ? BTN_OFF
+    : tone === 'share' ? BTN_SHARE
+    : tone === 'hand' ? BTN_HAND
+    : tone === 'react' ? BTN_REACT
+    : BTN_ACTIVE
+  const palette = active ? activePalette : BTN_NEUTRAL
 
   return (
     <div ref={wrapRef} className="relative">
@@ -298,7 +310,7 @@ function RoundBtn({ active, danger, disabled, onClick, label, children, popover,
         aria-pressed={active}
         title={label}
         disabled={disabled}
-        className={`${BTN} ${palette} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
+        className={`${BTN} ${palette} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:translate-y-0`}
         {...rest}
       >
         {children}
@@ -309,7 +321,7 @@ function RoundBtn({ active, danger, disabled, onClick, label, children, popover,
 }
 
 /* ────────────────────────────────────────────────────────────────────────
- * Right-side icon button (info, people, chat) — matches the capsule buttons.
+ * Right-side icon button (info, people, chat) — frosted glass chip.
  * ──────────────────────────────────────────────────────────────────────── */
 
 function SideIcon({ active, onClick, label, badge = 0, children }) {
@@ -321,12 +333,12 @@ function SideIcon({ active, onClick, label, badge = 0, children }) {
       aria-pressed={active}
       title={label}
       className={
-        'relative grid h-[52px] w-[52px] place-items-center rounded-full border border-black/[0.06] transition active:scale-[0.94] ' +
-        'shadow-[0_2px_8px_-3px_rgba(0,0,0,0.15)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 ' +
-        '[&_svg]:h-[22px] [&_svg]:w-[22px] ' +
+        'zk-press relative grid h-[52px] w-[52px] place-items-center rounded-full border border-white/70 ' +
+        'shadow-[0_6px_18px_-10px_rgba(15,23,42,0.45)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 ' +
+        '[&_svg]:h-[22px] [&_svg]:w-[22px] backdrop-blur-xl ' +
         (active
           ? 'bg-[#c2e7ff] text-[#001d35] hover:bg-[#aed6fb]'
-          : 'bg-white/85 text-[#444746] backdrop-blur-xl hover:bg-white hover:text-[#1f1f1f]')
+          : 'bg-white/80 text-[#444746] hover:bg-white hover:text-[#1f1f1f]')
       }
     >
       {children}
@@ -343,7 +355,7 @@ function SideIcon({ active, onClick, label, badge = 0, children }) {
 }
 
 /* ────────────────────────────────────────────────────────────────────────
- * Leave / hangup — solid red pill, phone tilted 135° like Meet.
+ * Leave / hangup — red gradient pill, larger, phone tilted 135° like Meet.
  * ──────────────────────────────────────────────────────────────────────── */
 
 function LeaveBtn({ onClick }) {
@@ -354,9 +366,10 @@ function LeaveBtn({ onClick }) {
       aria-label="Leave call"
       title="Leave call"
       className={
-        'grid h-[52px] w-[64px] place-items-center rounded-full bg-[#ea4335] text-white transition ' +
-        'shadow-[0_8px_20px_-6px_rgba(234,67,53,0.7)] hover:bg-[#d93829] active:scale-[0.94] ' +
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ea4335]/50 [&_svg]:h-[22px] [&_svg]:w-[22px]'
+        'zk-press grid h-[52px] w-[72px] place-items-center rounded-full text-white ' +
+        'bg-gradient-to-b from-[#f0584c] to-[#d93829] hover:from-[#f0584c] hover:to-[#c5301f] ' +
+        'shadow-[0_10px_26px_-8px_rgba(234,67,53,0.8),inset_0_1px_0_rgba(255,255,255,0.25)] ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ea4335]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white [&_svg]:h-[22px] [&_svg]:w-[22px]'
       }
     >
       <PhoneOff className="rotate-[135deg]" />
@@ -399,9 +412,10 @@ function MoreMenu({
         <MoreVertical />
       </RoundBtn>
       {open && (
+        <div className="absolute bottom-[calc(100%+14px)] left-1/2 z-20 -translate-x-1/2">
         <div
           role="menu"
-          className="absolute bottom-[calc(100%+14px)] left-1/2 z-20 w-[240px] -translate-x-1/2 overflow-hidden rounded-2xl border border-black/[0.06] bg-white py-1 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.35)]"
+          className="zk-glass zk-pop-in w-[240px] origin-bottom overflow-hidden rounded-2xl border border-black/[0.06] py-1"
         >
           {canRecord && (
             <MenuItem
@@ -426,6 +440,7 @@ function MoreMenu({
             onClick={() => { setSidebar?.((s) => (s === 'settings' ? null : 'settings')); setOpen(false) }}
           />
         </div>
+        </div>
       )}
     </div>
   )
@@ -438,7 +453,7 @@ function MenuItem({ icon, label, active = false, danger = false, onClick }) {
       type="button"
       onClick={onClick}
       className={
-        'flex w-full items-center gap-3 px-3 py-2.5 text-left text-[14px] transition ' +
+        'flex w-full items-center gap-3 px-3 py-2.5 text-left text-[14px] transition-colors ' +
         (danger
           ? 'text-[#d93829] hover:bg-[#ea4335]/10'
           : active
@@ -453,7 +468,7 @@ function MenuItem({ icon, label, active = false, danger = false, onClick }) {
 }
 
 /* ────────────────────────────────────────────────────────────────────────
- * Reaction picker popover.
+ * Reaction picker popover — glass pill, pop-in, springy emoji.
  * ──────────────────────────────────────────────────────────────────────── */
 
 const EMOJIS = ['👍', '❤️', '😂', '🎉', '👏', '🙏', '🔥', '😮']
@@ -462,17 +477,19 @@ function ReactionPicker({ onClose, onPick }) {
   return (
     <>
       <div className="fixed inset-0 z-10" onClick={onClose} />
-      <div
-        role="menu"
-        className="absolute bottom-[calc(100%+14px)] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-black/[0.06] bg-white p-1.5 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.35)]"
-      >
-        {EMOJIS.map((e) => (
-          <button
-            key={e}
-            onClick={() => onPick(e)}
-            className="grid h-10 w-10 place-items-center rounded-full text-xl transition hover:bg-black/[0.06] active:scale-95"
-          >{e}</button>
-        ))}
+      <div className="absolute bottom-[calc(100%+14px)] left-1/2 z-20 -translate-x-1/2">
+        <div
+          role="menu"
+          className="zk-glass zk-pop-in flex items-center gap-1 rounded-full border border-black/[0.06] p-1.5"
+        >
+          {EMOJIS.map((e) => (
+            <button
+              key={e}
+              onClick={() => onPick(e)}
+              className="zk-press grid h-10 w-10 place-items-center rounded-full text-xl hover:bg-black/[0.06] hover:scale-110"
+            >{e}</button>
+          ))}
+        </div>
       </div>
     </>
   )

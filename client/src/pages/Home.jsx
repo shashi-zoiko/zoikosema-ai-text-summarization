@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight, Calendar, Check, ChevronDown, Clock,
   Copy, Download, Link2, Lock, MessageSquareText, Pencil, Plus, Radio, Share2,
-  Sparkles, Trash2, Video,
+  Trash2, Video,
 } from 'lucide-react'
 import { api, getApiBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -357,11 +357,11 @@ export default function Home() {
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
         <div
           className="absolute -top-32 -left-24 h-[460px] w-[460px] rounded-full opacity-[0.16] blur-3xl"
-          style={{ background: 'radial-gradient(closest-side,#5b67f2,transparent 70%)' }}
+          style={{ background: 'radial-gradient(closest-side,#1f7a54,transparent 70%)' }}
         />
         <div
           className="absolute -top-24 right-0 h-[460px] w-[460px] rounded-full opacity-[0.16] blur-3xl"
-          style={{ background: 'radial-gradient(closest-side,#d670ff,transparent 70%)' }}
+          style={{ background: 'radial-gradient(closest-side,#34d399,transparent 70%)' }}
         />
       </div>
 
@@ -373,7 +373,6 @@ export default function Home() {
         className="mb-8"
       >
         <motion.div variants={fadeUp} className="flex items-center gap-2">
-          <Badge tone="accent" size="md"><Sparkles className="h-3 w-3" /> Workspace</Badge>
           <span className="text-[12.5px] text-[var(--c-fg-muted)]">{today}</span>
         </motion.div>
         <motion.h1
@@ -396,7 +395,7 @@ export default function Home() {
       >
         {/* ── Instant meeting (featured) ── */}
         <motion.div variants={fadeUp} className="lg:col-span-2">
-          <Card className="group/hero relative overflow-hidden p-6 sm:p-7 bg-[linear-gradient(150deg,#e9f6ef_0%,#f3faf6_45%,#ffffff_100%)] border border-[#cfe8db] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_18px_48px_-22px_rgba(16,83,52,0.35)] transition-all duration-300 hover:-translate-y-0.5 hover:border-[#9fd6bd] hover:shadow-[0_24px_52px_-20px_rgba(16,83,52,0.42)]">
+          <Card className="group/hero relative overflow-hidden p-6 sm:p-7 bg-[var(--hero-bg)] border border-[var(--hero-border)] shadow-[var(--hero-shadow)] transition-all duration-300 hover:-translate-y-0.5 hover:border-[var(--hero-border-hover)] hover:shadow-[var(--hero-shadow-hover)]">
             {/* layered ambient inside the card */}
             <div
               aria-hidden
@@ -412,16 +411,16 @@ export default function Home() {
                 <motion.div
                   whileHover={{ scale: 1.04 }}
                   transition={{ type: 'spring', stiffness: 320, damping: 20 }}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--c-success)_30%,transparent)] bg-[var(--c-success-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--c-success)]"
                 >
                   <span className="relative inline-flex h-1.5 w-1.5">
-                    <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500 opacity-70" />
-                    <span className="relative h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                    <span className="absolute inset-0 animate-ping rounded-full bg-[var(--c-success)] opacity-70" />
+                    <span className="relative h-1.5 w-1.5 rounded-full bg-[var(--c-success)]" />
                   </span>
                   Ready to host
                 </motion.div>
-                <h2 className="text-[24px] font-bold tracking-tight text-[#0f2a20]">Start an instant meeting</h2>
-                <p className="text-[13.5px] leading-relaxed text-[#3f5a4a]">
+                <h2 className="text-[24px] font-bold tracking-tight text-[var(--hero-fg)]">Start an instant meeting</h2>
+                <p className="text-[13.5px] leading-relaxed text-[var(--hero-fg-dim)]">
                   HD video, screen share, captions, recording — share the link with anyone, no install required.
                 </p>
                 <div className="pt-1">
@@ -496,7 +495,7 @@ export default function Home() {
                   className="absolute -inset-6 rounded-full opacity-40 blur-3xl transition-opacity duration-500 group-hover/hero:opacity-60"
                   style={{ background: 'radial-gradient(closest-side, #6fce9f, transparent)' }}
                 />
-                <div className="relative overflow-hidden rounded-2xl border border-[#cfe8db] shadow-[0_24px_60px_-24px_rgba(16,83,52,0.4)]">
+                <div className="relative overflow-hidden rounded-2xl border border-[var(--hero-border)] shadow-[0_24px_60px_-24px_rgba(16,83,52,0.4)]">
                   <MountainScene />
                 </div>
               </motion.div>
@@ -506,7 +505,7 @@ export default function Home() {
 
         {/* ── Join with code ── */}
         <motion.div variants={fadeUp}>
-          <Card className="group/join flex h-full flex-col p-6 bg-[linear-gradient(150deg,#eef8f2_0%,#ffffff_60%)] border border-[#cfe8db] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_14px_40px_-22px_rgba(16,83,52,0.3)] transition-all duration-300 hover:-translate-y-0.5 hover:border-[#9fd6bd] hover:shadow-[0_22px_48px_-20px_rgba(16,83,52,0.4)]">
+          <Card className="group/join flex h-full flex-col p-6 bg-[var(--hero-bg-2)] border border-[var(--hero-border)] shadow-[var(--hero-shadow)] transition-all duration-300 hover:-translate-y-0.5 hover:border-[var(--hero-border-hover)] hover:shadow-[var(--hero-shadow-hover)]">
             <div className="flex items-center gap-3">
               <motion.div
                 whileHover={{ rotate: -8, scale: 1.08 }}
@@ -516,8 +515,8 @@ export default function Home() {
                 <ArrowRight className="h-5 w-5" />
               </motion.div>
               <div>
-                <div className="text-[15px] font-semibold tracking-tight text-[#0f2a20]">Join with code</div>
-                <div className="text-[12px] text-[#5b7566]">Enter the link or code someone shared.</div>
+                <div className="text-[15px] font-semibold tracking-tight text-[var(--hero-fg)]">Join with code</div>
+                <div className="text-[12px] text-[var(--hero-fg-dim)]">Enter the link or code someone shared.</div>
               </div>
             </div>
             <form onSubmit={joinCode} className="mt-auto space-y-3 pt-6">

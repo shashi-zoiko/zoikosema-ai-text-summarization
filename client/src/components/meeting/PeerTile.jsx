@@ -178,9 +178,9 @@ function PeerTile({
   return (
     <div
       className={
-        'relative isolate flex h-full w-full overflow-hidden rounded-2xl bg-[#e8eaed] ' +
-        (speaking ? 'ring-2 ring-[#1a73e8]' : 'ring-1 ring-black/[0.06]') +
-        (spotlight ? ' shadow-lg shadow-black/40' : '')
+        'zk-tile group/peer relative isolate flex h-full w-full overflow-hidden rounded-[20px] bg-[#dfe3e8] ' +
+        (speaking ? 'zk-tile-speaking ' : 'ring-1 ring-black/[0.06] ') +
+        (spotlight ? 'zk-tile-spotlight' : '')
       }
     >
       {/* Dedicated audio sink — ALWAYS mounted regardless of camera state.
@@ -220,25 +220,24 @@ function PeerTile({
         </div>
       )}
 
-      {/* Hand raised (top-left) */}
+      {/* Hand raised (top-left) — warm gradient chip. */}
       {peer.hand && !mini && (
         <div
-          className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow-md"
+          className="absolute left-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-gradient-to-b from-amber-300 to-amber-400 text-amber-950 shadow-[0_4px_12px_-3px_rgba(217,119,6,0.6),inset_0_1px_0_rgba(255,255,255,0.5)] ring-1 ring-white/40"
           title="Hand raised"
         >
-          <Hand className="h-4 w-4" />
+          <Hand className="h-[18px] w-[18px]" />
         </div>
       )}
 
-      {/* Mic-off badge (top-right) — Meet places this in the top-right
-          corner with a small filled circle. Hidden on mini tiles to avoid
-          clutter; the name pill below the tile already signals state.   */}
+      {/* Mic-off badge (top-right) — glass chip with a red mic glyph. Hidden on
+          mini tiles to avoid clutter; the name pill already signals state.   */}
       {audioOff && !mini && (
         <div
-          className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm"
+          className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/45 text-white shadow-sm ring-1 ring-white/15 backdrop-blur-md"
           title="Muted"
         >
-          <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />
+          <MicOff className="h-4 w-4 text-[#ff6b5e]" />
         </div>
       )}
 
@@ -255,10 +254,16 @@ function PeerTile({
         />
       )}
 
-      {/* Bottom name pill */}
+      {/* Bottom scrim — keeps the name pill legible over bright video without
+          a hard band. Only meaningful when video is showing. */}
+      {!videoOff && peer.stream && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/35 to-transparent" />
+      )}
+
+      {/* Bottom name pill — glass chip. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
         <div className={
-          'flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 font-medium text-white backdrop-blur-sm ' +
+          'flex items-center gap-1.5 rounded-lg bg-black/45 px-2.5 py-1 font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md ' +
           (mini ? 'text-[11px]' : 'text-[12.5px]')
         }>
           {pinned && <PinnedNameIcon mini={mini} />}

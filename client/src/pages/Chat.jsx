@@ -182,7 +182,7 @@ export default function Chat() {
   const { user } = useAuth()
   const { startCall } = useCall()
 
-  const [channels, setChannels] = useState(() => getCachedChannels() || [])
+  const [channels, setChannels] = useState(() => getCachedChannels(user?.id) || [])
   const [messages, setMessages] = useState([])
   const [activeChannel, setActiveChannel] = useState(null)
   const [draft, setDraft] = useState('')
@@ -203,6 +203,7 @@ export default function Chat() {
   const [smartLoading, setSmartLoading] = useState(false)
 
   const wsRef = useRef(null)
+  const lastReadSentRef = useRef({})
   const messagesEndRef = useRef(null)
   const composerRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -214,27 +215,39 @@ export default function Chat() {
 
   const loadChannels = useCallback(async () => {
     const list = await api('/api/channels')
-    setChannels(list)
-    setCachedChannels(list)
-    return list
-  }, [])
+    const normalized = channelId
+      ? list.map((c) => String(c.id) === String(channelId) ? { ...c, unread_count: 0 } : c)
+      : list
+    setChannels(normalized)
+    setCachedChannels(normalized, user?.id)
+    return normalized
+  }, [channelId, user?.id])
 
   useEffect(() => { loadChannels().catch(() => {}) }, [loadChannels])
 
   useEffect(() => {
     if (!channelId) { setActiveChannel(null); setMessages([]); return }
+    setChannels((prev) => {
+      let changed = false
+      const next = prev.map((c) => {
+        if (String(c.id) !== String(channelId) || !c.unread_count) return c
+        changed = true
+        return { ...c, unread_count: 0 }
+      })
+      return changed ? next : prev
+    })
     const ch = channels.find((c) => String(c.id) === String(channelId))
-    if (ch) setActiveChannel(ch)
+    if (ch) setActiveChannel({ ...ch, unread_count: 0 })
   }, [channelId, channels])
 
   useEffect(() => {
     if (!channelId) { setMessages([]); return }
-    const cached = getCachedMessages(channelId)
+    const cached = getCachedMessages(channelId, user?.id)
     setMessages(cached || [])
 
     let cancelled = false
     api(`/api/channels/${channelId}/messages`)
-      .then((msgs) => { if (!cancelled) { setMessages(msgs); setCachedMessages(channelId, msgs) } })
+      .then((msgs) => { if (!cancelled) { setMessages(msgs); setCachedMessages(channelId, msgs, user?.id) } })
       .catch(() => {})
     api(`/api/channels/${channelId}/read-receipts`)
       .then((receipts) => {
@@ -246,7 +259,7 @@ export default function Chat() {
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [channelId])
+  }, [channelId, user?.id])
 
   // WebSocket connection
   useEffect(() => {
@@ -274,7 +287,12 @@ export default function Chat() {
           setChannels((prev) =>
             prev.map((c) =>
               c.id === incoming.channel_id
-                ? { ...c, last_message_preview: incoming.body.slice(0, 120), last_message_at: incoming.created_at }
+                ? {
+                    ...c,
+                    last_message_preview: incoming.body.slice(0, 120),
+                    last_message_at: incoming.created_at,
+                    unread_count: 0,
+                  }
                 : c
             )
           )
@@ -305,19 +323,58 @@ export default function Chat() {
     return () => { try { ws.close() } catch {} }
   }, [channelId])
 
-  useEffect(() => {
-    if (!messages.length || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-    const lastMsg = messages[messages.length - 1]
-    if (lastMsg && lastMsg.sender_id !== user?.id) {
-      wsRef.current.send(JSON.stringify({ type: 'read', last_read_message_id: lastMsg.id }))
+  const markActiveChannelRead = useCallback((nextMessages = messages) => {
+    if (!channelId || !nextMessages.length) return
+    const lastMsg = nextMessages[nextMessages.length - 1]
+    if (!lastMsg?.id || String(lastMsg.id).startsWith('tmp-')) return
+    const lastReadId = Number(lastMsg.id)
+    if (!Number.isFinite(lastReadId)) return
+
+    const key = String(channelId)
+    if ((lastReadSentRef.current[key] || 0) >= lastReadId) {
+      setChannels((prev) => {
+        let changed = false
+        const next = prev.map((c) => {
+          if (String(c.id) !== key || !c.unread_count) return c
+          changed = true
+          return { ...c, unread_count: 0 }
+        })
+        return changed ? next : prev
+      })
+      return
     }
-  }, [messages, user?.id])
+
+    lastReadSentRef.current[key] = lastReadId
+    setChannels((prev) => {
+      let changed = false
+      const next = prev.map((c) => {
+        if (String(c.id) !== key || !c.unread_count) return c
+        changed = true
+        return { ...c, unread_count: 0 }
+      })
+      return changed ? next : prev
+    })
+
+    const payload = { type: 'read', last_read_message_id: lastReadId }
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      try { wsRef.current.send(JSON.stringify(payload)) } catch {}
+    } else {
+      api(`/api/channels/${channelId}/read`, {
+        method: 'POST',
+        body: { last_read_message_id: lastReadId },
+      }).catch(() => {})
+    }
+  }, [channelId, messages])
+
+  useEffect(() => {
+    markActiveChannelRead(messages)
+  }, [messages, markActiveChannelRead])
 
   useEffect(() => {
     if (!channelId || !messages.length) return
-    setCachedMessages(channelId, messages)
-  }, [channelId, messages])
-  useEffect(() => { if (channels.length) setCachedChannels(channels) }, [channels])
+    setCachedMessages(channelId, messages, user?.id)
+  }, [channelId, messages, user?.id])
+  useEffect(() => { if (channels.length) setCachedChannels(channels, user?.id) }, [channels, user?.id])
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -619,7 +676,7 @@ export default function Chat() {
   /* ─────────────────── render ─────────────────── */
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden font-sans">
+    <div className="flex h-[calc(100vh-60px)] min-h-0 overflow-hidden font-sans">
       {/* ============== Channel list ============== */}
       <aside className="flex w-[320px] shrink-0 flex-col border-r border-line bg-surface">
         <div className="flex items-center justify-between px-4 pb-3.5 pt-[18px]">
