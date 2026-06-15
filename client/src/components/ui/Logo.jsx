@@ -1,5 +1,5 @@
 import { cn } from '../../lib/cn'
-import iconUrl from '../../assets/zoikosema-icon.svg'
+import iconUrl from '../../assets/zoikosema-icon.jpeg'
 import wordmarkUrl from '../../assets/zoikosema-wordmark.svg'
 
 /**

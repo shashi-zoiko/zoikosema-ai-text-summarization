@@ -139,10 +139,10 @@ export default function Dashboard() {
     const older    = Math.max(0, totalMin - week - month)
     const recordings = (stats.total_recordings || 0) * 12
     return [
-      { label: 'This week',  value: week,       color: '#5B67F2' }, // indigo
+      { label: 'This week',  value: week,       color: '#1f7a54' }, // forest green
       { label: 'This month', value: month,      color: '#3FBF9B' }, // green
       { label: 'Older',      value: older,      color: '#F08A44' }, // orange
-      { label: 'Recordings', value: recordings, color: '#B658F0' }, // purple
+      { label: 'Recordings', value: recordings, color: '#14b8a6' }, // teal
     ].filter((s) => s.value > 0)
   }, [stats])
 

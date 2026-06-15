@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  BarChart3, ChevronDown, Home, LogOut, MessageSquareText,
-  Moon, Settings, ShieldCheck, Sparkles, Sun, Users2, Video,
+  BarChart3, ChevronDown, ChevronsUpDown, Home, LogOut, MessageSquareText,
+  Moon, Settings, ShieldCheck, Sun, Users2, Video,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme, THEMES } from '../theme/ThemeProvider'
@@ -65,7 +65,7 @@ function ThemeMenu() {
                   onClick={() => { setTheme(t.id); setOpen(false) }}
                   className={cn(
                     'flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition',
-                    t.id === theme ? 'bg-[var(--c-accent-soft)]' : 'hover:bg-white/5'
+                    t.id === theme ? 'bg-[var(--c-accent-soft)]' : 'hover:bg-[var(--c-bg-3)]'
                   )}
                 >
                   <span
@@ -74,8 +74,8 @@ function ThemeMenu() {
                     style={{
                       background:
                         t.id === 'midnight'
-                          ? 'linear-gradient(135deg, #0f121b, #6366f1)'
-                          : 'linear-gradient(135deg, #ffffff, #eef0ff)',
+                          ? 'linear-gradient(135deg, #0f121b, #1f7a54)'
+                          : 'linear-gradient(135deg, #ffffff, #e7f6ef)',
                     }}
                   />
                   <div className="min-w-0 flex-1">
@@ -111,14 +111,14 @@ function UserMenu() {
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex items-center gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)] py-1 pl-1 pr-2.5 transition hover:border-[var(--c-line-strong)]"
+        className="group flex h-11 items-center gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)] py-1 pl-1 pr-2.5 transition-colors hover:border-[var(--c-line-strong)] hover:bg-[var(--c-bg-3)]"
       >
         <Avatar name={user.name} color={user.avatar_color} size="sm" presence="online" />
         <span className="hidden flex-col items-start leading-tight sm:flex">
           <span className="max-w-[140px] truncate text-[12.5px] font-semibold tracking-tight">{user.name}</span>
           <span className="max-w-[140px] truncate text-[10.5px] text-[var(--c-fg-muted)]">{user.email}</span>
         </span>
-        <ChevronDown className="h-3 w-3 opacity-70" />
+        <ChevronDown className={cn('h-3.5 w-3.5 text-[var(--c-fg-muted)] transition-transform duration-200', open && 'rotate-180')} />
       </button>
       <AnimatePresence>
         {open && (
@@ -130,16 +130,20 @@ function UserMenu() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -4, scale: 0.98 }}
               transition={{ duration: 0.14 }}
-              className="absolute right-0 z-50 mt-2 w-72 overflow-hidden rounded-2xl border border-[var(--c-line-strong)] bg-[color-mix(in_srgb,var(--c-surface)_92%,transparent)] p-2 shadow-2xl backdrop-blur-xl"
+              className="absolute right-0 z-50 mt-2 w-[284px] overflow-hidden rounded-2xl border border-[var(--c-line-strong)] bg-[color-mix(in_srgb,var(--c-surface)_96%,transparent)] p-2 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)] backdrop-blur-xl"
             >
-              <div className="flex items-center gap-3 rounded-xl bg-white/[0.02] p-3">
-                <Avatar name={user.name} color={user.avatar_color} size="md" />
-                <div className="min-w-0">
+              <div className="relative mb-1.5 flex items-center gap-3 overflow-hidden rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)] p-3">
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 opacity-70"
+                  style={{ background: 'radial-gradient(360px 120px at 0% 0%, var(--c-accent-soft), transparent 75%)' }}
+                />
+                <Avatar name={user.name} color={user.avatar_color} size="md" presence="online" />
+                <div className="relative min-w-0">
                   <div className="truncate text-[14px] font-semibold tracking-tight">{user.name}</div>
                   <div className="truncate text-[11.5px] text-[var(--c-fg-muted)]">{user.email}</div>
                 </div>
               </div>
-              <div className="my-1 h-px bg-[var(--c-line)]" />
               <MenuItem icon={<Settings className="h-4 w-4" />} onClick={() => { setOpen(false); navigate('/admin') }}>
                 Workspace settings
               </MenuItem>
@@ -165,7 +169,7 @@ function MenuItem({ icon, children, danger, onClick }) {
       onClick={onClick}
       className={cn(
         'flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium transition',
-        danger ? 'text-[var(--c-danger)] hover:bg-[var(--c-danger-soft)]' : 'text-[var(--c-fg-dim)] hover:bg-white/5 hover:text-[var(--c-fg)]'
+        danger ? 'text-[var(--c-danger)] hover:bg-[var(--c-danger-soft)]' : 'text-[var(--c-fg-dim)] hover:bg-[var(--c-bg-3)] hover:text-[var(--c-fg)]'
       )}
     >
       {icon}
@@ -199,20 +203,15 @@ export default function Layout() {
             transition={{ type: 'spring', stiffness: 320, damping: 22 }}
             className="group/ws cursor-pointer rounded-2xl border border-[var(--c-line)] bg-[var(--c-bg-2)]/60 p-3 transition-colors hover:border-[var(--c-line-strong)] hover:bg-[var(--c-bg-2)]"
           >
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg gradient-accent text-white shadow-[0_4px_14px_-4px_var(--c-accent-ring)] transition-transform duration-200 group-hover/ws:scale-110 group-hover/ws:rotate-3">
-                <Sparkles className="h-3.5 w-3.5" />
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl gradient-accent text-[13px] font-bold text-white shadow-[0_4px_14px_-4px_var(--c-accent-ring)]">
+                Z
               </div>
-              <div className="min-w-0">
-                <div className="truncate text-[12.5px] font-semibold tracking-tight">Your workspace</div>
-                <div className="truncate text-[10.5px] text-[var(--c-fg-muted)]">Free · 3 members</div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12.5px] font-semibold leading-tight tracking-tight">Your workspace</div>
+                <div className="mt-0.5 truncate text-[10.5px] leading-tight text-[var(--c-fg-muted)]">Free · 3 members</div>
               </div>
-              <button
-                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--c-fg-muted)] transition-all duration-150 hover:bg-white/5 hover:text-[var(--c-fg)] group-hover/ws:translate-y-0.5"
-                title="Switch workspace"
-              >
-                <ChevronDown className="h-3.5 w-3.5" />
-              </button>
+              <ChevronsUpDown className="h-4 w-4 shrink-0 text-[var(--c-fg-muted)] transition-colors group-hover/ws:text-[var(--c-fg-dim)]" />
             </div>
           </motion.div>
         </div>
@@ -257,8 +256,9 @@ export default function Layout() {
           )}
         >
           <Breadcrumbs path={location.pathname} />
-          <div className="ml-auto flex items-center gap-2.5">
+          <div className="ml-auto flex items-center gap-2">
             <ThemeToggle />
+            <span aria-hidden className="mx-1 hidden h-6 w-px bg-[var(--c-line)] sm:block" />
             <UserMenu />
           </div>
         </header>
@@ -303,7 +303,7 @@ function SideLink({ to, label, icon: Icon, end, badge, disabled }) {
           'group/link relative flex items-center gap-3 rounded-xl px-2.5 py-2 text-[13px] font-medium tracking-tight transition',
           isActive
             ? 'bg-[var(--c-accent-soft)] text-[var(--c-fg)]'
-            : 'text-[var(--c-fg-dim)] hover:bg-white/5 hover:text-[var(--c-fg)]'
+            : 'text-[var(--c-fg-dim)] hover:bg-[var(--c-bg-3)] hover:text-[var(--c-fg)]'
         )
       }
     >

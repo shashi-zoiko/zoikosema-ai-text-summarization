@@ -1,7 +1,7 @@
 import { forwardRef } from 'react'
 import { cn } from '../../lib/cn'
 
-export const Card = forwardRef(function Card({ className, interactive, glow, children, ...props }, ref) {
+export const Card = forwardRef(function Card({ className, interactive, glow, fill, children, ...props }, ref) {
   return (
     <div
       ref={ref}
@@ -31,7 +31,7 @@ export const Card = forwardRef(function Card({ className, interactive, glow, chi
           }}
         />
       )}
-      <div className="relative">{children}</div>
+      <div className={cn('relative', fill && 'flex h-full flex-col')}>{children}</div>
     </div>
   )
 })

@@ -198,8 +198,9 @@ def _load_channels_ctx(
     receipt_by_channel = {r.channel_id: r.last_read_message_id for r in receipts}
 
     # Single query for all unread counts: per-channel "id > last_read_id" if a
-    # receipt exists, else count-all. The OR-of-AND-pairs lets PG do this in
-    # one indexed scan instead of N round-trips.
+    # receipt exists, else count-all. Never count the current user's own
+    # messages as unread; otherwise a message you sent after your last receipt
+    # can badge the conversation for you on the next channel-list refresh.
     conditions = []
     for cid in channel_ids:
         last_read = receipt_by_channel.get(cid)
@@ -210,7 +211,11 @@ def _load_channels_ctx(
 
     unread_rows = db.execute(
         select(Message.channel_id, func.count(Message.id))
-        .where(Message.deleted_at.is_(None), or_(*conditions))
+        .where(
+            Message.deleted_at.is_(None),
+            Message.sender_id != user_id,
+            or_(*conditions),
+        )
         .group_by(Message.channel_id)
     ).all()
     unread_by_channel: dict[int, int] = {cid: 0 for cid in channel_ids}

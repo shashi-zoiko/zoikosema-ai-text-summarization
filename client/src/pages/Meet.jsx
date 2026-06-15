@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  AlertCircle, ArrowRight, Calendar, CalendarPlus, Clock, Lock, Plus,
-  Sparkles, Video, Zap,
+  AlertCircle, ArrowRight, Calendar, CalendarClock, CalendarPlus,
+  Clock, Hand, Lock, Video,
 } from 'lucide-react'
 import { api } from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import { fadeUp, stagger } from '../lib/motion'
 import Button from '../components/ui/Button'
 import { Input, Field } from '../components/ui/Input'
@@ -39,6 +40,13 @@ function formatScheduled(iso, tz) {
     return { formatted: '', isPast: false }
   }
 }
+function greetingFor(date) {
+  const h = date.getHours()
+  if (h < 5) return 'Good evening'
+  if (h < 12) return 'Good morning'
+  if (h < 18) return 'Good afternoon'
+  return 'Good evening'
+}
 
 const TZ_OPTIONS = [
   'America/New_York','America/Chicago','America/Denver','America/Los_Angeles','America/Sao_Paulo',
@@ -47,12 +55,29 @@ const TZ_OPTIONS = [
   'Australia/Sydney','Pacific/Auckland',
 ]
 
+/* ───────────────────── small presentational bits ───────────────────── */
+
+function RowSkeleton() {
+  return (
+    <div className="flex items-center gap-4 px-4 py-3.5">
+      <div className="skeleton h-10 w-10 rounded-xl" />
+      <div className="flex-1 space-y-2">
+        <div className="skeleton h-3.5 w-40 rounded" />
+        <div className="skeleton h-3 w-24 rounded" />
+      </div>
+      <div className="skeleton h-6 w-16 rounded-full" />
+    </div>
+  )
+}
+
 /* ─────────────────────── page ─────────────────────── */
 
 export default function Meet() {
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { user } = useAuth()
   const [recent, setRecent] = useState([])
+  const [loading, setLoading] = useState(true)
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -67,7 +92,10 @@ export default function Meet() {
   const [scheduling, setScheduling] = useState(false)
 
   useEffect(() => {
-    api('/api/meetings/recent').then(setRecent).catch(() => {})
+    api('/api/meetings/recent')
+      .then(setRecent)
+      .catch(() => {})
+      .finally(() => setLoading(false))
   }, [])
 
   const startInstant = async () => {
@@ -124,18 +152,32 @@ export default function Meet() {
     return TZ_OPTIONS.includes(userTz) ? TZ_OPTIONS : [userTz, ...TZ_OPTIONS]
   }, [])
 
+  /* Count of upcoming scheduled rooms — drives the Schedule card hint. */
+  const upcomingCount = useMemo(
+    () => recent.filter((m) => m.scheduled_at && new Date(m.scheduled_at) > new Date()).length,
+    [recent]
+  )
+
+  const greeting = useMemo(() => greetingFor(new Date()), [])
+  const firstName = (user?.name || '').trim().split(/\s+/)[0]
+
   return (
     <div className="relative isolate mx-auto w-full max-w-[1280px] px-4 py-6 sm:px-8 sm:py-10">
       {/* ambient backdrop */}
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
         <div
           className="absolute -top-32 -left-24 h-[460px] w-[460px] rounded-full opacity-[0.16] blur-3xl"
-          style={{ background: 'radial-gradient(closest-side,#5b67f2,transparent 70%)' }}
+          style={{ background: 'radial-gradient(closest-side,#1f7a54,transparent 70%)' }}
         />
         <div
           className="absolute -top-24 right-0 h-[460px] w-[460px] rounded-full opacity-[0.16] blur-3xl"
-          style={{ background: 'radial-gradient(closest-side,#d670ff,transparent 70%)' }}
+          style={{ background: 'radial-gradient(closest-side,#34d399,transparent 70%)' }}
         />
+        <div
+          className="absolute top-[260px] left-1/3 h-[360px] w-[360px] rounded-full opacity-[0.10] blur-3xl"
+          style={{ background: 'radial-gradient(closest-side,#15936b,transparent 70%)' }}
+        />
+        <div className="grid-pattern absolute inset-x-0 top-0 h-[420px] opacity-60" />
       </div>
 
       {/* ============ Hero ============ */}
@@ -143,20 +185,45 @@ export default function Meet() {
         variants={stagger(0.06)}
         initial="initial"
         animate="animate"
-        className="mb-8"
+        className="mb-9"
       >
-        <motion.div variants={fadeUp}>
-          <Badge tone="accent" size="md"><Video className="h-3 w-3" /> Meetings</Badge>
+        <motion.div variants={fadeUp} className="flex items-center gap-2 text-[13px] font-medium text-[var(--c-fg-muted)]">
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--c-accent-soft)] text-[var(--c-accent)]">
+            <Video className="h-3.5 w-3.5" />
+          </span>
+          {greeting}{firstName ? `, ${firstName}` : ''}
         </motion.div>
         <motion.h1
           variants={fadeUp}
-          className="mt-3 text-[34px] font-bold leading-[1.1] tracking-[-0.025em] sm:text-[42px]"
+          className="mt-3 text-[34px] font-bold leading-[1.08] tracking-[-0.03em] sm:text-[44px]"
         >
           Start or join a <span className="gradient-text">meeting</span>
         </motion.h1>
-        <motion.p variants={fadeUp} className="mt-2 max-w-[560px] text-[14.5px] leading-relaxed text-[var(--c-fg-dim)]">
-          Instant video calls, one link away. Or schedule ahead and share the code with your team.
+        <motion.p variants={fadeUp} className="mt-2.5 max-w-[560px] text-[14.5px] leading-relaxed text-[var(--c-fg-dim)]">
+          Start, join and manage your team meetings — one link away, or scheduled ahead and shared with the room.
         </motion.p>
+
+        {/* quick actions */}
+        <motion.div variants={fadeUp} className="mt-6 flex flex-wrap items-center gap-2.5">
+          <Button
+            size="lg"
+            loading={busy}
+            onClick={startInstant}
+            asMotion
+            leftIcon={!busy && <Video className="h-4 w-4" />}
+          >
+            {busy ? 'Starting…' : 'New meeting'}
+          </Button>
+          <Button
+            size="lg"
+            variant="secondary"
+            onClick={() => document.getElementById('zk-join-input')?.focus()}
+            asMotion
+            leftIcon={<ArrowRight className="h-4 w-4" />}
+          >
+            Join meeting
+          </Button>
+        </motion.div>
       </motion.header>
 
       <AnimatePresence>
@@ -183,11 +250,11 @@ export default function Meet() {
         variants={stagger(0.05)}
         initial="initial"
         animate="animate"
-        className="grid gap-4 lg:grid-cols-[1.5fr_1fr_1fr]"
+        className="grid items-stretch gap-4 lg:grid-cols-[1.5fr_1fr_1fr]"
       >
         {/* ── New meeting (featured) ── */}
-        <motion.div variants={fadeUp}>
-          <Card glow interactive className="group/hero relative overflow-hidden p-6 sm:p-7">
+        <motion.div variants={fadeUp} className="h-full">
+          <Card glow interactive fill className="group/hero relative h-full overflow-hidden p-6 sm:p-7">
             <div
               aria-hidden
               className="pointer-events-none absolute inset-0 opacity-[0.65] transition-opacity duration-500 group-hover/hero:opacity-90"
@@ -198,27 +265,27 @@ export default function Meet() {
               }}
             />
             <div className="relative flex h-full flex-col">
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-5 flex items-center justify-between">
                 <motion.div
                   whileHover={{ rotate: -8, scale: 1.06 }}
                   transition={{ type: 'spring', stiffness: 320, damping: 18 }}
-                  className="flex h-12 w-12 items-center justify-center rounded-2xl gradient-accent text-white shadow-[0_8px_22px_-6px_var(--c-accent-ring)]"
+                  className="flex h-14 w-14 items-center justify-center rounded-2xl gradient-accent text-white shadow-[0_10px_28px_-6px_var(--c-accent-ring)]"
                 >
-                  <Video className="h-6 w-6" />
+                  <Video className="h-7 w-7" />
                 </motion.div>
-                <Badge tone="live" pulse size="sm">Live</Badge>
+                <Badge tone="live" pulse size="md">Ready</Badge>
               </div>
-              <h3 className="text-[22px] font-bold tracking-tight">New meeting</h3>
-              <p className="mt-1.5 max-w-[420px] text-[13.5px] leading-relaxed text-[var(--c-fg-dim)]">
+              <h3 className="text-[23px] font-bold tracking-tight">New meeting</h3>
+              <p className="mt-2 max-w-[420px] text-[13.5px] leading-relaxed text-[var(--c-fg-dim)]">
                 Start an instant video call and copy the shareable link. Anyone with the link can join.
               </p>
-              <div className="mt-5 flex flex-wrap items-center gap-2">
+              <div className="mt-auto pt-6">
                 <Button
                   size="lg"
                   loading={busy}
                   onClick={startInstant}
                   asMotion
-                  leftIcon={!busy && <Zap className="h-4 w-4" />}
+                  leftIcon={!busy && <Video className="h-4 w-4" />}
                 >
                   {busy ? 'Starting…' : 'Start instant meeting'}
                 </Button>
@@ -228,8 +295,8 @@ export default function Meet() {
         </motion.div>
 
         {/* ── Join with code ── */}
-        <motion.div variants={fadeUp}>
-          <Card interactive className="group/join h-full p-6">
+        <motion.div variants={fadeUp} className="h-full">
+          <Card interactive fill className="group/join h-full p-6">
             <motion.div
               whileHover={{ rotate: -8, scale: 1.08 }}
               transition={{ type: 'spring', stiffness: 320, damping: 18 }}
@@ -239,12 +306,14 @@ export default function Meet() {
             </motion.div>
             <h3 className="mt-4 text-[17px] font-bold tracking-tight">Join with code</h3>
             <p className="mt-1 text-[12.5px] text-[var(--c-fg-muted)]">Enter the meeting code to join.</p>
-            <form onSubmit={joinCode} className="mt-4 space-y-2.5">
+            <form onSubmit={joinCode} className="mt-auto space-y-2.5 pt-4">
               <Input
+                id="zk-join-input"
                 placeholder="abc-defg-hij"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
-                className="mono text-center tracking-widest"
+                className="mono text-center tracking-[0.25em]"
+                aria-label="Meeting code"
               />
               <Button type="submit" block disabled={!code.trim()} rightIcon={<ArrowRight className="h-4 w-4" />} asMotion>
                 Join
@@ -254,8 +323,8 @@ export default function Meet() {
         </motion.div>
 
         {/* ── Schedule ── */}
-        <motion.div variants={fadeUp}>
-          <Card interactive className="group/sched h-full p-6">
+        <motion.div variants={fadeUp} className="h-full">
+          <Card interactive fill className="group/sched h-full p-6">
             <motion.div
               whileHover={{ rotate: -8, scale: 1.08 }}
               transition={{ type: 'spring', stiffness: 320, damping: 18 }}
@@ -265,7 +334,18 @@ export default function Meet() {
             </motion.div>
             <h3 className="mt-4 text-[17px] font-bold tracking-tight">Schedule</h3>
             <p className="mt-1 text-[12.5px] text-[var(--c-fg-muted)]">Plan a meeting for later — share the code in advance.</p>
-            <div className="mt-4">
+            {upcomingCount > 0 ? (
+              <div className="mt-3 inline-flex w-fit items-center gap-1.5 rounded-lg bg-[var(--c-accent-soft)] px-2 py-1 text-[11.5px] font-medium text-[var(--c-accent)]">
+                <CalendarClock className="h-3.5 w-3.5" />
+                {upcomingCount} upcoming
+              </div>
+            ) : (
+              <div className="mt-3 inline-flex w-fit items-center gap-1.5 rounded-lg bg-[var(--c-bg-3)] px-2 py-1 text-[11.5px] font-medium text-[var(--c-fg-muted)]">
+                <CalendarClock className="h-3.5 w-3.5" />
+                Nothing scheduled
+              </div>
+            )}
+            <div className="mt-auto pt-4">
               <Button
                 block
                 variant="outline"
@@ -281,34 +361,38 @@ export default function Meet() {
       </motion.section>
 
       {/* ============ Recent meetings ============ */}
-      <section className="mt-10">
-        <div className="mb-4 flex items-end justify-between">
-          <div>
-            <h2 className="text-[18px] font-semibold tracking-tight">Your meetings</h2>
-            <p className="mt-1 text-[12.5px] text-[var(--c-fg-muted)]">Rooms you've created or joined.</p>
-          </div>
-          {recent.length > 0 && (
-            <Badge tone="accent" size="md"><Sparkles className="h-3 w-3" /> {recent.length}</Badge>
-          )}
+      <section className="mt-12">
+        <div className="mb-4">
+          <h2 className="text-[19px] font-semibold tracking-tight">Your meetings</h2>
+          <p className="mt-1 text-[12.5px] text-[var(--c-fg-muted)]">Rooms you've created or joined.</p>
         </div>
 
-        {recent.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-[var(--c-line-strong)] bg-[var(--c-bg-2)]/40 p-10 text-center">
+        {loading ? (
+          <div className="divide-y divide-[var(--c-line)] overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-surface)]">
+            <RowSkeleton />
+            <RowSkeleton />
+            <RowSkeleton />
+          </div>
+        ) : recent.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-[var(--c-line-strong)] bg-[var(--c-bg-2)]/40 p-12 text-center">
             <motion.div
               initial={{ scale: 0.9, opacity: 0.7 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ type: 'spring', stiffness: 280, damping: 18 }}
-              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--c-bg-3)] text-[var(--c-fg-muted)] [&_svg]:h-6 [&_svg]:w-6"
+              className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--c-bg-3)] text-[var(--c-fg-muted)] [&_svg]:h-7 [&_svg]:w-7"
             >
               <Video />
             </motion.div>
             <div>
-              <div className="text-[14px] font-semibold tracking-tight">No meetings yet</div>
+              <div className="text-[14.5px] font-semibold tracking-tight">No meetings yet</div>
               <div className="mt-1 max-w-md text-[12.5px] text-[var(--c-fg-muted)] leading-relaxed">Start one above to see it listed here.</div>
             </div>
+            <Button onClick={startInstant} loading={busy} asMotion leftIcon={!busy && <Video className="h-4 w-4" />} className="mt-1">
+              Start instant meeting
+            </Button>
           </div>
         ) : (
-          <ul className="divide-y divide-[var(--c-line)] overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-surface)]">
+          <ul className="divide-y divide-[var(--c-line)] overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-surface)] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_32px_-20px_rgba(0,0,0,0.3)]">
             <AnimatePresence initial={false}>
               {recent.map((m, i) => {
                 const sched = m.scheduled_at ? formatScheduled(m.scheduled_at, m.timezone_name) : null
@@ -319,12 +403,17 @@ export default function Meet() {
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0, transition: { delay: i * 0.03 } }}
                     exit={{ opacity: 0, y: -6 }}
+                    className={m.is_active ? '' : 'opacity-[0.92]'}
                   >
                     <button
                       onClick={() => navigate(`/meet/${m.code}`)}
-                      className="group/row flex w-full items-center gap-4 px-4 py-3 text-left transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)]"
+                      className="group/row relative flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_6%,transparent)]"
                     >
-                      <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--c-bg-3)] text-[var(--c-fg-dim)] transition-all duration-200 group-hover/row:scale-110 group-hover/row:bg-[var(--c-accent-soft)] group-hover/row:text-[var(--c-accent)]">
+                      {/* active accent rail */}
+                      {m.is_active && (
+                        <span className="absolute inset-y-2 left-0 w-[3px] rounded-full bg-[var(--c-success)]" />
+                      )}
+                      <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--c-bg-3)] text-[var(--c-fg-dim)] transition-all duration-200 group-hover/row:scale-105 group-hover/row:bg-[var(--c-accent-soft)] group-hover/row:text-[var(--c-accent)]">
                         <Video className="h-5 w-5" />
                         {m.is_active && (
                           <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5">
@@ -335,10 +424,17 @@ export default function Meet() {
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="truncate text-[13.5px] font-semibold tracking-tight transition-colors group-hover/row:text-[var(--c-accent)]">{m.title}</span>
-                          {m.password_protected && <Lock className="h-3 w-3 text-[var(--c-fg-muted)]" />}
+                          <span className="truncate text-[14px] font-semibold tracking-tight transition-colors group-hover/row:text-[var(--c-accent)]">{m.title}</span>
+                          {m.password_protected && <Lock className="h-3 w-3 shrink-0 text-[var(--c-fg-muted)]" />}
+                          {m.waiting_room_enabled && <Hand className="h-3 w-3 shrink-0 text-[var(--c-fg-muted)]" />}
                         </div>
-                        <div className="mono text-[11px] text-[var(--c-fg-muted)]">{m.code}</div>
+                        <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[var(--c-fg-muted)]">
+                          <span className="mono">{m.code}</span>
+                          <span className="hidden h-1 w-1 rounded-full bg-[var(--c-fg-muted)]/50 sm:inline-block" />
+                          <span className="hidden items-center gap-1 sm:inline-flex">
+                            <Clock className="h-3 w-3" /> {formatWhen(m.created_at)}
+                          </span>
+                        </div>
                       </div>
                       <div className="hidden text-[12px] sm:block">
                         {m.is_active ? (
@@ -348,12 +444,14 @@ export default function Meet() {
                             <Calendar className="h-3 w-3" /> {sched.formatted}
                           </Badge>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-[var(--c-fg-muted)]">
-                            <Clock className="h-3.5 w-3.5" /> {formatWhen(m.created_at)}
-                          </span>
+                          <Badge tone="neutral" size="sm">Ended</Badge>
                         )}
                       </div>
-                      <ArrowRight className="h-4 w-4 -translate-x-1 text-[var(--c-fg-muted)] opacity-0 transition-all duration-200 group-hover/row:translate-x-0 group-hover/row:opacity-100 group-hover/row:text-[var(--c-accent)]" />
+                      {/* quick-join affordance */}
+                      <span className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-semibold text-[var(--c-accent)] opacity-0 transition-all duration-200 group-hover/row:bg-[var(--c-accent-soft)] group-hover/row:opacity-100">
+                        Join
+                        <ArrowRight className="h-3.5 w-3.5 -translate-x-1 transition-transform duration-200 group-hover/row:translate-x-0" />
+                      </span>
                     </button>
                   </motion.li>
                 )

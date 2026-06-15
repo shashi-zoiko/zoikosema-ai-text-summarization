@@ -32,9 +32,9 @@ export default function ThemeToggle({ className }) {
       title={`Theme: ${current.label}`}
       className={cn(
         'group relative inline-flex h-9 items-center gap-2 overflow-hidden rounded-full px-3',
-        'border border-white/10 bg-[color-mix(in_srgb,var(--c-surface)_60%,transparent)]',
+        'border border-[var(--c-line-strong)] bg-[color-mix(in_srgb,var(--c-surface)_60%,transparent)]',
         'text-[12px] font-medium text-[var(--c-fg-dim)]',
-        'backdrop-blur-md transition-colors hover:text-[var(--c-fg)] hover:border-white/20',
+        'backdrop-blur-md transition-colors hover:text-[var(--c-fg)] hover:border-[color-mix(in_srgb,var(--c-accent)_45%,var(--c-line-strong))]',
         className
       )}
     >
