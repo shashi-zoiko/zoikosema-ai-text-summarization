@@ -101,10 +101,15 @@ venv\Scripts\activate          # Windows
 # source venv/bin/activate     # macOS/Linux
 pip install -r requirements.txt
 cp .env.example .env           # edit JWT_SECRET
-uvicorn app.main:app --reload --port 8080
+uvicorn app.main:app --reload --port 8001   # or: python -m app.main
 ```
 
-API docs: http://localhost:8080/docs
+> The local API **must** run on port **8001** — the client (`client/.env.local`
+> + the Vite proxy) and docker-compose's `8001:8080` mapping all expect it there.
+> Any other port makes the browser fail with "Failed to fetch". `python -m app.main`
+> defaults to 8001 automatically.
+
+API docs: http://localhost:8001/docs
 
 ### 2. Frontend
 

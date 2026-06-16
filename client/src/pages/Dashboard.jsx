@@ -62,7 +62,6 @@ const ACTION_TILES = [
   { key: 'new',        label: 'New meeting',    sub: 'Start an instant room',  icon: <Video />,    to: '/meet', tone: 'accent'  },
   { key: 'schedule',   label: 'Schedule',       sub: 'Plan a meeting ahead',   icon: <Calendar />, to: '/meet', tone: 'success' },
   { key: 'recordings', label: 'Recordings',     sub: 'Replay and share',       icon: <Disc />,     to: '/meet', tone: 'warn'    },
-  { key: 'intel',      label: 'AI Intelligence', sub: 'Recaps & action items', icon: <Brain />,    to: '/meet', tone: 'purple'  },
 ]
 
 /* ─────────────────────── stat strip ─────────────────────── */

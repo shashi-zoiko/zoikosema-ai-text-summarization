@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getApiBase, getWsBase, uploadFile } from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -23,6 +23,24 @@ import {
  * ──────────────────────────────────────────────────────────────────────── */
 
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👏']
+
+// Page size for history fetches; must match what the API treats as "a full
+// page" so `length >= PAGE_SIZE` is a reliable has-more signal.
+const PAGE_SIZE = 50
+const SEND_RETRY_LIMIT = 2
+
+// Upper bound on messages kept in React state so a long-lived/active thread
+// can't grow the DOM without limit. Only trimmed from the top when the user is
+// pinned to the bottom (not reading history), so it never yanks content out
+// from under someone scrolled up. A resync/refetch naturally resets to a page.
+const MAX_RENDERED_MESSAGES = 300
+
+// Keep at most the newest N messages. Used on append paths only.
+function capTail(list) {
+  return list.length > MAX_RENDERED_MESSAGES
+    ? list.slice(list.length - MAX_RENDERED_MESSAGES)
+    : list
+}
 
 // Categorized emoji set for the full picker
 const EMOJI_CATEGORIES = [
@@ -185,6 +203,11 @@ export default function Chat() {
   const [channels, setChannels] = useState(() => getCachedChannels(user?.id) || [])
   const [messages, setMessages] = useState([])
   const [activeChannel, setActiveChannel] = useState(null)
+  const [loadingMessages, setLoadingMessages] = useState(false)
+  const [messagesError, setMessagesError] = useState(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [wsStatus, setWsStatus] = useState('connecting') // connecting | open | closed
   const [draft, setDraft] = useState('')
   const [typingUsers, setTypingUsers] = useState({})
   const [showNew, setShowNew] = useState(false)
@@ -203,8 +226,15 @@ export default function Chat() {
   const [smartLoading, setSmartLoading] = useState(false)
 
   const wsRef = useRef(null)
+  const reconnectTimerRef = useRef(null)
+  const reconnectAttemptsRef = useRef(0)
   const lastReadSentRef = useRef({})
   const messagesEndRef = useRef(null)
+  const scrollContainerRef = useRef(null)
+  const shouldAutoScrollRef = useRef(true)
+  const firstScrollRef = useRef(true)
+  const loadMessagesRef = useRef(null)
+  const messagesRef = useRef(messages)
   const composerRef = useRef(null)
   const fileInputRef = useRef(null)
   const mediaRecorderRef = useRef(null)
@@ -237,91 +267,268 @@ export default function Chat() {
       return changed ? next : prev
     })
     const ch = channels.find((c) => String(c.id) === String(channelId))
-    if (ch) setActiveChannel({ ...ch, unread_count: 0 })
+    if (ch) {
+      setActiveChannel({ ...ch, unread_count: 0 })
+    } else {
+      // Deep-link / refresh: the channel list hasn't resolved yet (or this
+      // channel isn't in it). Synthesise a minimal placeholder so the thread —
+      // and the already-fetched message history — renders immediately instead
+      // of being hidden behind the "Start a conversation" empty state. Real
+      // metadata replaces this the moment /api/channels returns.
+      setActiveChannel((prev) =>
+        prev && String(prev.id) === String(channelId)
+          ? prev
+          : {
+              id: Number(channelId),
+              name: 'Conversation',
+              is_direct: false,
+              members: [],
+              created_by: null,
+              created_at: new Date().toISOString(),
+              unread_count: 0,
+            }
+      )
+    }
   }, [channelId, channels])
 
+  // Latest page of history. Replaces the persisted set while preserving any
+  // still-unsettled optimistic bubbles, so a background resync can never drop a
+  // message the user is mid-send. `silent` skips the skeleton (used when we
+  // already painted from cache — classic stale-while-revalidate).
+  const loadMessages = useCallback(async ({ silent = false } = {}) => {
+    if (!channelId) return
+    if (!silent) { setLoadingMessages(true); setMessagesError(null) }
+    try {
+      const msgs = await api(`/api/channels/${channelId}/messages?limit=${PAGE_SIZE}`)
+      setHasMore(msgs.length >= PAGE_SIZE)
+      setMessages((prev) => {
+        const pendingLocal = prev.filter((m) => m._tmp_id && (m._pending || m._failed))
+        const serverIds = new Set(msgs.map((m) => m.id))
+        const keptLocal = pendingLocal.filter((m) => !serverIds.has(m.id))
+        return keptLocal.length ? [...msgs, ...keptLocal] : msgs
+      })
+      setCachedMessages(channelId, msgs, user?.id)
+      setMessagesError(null)
+    } catch (err) {
+      // Keep whatever we already have (cache); only surface a blocking error
+      // when there's nothing to show, so a transient blip never blanks history.
+      setMessages((prev) => {
+        if (!prev.length) setMessagesError(err?.message || 'Could not load messages')
+        return prev
+      })
+    } finally {
+      if (!silent) setLoadingMessages(false)
+    }
+  }, [channelId, user?.id])
+
+  useEffect(() => { loadMessagesRef.current = loadMessages }, [loadMessages])
+  // Mirror messages into a ref so memoized children's click handlers always read
+  // the freshest list even when the bubble itself skipped a re-render.
+  useEffect(() => { messagesRef.current = messages }, [messages])
+
+  const loadOlder = useCallback(async () => {
+    if (loadingOlder || !hasMore || !channelId) return
+    const firstReal = messages.find((m) => typeof m.id === 'number')
+    if (!firstReal) return
+    setLoadingOlder(true)
+    const el = scrollContainerRef.current
+    const prevHeight = el ? el.scrollHeight : 0
+    const prevTop = el ? el.scrollTop : 0
+    try {
+      const older = await api(
+        `/api/channels/${channelId}/messages?before_id=${firstReal.id}&limit=${PAGE_SIZE}`
+      )
+      setHasMore(older.length >= PAGE_SIZE)
+      setMessages((prev) => {
+        const ids = new Set(prev.map((m) => m.id))
+        const fresh = older.filter((m) => !ids.has(m.id))
+        return fresh.length ? [...fresh, ...prev] : prev
+      })
+      // Preserve the viewport: keep the row the user was reading in place
+      // instead of yanking the scroll position when we prepend older messages.
+      requestAnimationFrame(() => {
+        const el2 = scrollContainerRef.current
+        if (el2) el2.scrollTop = el2.scrollHeight - prevHeight + prevTop
+      })
+    } catch {
+      // Non-fatal — the user can trigger another fetch by scrolling up again.
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [loadingOlder, hasMore, channelId, messages])
+
   useEffect(() => {
-    if (!channelId) { setMessages([]); return }
+    if (!channelId) { setMessages([]); setHasMore(false); setMessagesError(null); return }
     const cached = getCachedMessages(channelId, user?.id)
     setMessages(cached || [])
+    setMessagesError(null)
+    firstScrollRef.current = true
+    shouldAutoScrollRef.current = true
+    loadMessages({ silent: Boolean(cached && cached.length) })
 
     let cancelled = false
-    api(`/api/channels/${channelId}/messages`)
-      .then((msgs) => { if (!cancelled) { setMessages(msgs); setCachedMessages(channelId, msgs, user?.id) } })
-      .catch(() => {})
     api(`/api/channels/${channelId}/read-receipts`)
       .then((receipts) => {
-        if (!cancelled) {
-          const map = {}
-          for (const r of receipts) map[r.user_id] = r.last_read_message_id
-          setReadReceipts(map)
-        }
+        if (cancelled) return
+        const map = {}
+        for (const r of receipts) map[r.user_id] = r.last_read_message_id
+        setReadReceipts(map)
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [channelId, user?.id])
+  }, [channelId, user?.id, loadMessages])
 
-  // WebSocket connection
-  useEffect(() => {
-    if (!channelId) return
-    if (wsRef.current) { try { wsRef.current.close() } catch {} }
-    const token = localStorage.getItem('zoiko_token')
-    const ws = new WebSocket(`${getWsBase()}/ws/channels/${channelId}?token=${encodeURIComponent(token)}`)
-    wsRef.current = ws
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data)
-        if (data.type === 'message') {
-          const incoming = data.message
-          setMessages((prev) => {
-            if (incoming.client_id) {
-              const idx = prev.findIndex((m) => m._tmp_id === incoming.client_id)
-              if (idx >= 0) {
-                const next = prev.slice()
-                next[idx] = incoming
-                return next
-              }
-            }
-            return prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]
-          })
-          setChannels((prev) =>
-            prev.map((c) =>
-              c.id === incoming.channel_id
-                ? {
-                    ...c,
-                    last_message_preview: incoming.body.slice(0, 120),
-                    last_message_at: incoming.created_at,
-                    unread_count: 0,
-                  }
-                : c
-            )
-          )
-        } else if (data.type === 'typing') {
-          setTypingUsers((prev) => ({ ...prev, [data.user_id]: { name: data.name, at: Date.now() } }))
-        } else if (data.type === 'reaction') {
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== data.message_id) return m
-              let reactions = [...(m.reactions || [])]
-              if (data.action === 'added') {
-                reactions.push({ emoji: data.emoji, user_id: data.user_id, user_name: data.user_name })
-              } else {
-                reactions = reactions.filter((r) => !(r.emoji === data.emoji && r.user_id === data.user_id))
-              }
-              return { ...m, reactions }
-            })
-          )
-        } else if (data.type === 'message_deleted') {
-          setMessages((prev) =>
-            prev.map((m) => m.id === data.message_id ? { ...m, deleted_at: new Date().toISOString() } : m)
-          )
-        } else if (data.type === 'read_receipt') {
-          setReadReceipts((prev) => ({ ...prev, [data.user_id]: data.last_read_message_id }))
+  // Stable handler for inbound WS frames — defined once and reused across
+  // reconnects so re-subscribing doesn't churn the socket. All state updates go
+  // through functional setState so the handler never needs to be re-created when
+  // messages/channels change.
+  const handleWsMessage = useCallback((e) => {
+    let data
+    try { data = JSON.parse(e.data) } catch { return }
+    if (data.type === 'message') {
+      const incoming = data.message
+      if (!incoming || incoming.id == null) return
+      setMessages((prev) => {
+        // Reconcile an optimistic bubble by client_id…
+        if (incoming.client_id) {
+          const idx = prev.findIndex((m) => m._tmp_id === incoming.client_id)
+          if (idx >= 0) {
+            const next = prev.slice()
+            next[idx] = incoming
+            return next
+          }
         }
-      } catch {}
+        // …otherwise de-dupe by real id (covers the REST round-trip having
+        // already inserted this exact row).
+        if (prev.some((m) => m.id === incoming.id)) return prev
+        const next = [...prev, incoming]
+        // Bound growth only when the reader is at the bottom — never trim
+        // history out from under someone scrolled up.
+        return shouldAutoScrollRef.current ? capTail(next) : next
+      })
+      setChannels((prev) =>
+        prev.map((c) =>
+          c.id === incoming.channel_id
+            ? {
+                ...c,
+                last_message_preview: (incoming.body || '').slice(0, 120),
+                last_message_at: incoming.created_at,
+                unread_count: 0,
+              }
+            : c
+        )
+      )
+    } else if (data.type === 'typing') {
+      setTypingUsers((prev) => ({ ...prev, [data.user_id]: { name: data.name, at: Date.now() } }))
+    } else if (data.type === 'reaction') {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== data.message_id) return m
+          let reactions = [...(m.reactions || [])]
+          if (data.action === 'added') {
+            if (!reactions.some((r) => r.emoji === data.emoji && r.user_id === data.user_id)) {
+              reactions.push({ emoji: data.emoji, user_id: data.user_id, user_name: data.user_name })
+            }
+          } else {
+            reactions = reactions.filter((r) => !(r.emoji === data.emoji && r.user_id === data.user_id))
+          }
+          return { ...m, reactions }
+        })
+      )
+    } else if (data.type === 'message_deleted') {
+      setMessages((prev) =>
+        prev.map((m) => m.id === data.message_id ? { ...m, deleted_at: new Date().toISOString() } : m)
+      )
+    } else if (data.type === 'read_receipt') {
+      setReadReceipts((prev) => ({ ...prev, [data.user_id]: data.last_read_message_id }))
     }
-    return () => { try { ws.close() } catch {} }
-  }, [channelId])
+  }, [])
+
+  // WebSocket connection with auto-reconnect + exponential backoff. The socket
+  // is now used purely to *receive* real-time events — sending goes over REST
+  // (see deliverMessage) so a dropped/idle socket can never block the composer.
+  useEffect(() => {
+    if (!channelId) { setWsStatus('closed'); return }
+    let stopped = false
+
+    const clearReconnect = () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+    }
+
+    const scheduleReconnect = () => {
+      if (stopped) return
+      clearReconnect()
+      const attempt = reconnectAttemptsRef.current++
+      const delay = Math.min(1000 * 2 ** Math.min(attempt, 5), 15000)
+      reconnectTimerRef.current = setTimeout(connect, delay)
+    }
+
+    const connect = () => {
+      if (stopped) return
+      const token = localStorage.getItem('zoiko_token')
+      if (!token) { setWsStatus('closed'); return }
+      if (wsRef.current) { try { wsRef.current.close() } catch {} }
+      setWsStatus('connecting')
+      let ws
+      try {
+        ws = new WebSocket(`${getWsBase()}/ws/channels/${channelId}?token=${encodeURIComponent(token)}`)
+      } catch {
+        scheduleReconnect()
+        return
+      }
+      wsRef.current = ws
+      ws.onopen = () => {
+        if (stopped) { try { ws.close() } catch {}; return }
+        const wasReconnect = reconnectAttemptsRef.current > 0
+        reconnectAttemptsRef.current = 0
+        setWsStatus('open')
+        // After any gap in the socket we may have missed live frames — pull the
+        // latest page so the thread is whole again. Silent: no skeleton flash.
+        if (wasReconnect) loadMessagesRef.current?.({ silent: true })
+      }
+      ws.onmessage = handleWsMessage
+      ws.onerror = () => { /* surfaced via onclose; nothing actionable here */ }
+      ws.onclose = (ev) => {
+        if (stopped) return
+        setWsStatus('closed')
+        // 4401 = bad/expired token, 4403 = not a member. Reconnecting can't fix
+        // either, so don't hammer the server — let the user re-auth / re-open.
+        if (ev.code === 4401 || ev.code === 4403) return
+        scheduleReconnect()
+      }
+    }
+
+    // Reconnect proactively when the tab returns to the foreground or the
+    // network comes back — both commonly kill an idle socket on Cloud Run.
+    const onWake = () => {
+      if (stopped) return
+      if (document.visibilityState === 'visible' && wsRef.current?.readyState !== WebSocket.OPEN) {
+        reconnectAttemptsRef.current = 0
+        connect()
+      }
+    }
+
+    connect()
+    document.addEventListener('visibilitychange', onWake)
+    window.addEventListener('online', onWake)
+
+    return () => {
+      stopped = true
+      clearReconnect()
+      reconnectAttemptsRef.current = 0
+      document.removeEventListener('visibilitychange', onWake)
+      window.removeEventListener('online', onWake)
+      const ws = wsRef.current
+      wsRef.current = null
+      if (ws) {
+        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null
+        try { ws.close() } catch {}
+      }
+    }
+  }, [channelId, handleWsMessage])
 
   const markActiveChannelRead = useCallback((nextMessages = messages) => {
     if (!channelId || !nextMessages.length) return
@@ -372,11 +579,33 @@ export default function Chat() {
 
   useEffect(() => {
     if (!channelId || !messages.length) return
-    setCachedMessages(channelId, messages, user?.id)
+    // Never persist unsettled optimistic bubbles — otherwise a refresh would
+    // resurrect them as permanently "Sending…" with no in-flight request.
+    const persistable = messages.filter((m) => !m._tmp_id)
+    if (persistable.length) setCachedMessages(channelId, persistable, user?.id)
   }, [channelId, messages, user?.id])
   useEffect(() => { if (channels.length) setCachedChannels(channels, user?.id) }, [channels, user?.id])
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+  // Track whether the user is pinned to the bottom so incoming/old messages
+  // don't fight their scroll position.
+  const onMessagesScroll = useCallback(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    shouldAutoScrollRef.current = distanceFromBottom < 120
+  }, [])
+
+  useEffect(() => {
+    if (!messages.length) return
+    // First paint of a conversation jumps instantly to the latest; subsequent
+    // new messages animate — but only when the user is already at the bottom.
+    if (firstScrollRef.current) {
+      firstScrollRef.current = false
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+    } else if (shouldAutoScrollRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages])
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -400,11 +629,60 @@ export default function Chat() {
     el.style.height = Math.min(el.scrollHeight, 160) + 'px'
   }, [draft])
 
-  const sendMessage = () => {
+  // POST the message and reconcile the optimistic bubble with the persisted
+  // row. Sending is REST-only on purpose: a flaky/closed WebSocket can never
+  // block the composer. The server fans the result back out to the WS room, so
+  // peers (and this sender, if their socket is up) still get it in real time —
+  // de-duped by client_id / id in handleWsMessage.
+  const deliverMessage = useCallback(async ({ body, clientId, replyToId, attempt = 0 }) => {
+    setMessages((prev) => prev.map((m) =>
+      m._tmp_id === clientId ? { ...m, _pending: true, _failed: false } : m
+    ))
+    try {
+      const saved = await api(`/api/channels/${channelId}/messages`, {
+        method: 'POST',
+        body: { body, reply_to_id: replyToId ?? undefined, client_id: clientId },
+      })
+      setMessages((prev) => {
+        const realAlready = prev.some((m) => m.id === saved.id && m._tmp_id == null)
+        const idx = prev.findIndex((m) => m._tmp_id === clientId)
+        if (idx >= 0) {
+          const next = prev.slice()
+          // If the WS broadcast already inserted the real row, just drop the
+          // optimistic dupe; otherwise swap it in place to preserve ordering.
+          if (realAlready) next.splice(idx, 1)
+          else next[idx] = saved
+          return next
+        }
+        return realAlready ? prev : [...prev, saved]
+      })
+      setChannels((prev) =>
+        prev.map((c) =>
+          String(c.id) === String(channelId)
+            ? { ...c, last_message_preview: (saved.body || '').slice(0, 120), last_message_at: saved.created_at }
+            : c
+        )
+      )
+    } catch {
+      // Auto-retry transient failures a couple of times before surfacing a
+      // manual retry affordance to the user.
+      if (attempt < SEND_RETRY_LIMIT) {
+        const delay = 600 * 2 ** attempt
+        setTimeout(() => { deliverMessage({ body, clientId, replyToId, attempt: attempt + 1 }) }, delay)
+        return
+      }
+      setMessages((prev) => prev.map((m) =>
+        m._tmp_id === clientId ? { ...m, _pending: false, _failed: true } : m
+      ))
+    }
+  }, [channelId])
+
+  const sendMessage = useCallback(() => {
     const body = draft.trim()
-    if (!body || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    if (!body || !channelId) return
 
     const clientId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const replyToId = replyTo?.id ?? null
     const optimistic = {
       _tmp_id: clientId,
       id: clientId,
@@ -416,29 +694,30 @@ export default function Chat() {
       body,
       created_at: new Date().toISOString(),
       deleted_at: null,
-      reply_to_id: replyTo?.id ?? null,
+      reply_to_id: replyToId,
       reply_preview: replyTo ? replyTo.body?.slice(0, 120) : null,
       reactions: [],
     }
-    setMessages((prev) => [...prev, optimistic])
-
-    const payload = { type: 'message', body, client_id: clientId }
-    if (replyTo) payload.reply_to_id = replyTo.id
-    wsRef.current.send(JSON.stringify(payload))
-
-    setTimeout(() => {
-      setMessages((prev) => prev.map((m) =>
-        m._tmp_id === clientId && m._pending
-          ? { ...m, _pending: false, _failed: true }
-          : m
-      ))
-    }, 8000)
-
+    // Optimistic insert + snappy composer reset; the user is always pinned to
+    // the bottom right after they send.
+    shouldAutoScrollRef.current = true
+    setMessages((prev) => capTail([...prev, optimistic]))
     setDraft('')
     setReplyTo(null)
     setSmartReplies([])
     setMentionState(null)
-  }
+
+    deliverMessage({ body, clientId, replyToId })
+  }, [draft, channelId, replyTo, user?.id, user?.name, user?.avatar_color, deliverMessage])
+
+  const retrySend = useCallback((m) => {
+    if (!m?._tmp_id) return
+    deliverMessage({ body: m.body, clientId: m._tmp_id, replyToId: m.reply_to_id ?? null })
+  }, [deliverMessage])
+
+  const discardFailed = useCallback((tmpId) => {
+    setMessages((prev) => prev.filter((m) => m._tmp_id !== tmpId))
+  }, [])
 
   // ── @mention autocomplete ──────────────────────────────────────────────
   const mentionCandidates = useMemo(() => {
@@ -487,6 +766,9 @@ export default function Chat() {
   }
 
   const onComposerKey = (e) => {
+    // Don't treat the Enter that confirms an IME composition (CJK, accents) as
+    // a send — that's the classic accidental double/early-send bug.
+    if (e.isComposing || e.keyCode === 229) return
     if (mentionState && mentionCandidates.length > 0) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIndex((i) => (i + 1) % mentionCandidates.length); return }
       if (e.key === 'ArrowUp')   { e.preventDefault(); setMentionIndex((i) => (i - 1 + mentionCandidates.length) % mentionCandidates.length); return }
@@ -532,14 +814,44 @@ export default function Chat() {
   }
 
   const toggleReaction = (messageId, emoji) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-    wsRef.current.send(JSON.stringify({ type: 'reaction', message_id: messageId, emoji }))
     setEmojiPicker(null)
+    // Optimistic/failed bubbles aren't persisted yet — nothing to react to.
+    if (typeof messageId !== 'number') return
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      try { wsRef.current.send(JSON.stringify({ type: 'reaction', message_id: messageId, emoji })); return } catch {}
+    }
+    // REST fallback when the socket is down. Decide add vs remove from local
+    // state and apply an optimistic update so the UI responds immediately.
+    const target = messagesRef.current.find((m) => m.id === messageId)
+    const mine = target?.reactions?.some((r) => r.emoji === emoji && r.user_id === user?.id)
+    setMessages((prev) => prev.map((m) => {
+      if (m.id !== messageId) return m
+      let reactions = [...(m.reactions || [])]
+      if (mine) reactions = reactions.filter((r) => !(r.emoji === emoji && r.user_id === user?.id))
+      else reactions.push({ emoji, user_id: user?.id, user_name: user?.name })
+      return { ...m, reactions }
+    }))
+    const base = `/api/channels/${channelId}/messages/${messageId}/reactions`
+    const req = mine
+      ? api(`${base}/${encodeURIComponent(emoji)}`, { method: 'DELETE' })
+      : api(base, { method: 'POST', body: { emoji } })
+    req.catch(() => {})
   }
 
   const deleteMessage = (messageId) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-    wsRef.current.send(JSON.stringify({ type: 'delete', message_id: messageId }))
+    // Locally-only (optimistic/failed) message — just drop it from the thread.
+    if (typeof messageId !== 'number') {
+      setMessages((prev) => prev.filter((m) => m.id !== messageId && m._tmp_id !== messageId))
+      return
+    }
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      try { wsRef.current.send(JSON.stringify({ type: 'delete', message_id: messageId })); return } catch {}
+    }
+    // REST fallback + optimistic soft-delete.
+    setMessages((prev) => prev.map((m) =>
+      m.id === messageId ? { ...m, deleted_at: new Date().toISOString() } : m
+    ))
+    api(`/api/channels/${channelId}/messages/${messageId}`, { method: 'DELETE' }).catch(() => {})
   }
 
   const handleFileUpload = async (e) => {
@@ -820,7 +1132,12 @@ export default function Chat() {
                       {display.name}
                     </div>
                     <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-fg-muted">
-                      {activeChannel.is_direct ? (
+                      {wsStatus !== 'open' ? (
+                        <>
+                          <span className="inline-block h-[7px] w-[7px] animate-pulse rounded-full bg-warn shadow-[0_0_8px_var(--c-warn)]" />
+                          {wsStatus === 'connecting' ? 'Connecting…' : 'Reconnecting…'}
+                        </>
+                      ) : activeChannel.is_direct ? (
                         <>
                           <span className="inline-block h-[7px] w-[7px] animate-pulse rounded-full bg-success shadow-[0_0_8px_var(--c-success)]" />
                           Active now
@@ -847,9 +1164,65 @@ export default function Chat() {
             })()}
 
             <div
+              ref={scrollContainerRef}
+              onScroll={onMessagesScroll}
               className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-7 pb-2 pt-6"
               onClick={() => setEmojiPicker(null)}
             >
+              {/* Load-older affordance — paginates back through history while
+                  preserving scroll position. */}
+              {hasMore && messages.length > 0 && (
+                <div className="flex justify-center pb-1">
+                  <button
+                    className="ghost rounded-full border border-line-strong px-3 py-1 text-[12px] text-fg-dim"
+                    onClick={loadOlder}
+                    disabled={loadingOlder}
+                  >
+                    {loadingOlder ? 'Loading…' : 'Load earlier messages'}
+                  </button>
+                </div>
+              )}
+
+              {/* Initial load skeleton (only when we have nothing cached). */}
+              {loadingMessages && messages.length === 0 && (
+                <div className="flex flex-col gap-4 py-4" aria-hidden>
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <div key={i} className={cn('flex items-end gap-2.5', i % 2 === 0 && 'flex-row-reverse')}>
+                      <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-bg-3" />
+                      <div
+                        className="h-10 animate-pulse rounded-[18px] bg-bg-3"
+                        style={{ width: `${40 + ((i * 53) % 45)}%` }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Hard error with nothing to show — offer a retry. */}
+              {messagesError && messages.length === 0 && !loadingMessages && (
+                <div className="m-auto flex max-w-[320px] flex-col items-center gap-3 py-10 text-center">
+                  <div className="grid h-12 w-12 place-items-center rounded-full bg-danger-soft text-danger">
+                    <Icon name="close" size={22} />
+                  </div>
+                  <div className="text-[14px] font-semibold text-fg-dim">Couldn’t load messages</div>
+                  <div className="text-[12.5px] text-fg-muted">{messagesError}</div>
+                  <button className="primary sm" onClick={() => loadMessages()}>
+                    <Icon name="redo" size={13} /> Retry
+                  </button>
+                </div>
+              )}
+
+              {/* Empty conversation. */}
+              {!loadingMessages && !messagesError && messages.length === 0 && (
+                <div className="m-auto flex max-w-[320px] flex-col items-center gap-2 py-10 text-center text-fg-muted">
+                  <div className="grid h-12 w-12 place-items-center rounded-full bg-bg-3 text-fg-muted">
+                    <Icon name="chat" size={22} />
+                  </div>
+                  <div className="text-[13.5px] font-semibold text-fg-dim">No messages yet</div>
+                  <div className="text-[12.5px]">Say hello to start the conversation.</div>
+                </div>
+              )}
+
               {grouped.map((g) =>
                 g.type === 'divider' ? (
                   <div
@@ -887,10 +1260,12 @@ export default function Chat() {
                             key={m.id}
                             msg={m}
                             isMine={m.sender_id === user.id}
-                            isChannelCreator={activeChannel.members?.find(mem => mem.id === user.id) && activeChannel.created_by === user?.id}
+                            isChannelCreator={!!activeChannel?.members?.find(mem => mem.id === user.id) && activeChannel?.created_by === user?.id}
                             onReply={() => { setReplyTo(m); composerRef.current?.focus() }}
                             onReact={(emoji) => toggleReaction(m.id, emoji)}
                             onDelete={() => deleteMessage(m.id)}
+                            onRetry={() => retrySend(m)}
+                            onDiscard={() => discardFailed(m._tmp_id)}
                             emojiPickerOpen={emojiPicker === m.id}
                             onToggleEmojiPicker={(e) => { e.stopPropagation(); setEmojiPicker(emojiPicker === m.id ? null : m.id) }}
                             readBy={readByPerMessage[m.id]}
@@ -1179,9 +1554,14 @@ function SpinnerSm() {
 
 /* ────────────────────── Message Bubble ────────────────────── */
 
-function MessageBubble({
+// Memoized: re-renders only when the data it actually displays changes. Function
+// props (onReply/onReact/…) are intentionally excluded from the comparison —
+// they're recreated every parent render but their behaviour is stable (handlers
+// read live state via refs), so ignoring them lets a typing/presence event on
+// the parent skip re-rendering every bubble in a long thread.
+const MessageBubble = memo(function MessageBubble({
   msg, isMine, isChannelCreator,
-  onReply, onReact, onDelete,
+  onReply, onReact, onDelete, onRetry, onDiscard,
   emojiPickerOpen, onToggleEmojiPicker,
   readBy, myHandle,
 }) {
@@ -1345,14 +1725,49 @@ function MessageBubble({
         </div>
       )}
 
+      {/* Delivery status — sending spinner / failed + retry. Only ever shown on
+          the sender's own optimistic bubbles. */}
+      {isMine && msg._pending && !msg._failed && (
+        <div className="flex items-center gap-1 px-1 text-[11px] text-fg-muted">
+          <SpinnerSm />
+          <span>Sending…</span>
+        </div>
+      )}
+      {isMine && msg._failed && (
+        <div className="flex items-center gap-2 px-1 text-[11px] text-danger">
+          <Icon name="close" size={11} />
+          <span>Not sent.</span>
+          <button onClick={onRetry} className="font-semibold underline underline-offset-2 hover:opacity-80">
+            Retry
+          </button>
+          <button onClick={onDiscard} className="text-fg-muted underline underline-offset-2 hover:opacity-80">
+            Discard
+          </button>
+        </div>
+      )}
+
       {/* Read receipts */}
-      {readBy && readBy.length > 0 && (
+      {!msg._pending && !msg._failed && readBy && readBy.length > 0 && (
         <div className="flex items-center gap-1 px-1 text-[11px] text-fg-muted" title={readBy.join(', ')}>
           <Icon name="check" size={11} />
           <span>Read by {readBy.length <= 2 ? readBy.join(', ') : `${readBy.length} people`}</span>
         </div>
       )}
     </div>
+  )
+}, messageBubbleEqual)
+
+// Only the props that affect what's painted. `msg` is compared by reference:
+// unchanged messages keep their object identity across parent renders (we spread
+// the array, not the items), so they skip; the one changed/new message re-renders.
+function messageBubbleEqual(prev, next) {
+  return (
+    prev.msg === next.msg &&
+    prev.isMine === next.isMine &&
+    prev.isChannelCreator === next.isChannelCreator &&
+    prev.emojiPickerOpen === next.emojiPickerOpen &&
+    prev.readBy === next.readBy &&
+    prev.myHandle === next.myHandle
   )
 }
 

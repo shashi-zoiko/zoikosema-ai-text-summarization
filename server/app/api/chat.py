@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import uuid
 from datetime import datetime, timezone as tz
@@ -5,6 +7,7 @@ from datetime import datetime, timezone as tz
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy import select, func, desc, or_, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -12,12 +15,18 @@ from app.core.deps import get_current_user
 from app.models.chat import (
     Channel, ChannelMember, Message, MessageReaction, MessageReadReceipt,
 )
+from app.models.organization import NOTIF_CHAT_MENTION, Notification
 from app.models.user import User
 from app.schemas.chat import (
     ChannelCreate, ChannelMemberOut, ChannelOut,
     MessageCreate, MessageOut, ReactionIn, ReactionOut,
     ReadReceiptIn, ReadReceiptOut,
 )
+from app.api.notifications import push_to_user
+from app.websocket.chat import _resolve_mentions
+from app.websocket.manager import chat_manager
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/channels", tags=["chat"])
 
@@ -50,6 +59,7 @@ def _serialize_message(
     reactions: list[MessageReaction],
     reaction_users: dict[int, User],
     reply_preview: str | None,
+    client_id: str | None = None,
 ) -> MessageOut:
     return MessageOut(
         id=msg.id,
@@ -66,6 +76,7 @@ def _serialize_message(
         file_name=msg.file_name,
         file_type=msg.file_type,
         file_size=msg.file_size,
+        client_id=client_id,
         reactions=[
             ReactionOut(
                 emoji=r.emoji,
@@ -113,7 +124,9 @@ def _load_message_ctx(
     return reactions_by_msg, reaction_users, reply_previews
 
 
-def _serialize_single_message(db: Session, msg: Message, sender: User) -> MessageOut:
+def _serialize_single_message(
+    db: Session, msg: Message, sender: User, client_id: str | None = None
+) -> MessageOut:
     """For endpoints that return exactly one message (post_message, upload_file).
     Wraps the bulk loader so single-message paths stay one-call."""
     reactions_by_msg, reaction_users, reply_previews = _load_message_ctx(db, [msg])
@@ -123,7 +136,67 @@ def _serialize_single_message(db: Session, msg: Message, sender: User) -> Messag
         reactions_by_msg.get(msg.id, []),
         reaction_users,
         reply_previews.get(msg.reply_to_id) if msg.reply_to_id else None,
+        client_id=client_id,
     )
+
+
+# ── Real-time fan-out for REST-originated messages ───────────────────────
+#
+# The chat composer sends over plain HTTP (reliable even when the WebSocket is
+# down) and uses the WS purely to *receive*. So every REST write has to fan its
+# result out to the channel's live WS room itself, otherwise peers wouldn't see
+# the message until their next manual refetch. broadcast_threadsafe hops the
+# payload onto the serving loop from this synchronous (threadpool) handler.
+
+def _broadcast_new_message(channel_id: int, out: MessageOut) -> None:
+    payload = {"type": "message", "message": out.model_dump(mode="json")}
+    try:
+        chat_manager.broadcast_threadsafe(f"channel:{channel_id}", payload)
+    except Exception:  # noqa: BLE001 — never let fan-out failure fail the write
+        log.exception("chat: failed to broadcast message %s", out.id)
+
+
+def _emit_mention_notifications(db: Session, msg: Message, sender: User) -> None:
+    """Resolve @mentions in a freshly-persisted message, persist a Notification
+    per mentioned member, and push it live to their notification socket. Mirrors
+    the WebSocket send path so mentions work no matter which transport sent the
+    message. Best-effort: a failure here must not fail the message write."""
+    try:
+        mentions = _resolve_mentions(db, msg.body, msg.channel_id, sender.id)
+        if not mentions:
+            return
+        channel_obj = db.get(Channel, msg.channel_id)
+        channel_label = channel_obj.name if channel_obj else "a channel"
+        snippet = msg.body[:140]
+        notifs = [
+            Notification(
+                user_id=u.id,
+                type=NOTIF_CHAT_MENTION,
+                title=f"{sender.name} mentioned you in {channel_label}",
+                body=snippet,
+                data=json.dumps({"channel_id": msg.channel_id, "message_id": msg.id}),
+            )
+            for u in mentions
+        ]
+        db.add_all(notifs)
+        db.commit()
+        for n in notifs:
+            db.refresh(n)
+            chat_manager.schedule(push_to_user(n.user_id, {
+                "type": "notification",
+                "notification": {
+                    "id": n.id,
+                    "type": n.type,
+                    "title": n.title,
+                    "body": n.body,
+                    "is_read": False,
+                    "created_at": n.created_at.isoformat(),
+                    "data": {"channel_id": msg.channel_id, "message_id": msg.id},
+                },
+            }))
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        log.exception("chat: failed to emit mention notifications for msg %s", msg.id)
 
 
 def _serialize_single_channel(db: Session, channel: Channel, user_id: int) -> ChannelOut:
@@ -342,16 +415,46 @@ def post_message(
         if not parent or parent.channel_id != channel_id:
             raise HTTPException(status_code=400, detail="Invalid reply target")
 
+    # Idempotency: a retried send (lost response / flaky network) carries the
+    # same client_id. Return the original row instead of inserting a duplicate,
+    # and skip the re-broadcast / re-notify the first call already did.
+    def _existing_for_client_id() -> Message | None:
+        if not data.client_id:
+            return None
+        return db.scalar(
+            select(Message).where(
+                Message.channel_id == channel_id,
+                Message.sender_id == user.id,
+                Message.client_id == data.client_id,
+            )
+        )
+
+    dup = _existing_for_client_id()
+    if dup is not None:
+        return _serialize_single_message(db, dup, user, client_id=data.client_id)
+
     msg = Message(
         channel_id=channel_id,
         sender_id=user.id,
         body=data.body.strip(),
         reply_to_id=data.reply_to_id,
+        client_id=data.client_id,
     )
     db.add(msg)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent retry won the unique-index race — return the row it wrote.
+        db.rollback()
+        dup = _existing_for_client_id()
+        if dup is not None:
+            return _serialize_single_message(db, dup, user, client_id=data.client_id)
+        raise
     db.refresh(msg)
-    return _serialize_single_message(db, msg, user)
+    out = _serialize_single_message(db, msg, user, client_id=data.client_id)
+    _emit_mention_notifications(db, msg, user)
+    _broadcast_new_message(channel_id, out)
+    return out
 
 
 @router.delete("/{channel_id}/messages/{message_id}", status_code=200)
@@ -474,7 +577,9 @@ async def upload_file(
     db.add(msg)
     db.commit()
     db.refresh(msg)
-    return _serialize_single_message(db, msg, user)
+    out = _serialize_single_message(db, msg, user)
+    _broadcast_new_message(channel_id, out)
+    return out
 
 
 # ── Read Receipts ───────────────────────────────────────────────────────

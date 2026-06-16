@@ -51,6 +51,11 @@ class Message(Base):
     )
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    # Opaque client-generated send id. Used for end-to-end idempotency: a unique
+    # partial index on (channel_id, sender_id, client_id) means a retried POST
+    # (e.g. after a lost response) returns the original row instead of inserting
+    # a duplicate. Nullable — server-originated / legacy WS inserts leave it NULL.
+    client_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )

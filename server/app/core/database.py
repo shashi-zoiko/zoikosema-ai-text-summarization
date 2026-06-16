@@ -78,6 +78,16 @@ _ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
     ("ix_messages_channel_id_id", "messages",
      "CREATE INDEX IF NOT EXISTS ix_messages_channel_id_id "
      "ON messages (channel_id, id DESC)"),
+    # End-to-end send idempotency: a retried POST (lost response, flaky network)
+    # carries the same client_id and must not create a second row. Partial so the
+    # mountain of historical client_id-NULL rows neither collide nor bloat the
+    # index. post_message catches the IntegrityError this raises and returns the
+    # original row. Plain (non-CONCURRENT) build briefly locks writes — fine at
+    # current table size; revisit with CREATE UNIQUE INDEX CONCURRENTLY if the
+    # messages table grows large before this first ships.
+    ("ux_messages_sender_client_id", "messages",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_sender_client_id "
+     "ON messages (channel_id, sender_id, client_id) WHERE client_id IS NOT NULL"),
     # ChannelMember membership lookups happen on every WS connect AND every
     # message send (`_persist_message` re-validates membership). The two
     # existing single-column indexes can't satisfy the AND on (channel_id,
@@ -125,6 +135,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("messages", "file_name", "VARCHAR(255)"),
     ("messages", "file_type", "VARCHAR(100)"),
     ("messages", "file_size", "INTEGER"),
+    # Client-supplied idempotency key for chat sends (see Message.client_id).
+    ("messages", "client_id", "VARCHAR(64)"),
     ("channel_members", "is_muted", "BOOLEAN DEFAULT FALSE NOT NULL"),
     # Meeting password
     ("meetings", "password_hash", "VARCHAR(255)"),

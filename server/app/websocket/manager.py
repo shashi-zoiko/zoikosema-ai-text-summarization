@@ -11,6 +11,32 @@ class RoomManager:
     def __init__(self) -> None:
         self._rooms: dict[str, set[WebSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
+        # The running event loop, captured at startup. Lets synchronous REST
+        # handlers (which run in a threadpool, off the loop) fan messages out to
+        # WS rooms without each path having to own an async context.
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+
+    def schedule(self, coro) -> None:
+        """Run an awaitable on the bound loop from synchronous/threadpool code.
+        No-ops (and closes the coroutine to avoid 'never awaited' warnings) if
+        no loop is bound yet — e.g. during very early startup."""
+        loop = self._loop
+        if loop is None:
+            coro.close()
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            coro.close()
+
+    def broadcast_threadsafe(
+        self, room: str, payload: dict[str, Any], exclude: WebSocket | None = None
+    ) -> None:
+        """Fire-and-forget broadcast callable from synchronous REST endpoints."""
+        self.schedule(self.broadcast(room, payload, exclude))
 
     async def join(self, room: str, ws: WebSocket) -> None:
         async with self._lock:
