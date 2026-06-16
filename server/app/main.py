@@ -17,6 +17,7 @@ from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.core.recording_cleanup import recording_cleanup_loop
 from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence, webhooks
 from app.websocket import chat as chat_ws, signaling as meeting_ws
+from app.websocket.manager import chat_manager
 from app.connect import router as connect_router
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,9 @@ async def _init_db_background() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Capture the serving loop so synchronous REST handlers can fan messages out
+    # to WebSocket rooms (e.g. REST-sent chat messages reaching live peers).
+    chat_manager.bind_loop(asyncio.get_running_loop())
     init_task = asyncio.create_task(_init_db_background())
     cleanup_task = asyncio.create_task(recording_cleanup_loop())
     try:
@@ -168,3 +172,19 @@ if os.path.isdir(_dist_dir):
         return FileResponse(_index_html)
 else:
     log.warning("frontend dist not found at %s; SPA routes will 404", _dist_dir)
+
+
+if __name__ == "__main__":
+    # Local dev entrypoint: `python -m app.main`. Defaults to 8001 because the
+    # client (client/.env.local VITE_API_BASE + Vite proxy in vite.config.js)
+    # and docker-compose's host mapping (8001:8080) all expect the API on 8001.
+    # Running manual uvicorn on any other port → the browser gets "Failed to
+    # fetch". Containers set PORT=8080 explicitly, so this respects that too.
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8001")),
+        reload=True,
+    )

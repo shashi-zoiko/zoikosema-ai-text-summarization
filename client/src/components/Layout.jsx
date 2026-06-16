@@ -3,10 +3,9 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BarChart3, ChevronDown, ChevronsUpDown, Home, LogOut, MessageSquareText,
-  Moon, Settings, ShieldCheck, Sun, Users2, Video,
+  Settings, ShieldCheck, Users2, Video,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { useTheme, THEMES } from '../theme/ThemeProvider'
 import { cn } from '../lib/cn'
 import Avatar from './ui/Avatar'
 import Logo from './ui/Logo'
@@ -25,74 +24,6 @@ const NAV = [
 const SECONDARY = [
   { to: '/admin', label: 'Workspace',  icon: ShieldCheck, role: 'owner' },
 ]
-
-function ThemeMenu() {
-  const { theme, setTheme } = useTheme()
-  const [open, setOpen] = useState(false)
-  const current = THEMES.find((t) => t.id === theme) || THEMES[0]
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="flex h-9 items-center gap-2 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-2)] px-2.5 text-[12.5px] font-medium text-[var(--c-fg-dim)] transition hover:border-[var(--c-line-strong)] hover:text-[var(--c-fg)]"
-      >
-        {current.mode === 'dark' ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
-        <span className="hidden sm:inline">{current.label}</span>
-        <ChevronDown className="h-3 w-3 opacity-70" />
-      </button>
-      <AnimatePresence>
-        {open && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-            <motion.div
-              role="menu"
-              initial={{ opacity: 0, y: -6, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -4, scale: 0.98 }}
-              transition={{ duration: 0.14 }}
-              className="absolute right-0 z-50 mt-2 w-72 overflow-hidden rounded-2xl border border-[var(--c-line-strong)] bg-[color-mix(in_srgb,var(--c-surface)_92%,transparent)] p-2 shadow-2xl backdrop-blur-xl"
-            >
-              <div className="px-2 pb-2 pt-1">
-                <div className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[var(--c-fg-muted)]">Appearance</div>
-              </div>
-              {THEMES.map((t) => (
-                <button
-                  key={t.id}
-                  role="menuitemradio"
-                  aria-checked={t.id === theme}
-                  onClick={() => { setTheme(t.id); setOpen(false) }}
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition',
-                    t.id === theme ? 'bg-[var(--c-accent-soft)]' : 'hover:bg-[var(--c-bg-3)]'
-                  )}
-                >
-                  <span
-                    aria-hidden
-                    className="h-8 w-8 shrink-0 rounded-lg border border-white/10"
-                    style={{
-                      background:
-                        t.id === 'midnight'
-                          ? 'linear-gradient(135deg, #0f121b, #1f7a54)'
-                          : 'linear-gradient(135deg, #ffffff, #e7f6ef)',
-                    }}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className={cn('text-[13px] font-semibold tracking-tight', t.id === theme ? 'text-[var(--c-accent)]' : 'text-[var(--c-fg)]')}>
-                      {t.label}
-                    </div>
-                    <div className="text-[11.5px] text-[var(--c-fg-muted)] leading-tight">{t.desc}</div>
-                  </div>
-                </button>
-              ))}
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
-  )
-}
 
 function UserMenu() {
   const { user, logout } = useAuth()
@@ -240,8 +171,7 @@ export default function Layout() {
 
         <div className="space-y-3 border-t border-[var(--c-line)] p-3">
           <DesktopStatus />
-          <div className="flex items-center justify-between gap-2 px-1">
-            <ThemeMenu />
+          <div className="flex items-center justify-end gap-2 px-1">
             <NotificationBell />
           </div>
         </div>

@@ -33,6 +33,10 @@ class ChannelOut(BaseModel):
 class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
     reply_to_id: int | None = None
+    # Opaque client-generated id used to reconcile the optimistic UI bubble with
+    # the persisted row. Echoed back verbatim on the response and on the WS
+    # broadcast; never trusted for anything server-side.
+    client_id: str | None = Field(default=None, max_length=64)
 
 
 class ReactionOut(BaseModel):
@@ -61,6 +65,9 @@ class MessageOut(BaseModel):
     file_type: str | None = None
     file_size: int | None = None
     reactions: list[ReactionOut] = []
+    # Echoed back to the sender so the optimistic bubble can swap itself for the
+    # persisted row. Null for every recipient other than the original sender.
+    client_id: str | None = None
 
 
 class ReactionIn(BaseModel):
