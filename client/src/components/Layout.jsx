@@ -125,7 +125,13 @@ export default function Layout() {
         aria-label="Primary"
       >
         <div className="flex items-center justify-between px-4 pt-5 pb-4">
-          <Logo size={36} withWordmark />
+          <NavLink
+            to="/"
+            aria-label="ZoikoSema home"
+            className="rounded-lg outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-(--c-accent-ring)"
+          >
+            <Logo size={36} withWordmark />
+          </NavLink>
         </div>
 
         <div className="px-3">

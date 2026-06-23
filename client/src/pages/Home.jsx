@@ -382,7 +382,7 @@ export default function Home() {
           {greeting()}, <span className="gradient-text">{firstName}</span>
         </motion.h1>
         <motion.p variants={fadeUp} className="mt-2 max-w-[560px] text-[14.5px] leading-relaxed text-[var(--c-fg-dim)]">
-          Your meetings, chat, and AI assistant — all in one place. Start an instant call, schedule for later, or pick up where your team left off.
+          Your meetings and chat in one place. Start an instant call, schedule for later, or pick up where your team left off.
         </motion.p>
       </motion.header>
 

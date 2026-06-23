@@ -461,6 +461,15 @@ h4 { line-height: 1.40; font-weight: 600; }
   .zk-press:hover { transform: translateY(-2px); }
   .zk-press:active { transform: translateY(0) scale(0.93); transition-duration: 90ms; }
 
+  /* Lobby ambient leaf sway — composes with the wrapper's own positioning
+     transform via an inner group, so the keyframe only nudges rotation.
+     The decorative wrapper sets its own duration/delay inline. */
+  @keyframes zk-leaf-sway {
+    0%, 100% { transform: rotate(-1.6deg) translateY(0); }
+    50%      { transform: rotate(1.6deg) translateY(-4px); }
+  }
+  .zk-leaf-sway { animation: zk-leaf-sway 12s ease-in-out infinite; transform-origin: 50% 90%; will-change: transform; }
+
   /* Popover / menu pop-in. Position-agnostic (Y + scale only) so it composes
      with whatever centering the element's wrapper applies. */
   @keyframes zk-pop-in {

@@ -38,6 +38,9 @@ class Meeting(Base):
     # Per-meeting permissions enforced server-side. Host + co-host bypass.
     chat_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     screenshare_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Meeting-wide visual theme id (see client roomThemes.js). Host/co-host set
+    # it; broadcast to everyone so the whole room shares one ambient look.
+    theme: Mapped[str] = mapped_column(String(24), default="forest")
     # Meeting password (bcrypt hash, nullable = no password)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
