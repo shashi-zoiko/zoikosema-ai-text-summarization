@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { Crown, Hand, MicOff, ShieldCheck } from 'lucide-react'
 import { PinButton, PinnedNameIcon } from './PinControls.jsx'
+import { useRoomTheme } from '../../features/meeting/RoomThemeContext.jsx'
 
 /**
  * Google Meet–style participant tile.
@@ -174,6 +175,7 @@ function PeerTile({
   }, [peer.name])
 
   const avatarColor = peer.color || '#3a6ff3'
+  const theme = useRoomTheme()
 
   return (
     <div
@@ -206,16 +208,19 @@ function PeerTile({
         // 70%→100% darkening of the same hue, never a hard ring.
         <div
           className="absolute inset-0 grid place-items-center"
-          style={{
-            background: `radial-gradient(circle at 50% 35%, ${avatarColor} 0%, color-mix(in srgb, ${avatarColor} 55%, #000) 100%)`,
-          }}
+          style={{ background: theme.tileBg }}
         >
           <div
             className={
-              'grid place-items-center rounded-full font-semibold text-white ring-1 ring-white/15 backdrop-blur-sm ' +
-              'bg-white/[0.08] ' +
+              'grid place-items-center rounded-full font-semibold text-white ' +
               (spotlight ? 'h-36 w-36 text-5xl' : mini ? 'h-10 w-10 text-base' : 'h-24 w-24 text-3xl')
             }
+            style={{
+              backgroundColor: avatarColor,
+              boxShadow: mini
+                ? `0 0 0 2px color-mix(in srgb, ${theme.accent} 45%, transparent)`
+                : `0 0 0 1px rgba(255,255,255,0.18), 0 0 0 5px color-mix(in srgb, ${theme.accent} 22%, transparent), 0 18px 44px -18px rgba(0,0,0,0.65)`,
+            }}
           >{initial}</div>
         </div>
       )}

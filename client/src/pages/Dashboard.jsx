@@ -84,32 +84,54 @@ const TONE_BG = {
 
 /* ─────────────────────── page ─────────────────────── */
 
+/* Module-level cache so switching away and back to Analytics renders the
+ * last-known data instantly instead of blocking the whole page on a fresh
+ * round-trip every time. The page still revalidates in the background on each
+ * mount (stale-while-revalidate); only the very first load shows the skeleton.
+ * Keyed by user id so a different account never sees another's cached data. */
+let dashboardCache = null
+
 export default function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const [stats, setStats] = useState(null)
-  const [history, setHistory] = useState([])
-  const [upcoming, setUpcoming] = useState([])
-  const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(true)
+
+  const cached = dashboardCache && dashboardCache.userId === user?.id ? dashboardCache : null
+  const [stats, setStats] = useState(cached?.stats ?? null)
+  const [history, setHistory] = useState(cached?.history ?? [])
+  const [upcoming, setUpcoming] = useState(cached?.upcoming ?? [])
+  const [page, setPage] = useState(cached?.page ?? 1)
+  // Only block on the skeleton when we have nothing to show yet.
+  const [loading, setLoading] = useState(!cached)
   const [query, setQuery] = useState('')
 
   useEffect(() => {
+    let cancelled = false
     Promise.all([
       api('/api/dashboard/stats'),
       api('/api/dashboard/history?limit=20'),
       api('/api/dashboard/upcoming'),
     ])
-      .then(([s, h, u]) => { setStats(s); setHistory(h); setUpcoming(u) })
+      .then(([s, h, u]) => {
+        if (cancelled) return
+        setStats(s); setHistory(h); setUpcoming(u); setPage(1)
+        dashboardCache = { userId: user?.id, stats: s, history: h, upcoming: u, page: 1 }
+      })
       .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [])
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [user?.id])
 
   const loadMore = async () => {
     const nextPage = page + 1
     try {
       const more = await api(`/api/dashboard/history?page=${nextPage}&limit=20`)
-      setHistory((prev) => [...prev, ...more])
+      setHistory((prev) => {
+        const next = [...prev, ...more]
+        if (dashboardCache && dashboardCache.userId === user?.id) {
+          dashboardCache = { ...dashboardCache, history: next, page: nextPage }
+        }
+        return next
+      })
       setPage(nextPage)
     } catch {}
   }

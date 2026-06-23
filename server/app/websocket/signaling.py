@@ -353,6 +353,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 "locked": meeting.locked,
                 "chat_enabled": meeting.chat_enabled,
                 "screenshare_enabled": meeting.screenshare_enabled,
+                "theme": meeting.theme or "forest",
             },
         })
 
@@ -683,6 +684,20 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                                 "chat_enabled": meeting.chat_enabled,
                                 "screenshare_enabled": meeting.screenshare_enabled,
                             },
+                        )
+
+                elif kind == "set-theme":
+                    # Meeting-wide visual theme. Any participant may change it;
+                    # it's a cosmetic, shared preference (not a host control).
+                    # Persist so late joiners get it via welcome, then broadcast
+                    # to everyone (sender included) so all stages re-skin in sync.
+                    theme_id = (data.get("theme") or "").strip()[:24]
+                    if theme_id and theme_id != meeting.theme:
+                        meeting.theme = theme_id
+                        db.commit()
+                        await meet_manager.broadcast(
+                            room,
+                            {"type": "theme-changed", "theme": theme_id},
                         )
 
                 elif kind == "lock" and host_or_cohost:

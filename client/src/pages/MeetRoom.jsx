@@ -7,6 +7,13 @@ import useMediaDevices from '../hooks/useMediaDevices'
 import MeetingDock from '../components/meeting/MeetingDock'
 import PeerTile from '../components/meeting/PeerTile'
 import { PinButton, PinnedNameIcon } from '../components/meeting/PinControls'
+import { RoomThemeProvider, useRoomTheme } from '../features/meeting/RoomThemeContext'
+import { getTheme, DEFAULT_THEME_ID } from '../features/meeting/roomThemes'
+import ThemePicker from '../features/meeting/ThemePicker'
+import { getPreset } from '../features/meeting/backgroundPresets'
+// backgroundEngine (and the MediaPipe runtime it pulls in) is imported lazily
+// the first time a background effect is actually used — see buildOutboundVideo
+// — so it never weighs down the initial room load for people who don't use it.
 import {
   Check, Copy, Lock, ShieldCheck, Crown, MicOff, VideoOff, MonitorUp, MonitorX, Hand,
   X, Send, MessageSquare, Users, Settings as SettingsIcon, Clock,
@@ -125,7 +132,32 @@ export default function MeetRoom() {
   const [meetingLocked, setMeetingLocked] = useState(false)
   const [chatEnabled, setChatEnabled] = useState(true)
   const [screenshareEnabled, setScreenshareEnabled] = useState(true)
+  // Meeting-wide visual theme — host/co-host controlled, synced to everyone.
+  const [themeId, setThemeId] = useState(DEFAULT_THEME_ID)
   const [permissionToast, setPermissionToast] = useState('')
+
+  // ── Virtual background (LOCAL, per-participant — unlike the theme) ──────
+  // The chosen effect is restored across reloads (built-in presets only;
+  // uploads live for the session). `bgEffectRef` mirrors state for the
+  // non-React camera-lifecycle paths.
+  const [bgSupported] = useState(() =>
+    typeof HTMLCanvasElement !== 'undefined' &&
+    typeof HTMLCanvasElement.prototype.captureStream === 'function' &&
+    typeof MediaStream !== 'undefined'
+  )
+  const [bgEffect, setBgEffect] = useState(() => {
+    try {
+      const id = localStorage.getItem('zoiko_bg_effect')
+      if (id) return getPreset(id)
+    } catch {}
+    return { id: 'none', type: 'none' }
+  })
+  const [bgLoading, setBgLoading] = useState(false)
+  const [uploads, setUploads] = useState([])
+  const bgEffectRef = useRef(bgEffect)
+  const bgProcessorRef = useRef(null)
+  const uploadUrlsRef = useRef([])
+  useEffect(() => { bgEffectRef.current = bgEffect }, [bgEffect])
 
   // Pin: per-viewer override that beats auto active-speaker. 'self' or peer_id.
   const [pinnedPeerId, setPinnedPeerId] = useState(null)
@@ -574,6 +606,95 @@ export default function MeetRoom() {
     }
   }, [])
 
+  // ── Virtual background pipeline ─────────────────────────────────────────
+  // Given the current RAW camera track, return the track we should actually
+  // send to peers / show locally — the raw track when no effect is active, or
+  // a canvas-composited track (person + blurred / replaced background) when
+  // one is. As a side effect it keeps `processedStreamRef` pointing at the
+  // right stream so late-joiner PCs (createPeerConnection) and recording
+  // (getActiveStream) pick up the processed feed automatically.
+  const buildOutboundVideo = useCallback(async (rawTrack) => {
+    const effect = bgEffectRef.current
+    const active = effect && effect.type !== 'none' && bgSupported && !!rawTrack
+    if (!active) {
+      // Passthrough — stop the processor (frees the canvas loop) and point the
+      // processed ref back at the raw local stream.
+      if (bgProcessorRef.current) bgProcessorRef.current.stop()
+      processedStreamRef.current = localStreamRef.current
+      return rawTrack
+    }
+    if (!bgProcessorRef.current) {
+      const { BackgroundProcessor } = await import('../features/meeting/backgroundEngine')
+      const proc = new BackgroundProcessor()
+      proc.onError(() => {
+        // Pipeline died after starting — fall back to no effect so the user
+        // isn't left with a frozen tile.
+        setPermissionToast('Background effect stopped unexpectedly.')
+        setTimeout(() => setPermissionToast(''), 3500)
+      })
+      bgProcessorRef.current = proc
+    }
+    const proc = bgProcessorRef.current
+    proc.setEffect(effect)
+    const processedTrack = await proc.start(rawTrack)
+    const audio = localStreamRef.current ? localStreamRef.current.getAudioTracks() : []
+    processedStreamRef.current = new MediaStream([processedTrack, ...audio])
+    return processedTrack
+  }, [bgSupported])
+
+  // Apply the given effect to the live call right now. No-op (beyond storing
+  // the choice) while the camera is off or a screen share owns the video
+  // sender — toggleVideo / stopScreenShare re-apply it through the same path.
+  const applyBgEffect = useCallback(async (effect) => {
+    bgEffectRef.current = effect
+    if (!videoOnRef.current || screenStreamRef.current) {
+      if (bgProcessorRef.current && effect.type !== 'none') bgProcessorRef.current.setEffect(effect)
+      return
+    }
+    const rawTrack = localStreamRef.current?.getVideoTracks()[0]
+    if (!rawTrack) return
+    setBgLoading(true)
+    try {
+      const outbound = await buildOutboundVideo(rawTrack)
+      await replaceTrackForAll(outbound, 'video')
+      if (selfVideoRef.current && !screenStreamRef.current) {
+        try { selfVideoRef.current.srcObject = null } catch {}
+        try { selfVideoRef.current.srcObject = processedStreamRef.current || localStreamRef.current } catch {}
+      }
+    } catch (e) {
+      console.error('[bg] apply failed', e)
+      bgEffectRef.current = { id: 'none', type: 'none' }
+      setBgEffect({ id: 'none', type: 'none' })
+      if (bgProcessorRef.current) bgProcessorRef.current.stop()
+      processedStreamRef.current = localStreamRef.current
+      const raw = localStreamRef.current?.getVideoTracks()[0]
+      if (raw) await replaceTrackForAll(raw, 'video')
+      setPermissionToast('Could not start background effect on this device.')
+      setTimeout(() => setPermissionToast(''), 3500)
+    } finally {
+      setBgLoading(false)
+    }
+  }, [buildOutboundVideo, replaceTrackForAll])
+
+  const changeBgEffect = useCallback((effect) => {
+    setBgEffect(effect)
+    try {
+      if (effect.id && !effect.id.startsWith('upload-')) localStorage.setItem('zoiko_bg_effect', effect.id)
+      else localStorage.removeItem('zoiko_bg_effect')
+    } catch {}
+    applyBgEffect(effect)
+  }, [applyBgEffect])
+
+  const addUpload = useCallback((file) => {
+    if (!file || !file.type?.startsWith('image/')) return
+    const url = URL.createObjectURL(file)
+    uploadUrlsRef.current.push(url)
+    const id = 'upload-' + Math.random().toString(36).slice(2)
+    const name = (file.name || 'Custom').replace(/\.[^.]+$/, '').slice(0, 18)
+    setUploads((prev) => [...prev, { id, src: url, name }])
+    changeBgEffect({ id, type: 'image', src: url, name })
+  }, [changeBgEffect])
+
   // ── Mic recovery on device disappear ───────────────────────────────────
   // When the user unplugs USB headphones, switches Bluetooth profiles, or the
   // OS revokes the active mic for any reason, the track fires `ended` and the
@@ -693,6 +814,7 @@ export default function MeetRoom() {
           setMeetingLocked(data.meeting.locked || false)
           setChatEnabled(data.meeting.chat_enabled !== false)
           setScreenshareEnabled(data.meeting.screenshare_enabled !== false)
+          if (data.meeting.theme) setThemeId(data.meeting.theme)
         }
         // Welcome is authoritative: after a reconnect or admit-from-waiting,
         // any peer_ids we tracked previously may be stale (their owner has a
@@ -804,6 +926,8 @@ export default function MeetRoom() {
       } else if (data.type === 'meeting-permissions') {
         if (typeof data.chat_enabled === 'boolean') setChatEnabled(data.chat_enabled)
         if (typeof data.screenshare_enabled === 'boolean') setScreenshareEnabled(data.screenshare_enabled)
+      } else if (data.type === 'theme-changed') {
+        if (data.theme) setThemeId(data.theme)
       } else if (data.type === 'permission-denied') {
         setPermissionToast(data.reason || 'Action not permitted.')
         setTimeout(() => setPermissionToast(''), 3500)
@@ -834,6 +958,7 @@ export default function MeetRoom() {
           processedStreamRef.current.getTracks().forEach((t) => { try { t.stop() } catch {} })
         }
         if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach((t) => { try { t.stop() } catch {} })
+        if (bgProcessorRef.current) { try { bgProcessorRef.current.stop() } catch {} }
       }
       if (ev.code === 4401) setErr('Session expired, please sign in again.')
       else if (ev.code === 4404) setErr('Meeting has ended.')
@@ -891,6 +1016,12 @@ export default function MeetRoom() {
         for (const t of stream.getAudioTracks()) attachMicEndedHandler(t)
         if (selfVideoRef.current) selfVideoRef.current.srcObject = stream
         attachStream('self', stream)
+        // Restore a saved background effect (built-in preset) now that the
+        // camera is live. Runs before connect so processedStreamRef is set
+        // when the first peer's PC is built.
+        if (videoOnRef.current && bgEffectRef.current?.type && bgEffectRef.current.type !== 'none' && bgSupported) {
+          applyBgEffect(bgEffectRef.current)
+        }
         connectWs()
       } catch (e) {
         // Translate the standard DOMException names from getUserMedia into
@@ -948,6 +1079,11 @@ export default function MeetRoom() {
         processedStreamRef.current.getTracks().forEach((t) => { try { t.stop() } catch {} })
       }
       if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach((t) => t.stop())
+      // Tear down the background processor (closes the shared segmenter) and
+      // free any uploaded-image object URLs.
+      if (bgProcessorRef.current) { try { bgProcessorRef.current.dispose() } catch {}; bgProcessorRef.current = null }
+      uploadUrlsRef.current.forEach((u) => { try { URL.revokeObjectURL(u) } catch {} })
+      uploadUrlsRef.current = []
     }
   }, [])
 
@@ -1048,6 +1184,9 @@ export default function MeetRoom() {
           }
         }
 
+        // Stop the background processor — its source camera track is now gone,
+        // so the canvas would otherwise freeze on the last frame.
+        if (bgProcessorRef.current) bgProcessorRef.current.stop()
         processedStreamRef.current = localStreamRef.current
 
         // 5. Defense in depth: explicitly clear the self <video>'s
@@ -1090,8 +1229,17 @@ export default function MeetRoom() {
           localStreamRef.current = fresh
         }
 
-        const outboundTrack = newTrack
-        processedStreamRef.current = localStreamRef.current
+        // Route the fresh camera track through the background pipeline. With
+        // no effect this returns the raw track and points processedStreamRef
+        // at localStream; with an effect it returns the composited canvas
+        // track and builds the processed stream. Either way it's what we send.
+        setBgLoading(bgEffectRef.current.type !== 'none')
+        let outboundTrack
+        try {
+          outboundTrack = await buildOutboundVideo(newTrack)
+        } finally {
+          setBgLoading(false)
+        }
 
         // Push to senders. During screen share, the video sender carries
         // the screen — don't clobber it. The camera will start flowing on
@@ -1148,7 +1296,7 @@ export default function MeetRoom() {
     } finally {
       cameraBusyRef.current = false
     }
-  }, [audioOn, broadcastMediaState, screenOn, videoDeviceId, attachStream])
+  }, [audioOn, broadcastMediaState, screenOn, videoDeviceId, attachStream, buildOutboundVideo])
 
   const switchAudioDevice = async (deviceId) => {
     try {
@@ -1177,9 +1325,11 @@ export default function MeetRoom() {
       if (old) { localStreamRef.current.removeTrack(old); old.stop() }
       localStreamRef.current.addTrack(newTrack)
       newTrack.enabled = videoOn
-      processedStreamRef.current = localStreamRef.current
-      await replaceTrackForAll(newTrack, 'video')
-      if (selfVideoRef.current) selfVideoRef.current.srcObject = localStreamRef.current
+      // Re-run the background pipeline on the new device's track (rebinds the
+      // processor's source); returns the raw track when no effect is active.
+      const outbound = await buildOutboundVideo(newTrack)
+      await replaceTrackForAll(outbound, 'video')
+      if (selfVideoRef.current) selfVideoRef.current.srcObject = processedStreamRef.current || localStreamRef.current
       setVideoDeviceId(deviceId)
     } catch (e) { console.error('Failed to switch video device', e) }
   }
@@ -1327,10 +1477,17 @@ export default function MeetRoom() {
     broadcastMediaState({ audio: audioOnRef.current, video: videoOnRef.current, screen: false })
     sendSignal({ type: 'screen-share-stopped' })
     log('stopped, layout restored', { camRestored: !!camTrack })
+    // Re-sync the background effect: if it was enabled/changed mid-share the
+    // processed stream may not have been built yet, so the restore above could
+    // have pushed the raw camera. applyBgEffect is idempotent when already
+    // correct.
+    if (videoOnRef.current && bgEffectRef.current.type !== 'none') {
+      applyBgEffect(bgEffectRef.current)
+    }
     } finally {
       screenLockRef.current = false
     }
-  }, [applyBitrateLimit, broadcastMediaState, getActiveStream, qualityLevel, sendSignal])
+  }, [applyBitrateLimit, broadcastMediaState, getActiveStream, qualityLevel, sendSignal, applyBgEffect])
 
   // ── Recording ──────────────────────────────────────────────────────────
 
@@ -1602,6 +1759,15 @@ export default function MeetRoom() {
   const selfInitial = (user.name || '?').trim().charAt(0).toUpperCase() || '?'
   const selfBg = user.avatar_color || '#3a6ff3'
 
+  // Active meeting theme. Anyone can change it; the pick applies locally at
+  // once (optimistic — no waiting on a socket round-trip) and is broadcast so
+  // every other participant re-skins to match. The server echo is idempotent.
+  const theme = getTheme(themeId)
+  const changeTheme = (id) => {
+    setThemeId(id)
+    sendSignal({ type: 'set-theme', theme: id })
+  }
+
   // Stable prop bag for SelfTile. SelfTile is a top-level memoized component
   // (see bottom of file) — NOT an inline function. Defining it inline used to
   // give it a fresh identity on every render, which made React unmount and
@@ -1770,10 +1936,22 @@ export default function MeetRoom() {
   const sidebarTitle = sidebar === 'chat' ? 'In-call messages'
     : sidebar === 'people' ? `People · ${tileCount}`
     : sidebar === 'settings' ? 'Settings'
+    : sidebar === 'theme' ? 'Themes & background'
     : ''
 
   return (
-    <div className="zk-room-bg relative flex h-screen w-screen flex-col overflow-hidden text-[#202124]">
+    <RoomThemeProvider theme={theme}>
+    <div
+      className="zk-room-bg relative flex h-screen w-screen flex-col overflow-hidden transition-[background] duration-500"
+      style={{
+        background: theme.roomBg,
+        color: theme.fg,
+        '--zk-active': theme.accent,
+        '--zk-tile-accent': theme.accent,
+        '--zk-room-fg': theme.fg,
+        '--zk-room-fg-dim': theme.fgDim,
+      }}
+    >
       {/* ── Top bar ──────────────────────────────────────────────── */}
       {/* No border / no background — sits transparently over the stage like
           Meet does. Recording / lock pills float on the left, code + copy
@@ -1797,7 +1975,7 @@ export default function MeetRoom() {
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[13px] tracking-wide text-[#444746]">{code}</span>
+          <span className="font-mono text-[13px] tracking-wide text-(--zk-room-fg-dim)">{code}</span>
           <button
             onClick={copyInvite}
             title="Copy invite link"
@@ -1833,8 +2011,8 @@ export default function MeetRoom() {
             <div className="zk-glass zk-toast-in pointer-events-auto flex items-center gap-3 rounded-full border border-black/[0.06] py-1.5 pl-4 pr-1.5 text-sm text-[#202124]">
               <span className="inline-flex items-center gap-2 font-medium">
                 <span className="relative grid h-2 w-2 place-items-center">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-500 opacity-70" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#1d4ed8] opacity-70" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-[#1d4ed8]" />
                 </span>
                 You’re presenting
               </span>
@@ -2123,6 +2301,21 @@ export default function MeetRoom() {
                 </SettingsCard>
               </div>
             )}
+
+            {sidebar === 'theme' && (
+              <ThemePicker
+                bgEffectId={bgEffect.id}
+                onSelectBg={changeBgEffect}
+                bgLoading={bgLoading}
+                bgSupported={bgSupported}
+                uploads={uploads}
+                onUpload={addUpload}
+                cameraOn={videoOn}
+                themeId={themeId}
+                onSelectTheme={changeTheme}
+                canEditTheme
+              />
+            )}
           </aside>
         )}
       </main>
@@ -2177,6 +2370,8 @@ export default function MeetRoom() {
         sidebar={sidebar}
         setSidebar={setSidebar}
         waitingList={waitingList}
+        onOpenThemes={() => setSidebar((s) => (s === 'theme' ? null : 'theme'))}
+        themesOpen={sidebar === 'theme'}
         leave={leave}
       />
 
@@ -2203,6 +2398,7 @@ export default function MeetRoom() {
         </div>
       )}
     </div>
+    </RoomThemeProvider>
   )
 }
 
@@ -2235,6 +2431,7 @@ const SelfTile = memo(function SelfTile({
 }) {
   const isSpotlight = size === 'spotlight'
   const isMini = size === 'mini'
+  const theme = useRoomTheme()
   return (
     <div
       className={
@@ -2257,15 +2454,19 @@ const SelfTile = memo(function SelfTile({
       ) : (
         <div
           className="absolute inset-0 grid place-items-center"
-          style={{
-            background: `radial-gradient(circle at 50% 35%, ${bg} 0%, color-mix(in srgb, ${bg} 55%, #000) 100%)`,
-          }}
+          style={{ background: theme.tileBg }}
         >
           <div
             className={
-              'grid place-items-center rounded-full font-semibold text-white ring-1 ring-white/15 backdrop-blur-sm bg-white/[0.08] ' +
+              'grid place-items-center rounded-full font-semibold text-white ' +
               (isSpotlight ? 'h-36 w-36 text-5xl' : isMini ? 'h-10 w-10 text-base' : 'h-24 w-24 text-3xl')
             }
+            style={{
+              backgroundColor: bg,
+              boxShadow: isMini
+                ? `0 0 0 2px color-mix(in srgb, ${theme.accent} 45%, transparent)`
+                : `0 0 0 1px rgba(255,255,255,0.18), 0 0 0 5px color-mix(in srgb, ${theme.accent} 22%, transparent), 0 18px 44px -18px rgba(0,0,0,0.65)`,
+            }}
           >{initial}</div>
         </div>
       )}

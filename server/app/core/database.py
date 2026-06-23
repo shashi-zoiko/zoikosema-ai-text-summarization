@@ -143,6 +143,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # Per-meeting permissions (host/co-host always exempt)
     ("meetings", "chat_enabled", "BOOLEAN DEFAULT TRUE NOT NULL"),
     ("meetings", "screenshare_enabled", "BOOLEAN DEFAULT TRUE NOT NULL"),
+    # Meeting-wide visual theme id (host/co-host controlled, shared by all).
+    ("meetings", "theme", "VARCHAR(24) DEFAULT 'forest' NOT NULL"),
     # LiveKit room handle (lazy-allocated on first join token request)
     ("meetings", "media_room_ref", "VARCHAR(128)"),
     # Per-meeting media plane selector ('mesh' | 'livekit')

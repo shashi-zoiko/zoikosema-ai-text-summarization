@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import {
   Captions, ChevronUp, Disc, Grid3x3, Hand, Info, LayoutPanelLeft,
-  MessageSquare, Mic, MicOff, MonitorUp, MonitorX, MoreVertical, PhoneOff,
+  MessageSquare, Mic, MicOff, MonitorUp, MonitorX, MoreVertical, Palette, PhoneOff,
   Settings, Smile, Square, Users, Video, VideoOff,
 } from 'lucide-react'
 
@@ -12,10 +12,11 @@ import {
  * ambient stage. Buttons are 52×52 circles with MEANINGFUL colour states:
  *   mic        green when live, red when muted
  *   camera     blue when on,    red when off
- *   present    purple gradient + glow while sharing
+ *   present    blue gradient + glow while sharing
  *   raise hand cyan when raised
  *   reactions  amber when the picker is open
- *   captions / more   neutral glass → Meet-blue when active
+ *   themes     brand green when the themes & background panel is open
+ *   captions / more   neutral chip → Meet-blue when active
  *   leave      red gradient pill, larger than the rest, hover lift
  *
  * Every control lifts on hover and settles on press (`.zk-press`). Mic/camera
@@ -40,6 +41,7 @@ function MeetingDock({
   layout, toggleLayout,
   sidebar, setSidebar,
   waitingList = [],
+  onOpenThemes, themesOpen = false,
   onInfo,
   unreadChat = 0,
   extraCenterSlot,
@@ -55,11 +57,16 @@ function MeetingDock({
       role="toolbar"
       aria-label="Meeting controls"
     >
-      {/* ── Left: clock + code ───────────────────────────────────── */}
-      <div className="hidden items-center gap-2.5 text-[13.5px] text-[#5f6368] md:flex">
+      {/* ── Left: clock + code. Colour follows the room theme via the CSS
+          vars the room root sets; falls back to Meet-grey for the light
+          LiveKit room, which doesn't set them. ───────────────────────── */}
+      <div
+        className="hidden items-center gap-2.5 text-[13.5px] md:flex"
+        style={{ color: 'var(--zk-room-fg-dim, #5f6368)' }}
+      >
         <span className="font-medium tabular-nums">{clock}</span>
-        <span className="text-[#bcc0c6]">|</span>
-        <span className="text-[#444746]">{code}</span>
+        <span aria-hidden className="opacity-40">|</span>
+        <span className="font-medium" style={{ color: 'var(--zk-room-fg, #444746)' }}>{code}</span>
       </div>
 
       {/* ── Center: floating glass capsule ───────────────────────── */}
@@ -137,6 +144,17 @@ function MeetingDock({
           <Smile />
         </RoundBtn>
 
+        {onOpenThemes && (
+          <RoundBtn
+            label={themesOpen ? 'Close themes & background' : 'Themes & background'}
+            onClick={onOpenThemes}
+            active={themesOpen}
+            tone="theme"
+          >
+            <Palette />
+          </RoundBtn>
+        )}
+
         {extraCenterSlot}
 
         <MoreMenu
@@ -198,18 +216,24 @@ const BTN =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-white ' +
   '[&_svg]:h-[22px] [&_svg]:w-[22px]'
 
-const BTN_NEUTRAL = 'text-[#444746] hover:bg-black/[0.06] hover:text-[#1f1f1f]'
+// Resting neutral controls carry a subtle circular fill so each button reads
+// as a distinct, tappable chip (Meet-style) instead of a flat dark glyph
+// floating on the capsule — that flatness was what read as "dull / off".
+const BTN_NEUTRAL = 'bg-black/[0.05] text-[#1f1f1f] hover:bg-black/[0.09]'
 const BTN_ACTIVE  = 'bg-[#c2e7ff] text-[#001d35] hover:bg-[#aed6fb] shadow-[0_0_0_1px_rgba(26,115,232,0.18),0_6px_16px_-8px_rgba(26,115,232,0.5)]'
 
 // Mic live → green; off → red tint. Camera on → blue; off → red tint.
-const BTN_MIC = 'bg-emerald-500/[0.14] text-emerald-700 hover:bg-emerald-500/[0.22] shadow-[0_0_0_1px_rgba(16,163,74,0.22),0_6px_18px_-8px_rgba(16,163,74,0.5)]'
-const BTN_CAM = 'bg-blue-600/[0.13] text-blue-700 hover:bg-blue-600/[0.2] shadow-[0_0_0_1px_rgba(37,99,235,0.22),0_6px_18px_-8px_rgba(37,99,235,0.5)]'
-const BTN_OFF = 'bg-[#ea4335]/[0.14] text-[#d93829] hover:bg-[#ea4335]/[0.22] shadow-[0_0_0_1px_rgba(234,67,53,0.24),0_6px_18px_-8px_rgba(234,67,53,0.5)]'
+const BTN_MIC = 'bg-emerald-500/[0.16] text-emerald-700 hover:bg-emerald-500/[0.24] shadow-[0_0_0_1px_rgba(16,163,74,0.24),0_6px_18px_-8px_rgba(16,163,74,0.55)]'
+const BTN_CAM = 'bg-blue-600/[0.15] text-blue-700 hover:bg-blue-600/[0.22] shadow-[0_0_0_1px_rgba(37,99,235,0.24),0_6px_18px_-8px_rgba(37,99,235,0.55)]'
+const BTN_OFF = 'bg-[#ea4335]/[0.16] text-[#d93829] hover:bg-[#ea4335]/[0.24] shadow-[0_0_0_1px_rgba(234,67,53,0.26),0_6px_18px_-8px_rgba(234,67,53,0.55)]'
 
-// Tone palettes for the round center buttons when active.
-const BTN_SHARE = 'bg-gradient-to-b from-violet-500 to-violet-600 text-white hover:from-violet-500 hover:to-violet-700 shadow-[0_0_0_1px_rgba(124,58,237,0.35),0_10px_26px_-8px_rgba(124,58,237,0.7)]'
-const BTN_HAND  = 'bg-cyan-500/[0.16] text-cyan-700 hover:bg-cyan-500/[0.24] shadow-[0_0_0_1px_rgba(8,145,178,0.24),0_6px_18px_-8px_rgba(8,145,178,0.5)]'
-const BTN_REACT = 'bg-amber-500/[0.18] text-amber-700 hover:bg-amber-500/[0.26] shadow-[0_0_0_1px_rgba(217,119,6,0.26),0_6px_18px_-8px_rgba(217,119,6,0.5)]'
+// Tone palettes for the round center buttons when active. Present is a vivid
+// blue (was an off-brand lone violet); hand cyan; reactions amber; themes the
+// brand green.
+const BTN_SHARE = 'bg-gradient-to-b from-[#3b82f6] to-[#1d4ed8] text-white hover:from-[#3b82f6] hover:to-[#1e40af] shadow-[0_0_0_1px_rgba(29,78,216,0.35),0_10px_26px_-8px_rgba(29,78,216,0.7)]'
+const BTN_HAND  = 'bg-cyan-500/[0.18] text-cyan-700 hover:bg-cyan-500/[0.26] shadow-[0_0_0_1px_rgba(8,145,178,0.26),0_6px_18px_-8px_rgba(8,145,178,0.55)]'
+const BTN_REACT = 'bg-amber-500/[0.20] text-amber-700 hover:bg-amber-500/[0.28] shadow-[0_0_0_1px_rgba(217,119,6,0.28),0_6px_18px_-8px_rgba(217,119,6,0.55)]'
+const BTN_THEME = 'bg-[#0F8A5F]/[0.16] text-[#0c744f] hover:bg-[#0F8A5F]/[0.24] shadow-[0_0_0_1px_rgba(15,138,95,0.26),0_6px_18px_-8px_rgba(15,138,95,0.55)]'
 
 /* ────────────────────────────────────────────────────────────────────────
  * Mic / camera combo: a round toggle + a slim caret (device picker).
@@ -298,6 +322,7 @@ function RoundBtn({ active, tone, danger, disabled, onClick, label, children, po
     : tone === 'share' ? BTN_SHARE
     : tone === 'hand' ? BTN_HAND
     : tone === 'react' ? BTN_REACT
+    : tone === 'theme' ? BTN_THEME
     : BTN_ACTIVE
   const palette = active ? activePalette : BTN_NEUTRAL
 

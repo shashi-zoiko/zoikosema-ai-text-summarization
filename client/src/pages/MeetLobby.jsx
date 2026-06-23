@@ -8,6 +8,8 @@ import { api, getWsBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import useMediaDevices from '../hooks/useMediaDevices'
 import useAudioLevel from '../hooks/useAudioLevel'
+import LobbyLeaves from '../components/LobbyLeaves'
+import Logo from '../components/ui/Logo'
 
 /**
  * Meeting pre-join lobby — Google Meet–style.
@@ -40,6 +42,24 @@ function pickRoomPath(code, meeting) {
     : `/meet/${code}/room`
 }
 
+// Restore the participant's last mic/cam choice for this meeting so a refresh
+// — or a bounce back from the room — doesn't silently reset their setup.
+function readJoinPrefs(code) {
+  try {
+    const p = JSON.parse(sessionStorage.getItem(`zoiko_meet_prefs_${code}`))
+    return { audio: p?.audio ?? true, video: p?.video ?? true }
+  } catch {
+    return { audio: true, video: true }
+  }
+}
+
+function timeGreeting() {
+  const h = new Date().getHours()
+  if (h < 12) return 'Good morning'
+  if (h < 18) return 'Good afternoon'
+  return 'Good evening'
+}
+
 export default function MeetLobby() {
   const { code } = useParams()
   const navigate = useNavigate()
@@ -54,10 +74,10 @@ export default function MeetLobby() {
   const [meetingPwd, setMeetingPwd] = useState('')
   const [err, setErr] = useState('')
 
-  const [audioOn, setAudioOn] = useState(true)
-  const [videoOn, setVideoOn] = useState(true)
-  const audioOnRef = useRef(true)
-  const videoOnRef = useRef(true)
+  const [audioOn, setAudioOn] = useState(() => readJoinPrefs(code).audio)
+  const [videoOn, setVideoOn] = useState(() => readJoinPrefs(code).video)
+  const audioOnRef = useRef(audioOn)
+  const videoOnRef = useRef(videoOn)
   const [permState, setPermState] = useState(PERM.pending)
   const [permDetail, setPermDetail] = useState('')
 
@@ -67,6 +87,7 @@ export default function MeetLobby() {
 
   const [waitingStatus, setWaitingStatus] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [joining, setJoining] = useState(false)
 
   const audioLevel = useAudioLevel(stream, audioOn && permState === PERM.granted)
 
@@ -262,6 +283,22 @@ export default function MeetLobby() {
     setStream(audioOnly)
   }
 
+  // Keyboard shortcuts (Google-Meet parity): ⌘/Ctrl+D mic, ⌘/Ctrl+E camera.
+  // Only active once devices are granted so the keys can't fire into a dead
+  // toggle. Effect re-binds on toggle-state change to capture fresh closures.
+  useEffect(() => {
+    if (permState !== PERM.granted) return undefined
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
+      const k = e.key.toLowerCase()
+      if (k === 'd') { e.preventDefault(); toggleAudio() }
+      else if (k === 'e') { e.preventDefault(); toggleVideo() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [permState, audioOn, videoOn])
+
   // Close keepalive ws on unmount.
   useEffect(() => () => {
     if (wsRef.current) { try { wsRef.current.close() } catch {}; wsRef.current = null }
@@ -281,6 +318,8 @@ export default function MeetLobby() {
 
   // ── Join meeting ───────────────────────────────────────────────────
   const join = async () => {
+    setErr('')
+    setJoining(true)
     try {
       const joinBody = { code }
       if (needsPassword) joinBody.password = meetingPwd
@@ -324,6 +363,7 @@ export default function MeetLobby() {
       }
     } catch (e) {
       setErr(e.message || 'Could not join meeting')
+      setJoining(false)
     }
   }
 
@@ -333,6 +373,7 @@ export default function MeetLobby() {
       wsRef.current = null
     }
     setWaitingStatus(null)
+    setJoining(false)
   }
 
   const copyLink = async () => {
@@ -344,7 +385,32 @@ export default function MeetLobby() {
   }
 
   const initial = (user?.name || '?').trim().charAt(0).toUpperCase() || '?'
+  const firstName = (user?.name || '').trim().split(/\s+/)[0]
   const showVideo = permState === PERM.granted && videoOn
+  const joinDisabled = !meeting || (needsPassword && !meetingPwd) || permState === PERM.pending || joining
+
+  // ─────────────────────────────────────────────────────────────────
+  // Meeting-unavailable view — metadata fetch failed before anything loaded
+  // (bad/expired code, network). A dedicated screen beats a half-rendered
+  // lobby with an inline error.
+  // ─────────────────────────────────────────────────────────────────
+  if (err && !meeting) {
+    return (
+      <Shell>
+        <div className="zk-dock-enter w-full max-w-md rounded-[24px] border border-[#E4ECE7] bg-white/90 p-8 text-center shadow-[0_10px_40px_rgba(15,138,95,0.08)] backdrop-blur-xl">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-red-50 text-red-500 ring-1 ring-red-100">
+            <X className="h-7 w-7" />
+          </div>
+          <h2 style={{ color: '#0F172A' }} className="mt-5 text-xl font-semibold">Meeting unavailable</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-[#64748B]">{err}</p>
+          <button
+            onClick={() => navigate('/')}
+            className="zk-press mt-6 inline-flex h-11 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0F8A5F] to-[#16A34A] px-6 text-[14px] font-semibold text-white shadow-[0_10px_24px_-10px_rgba(15,138,95,0.7)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F8A5F]/45 focus-visible:ring-offset-2"
+          >Back to home</button>
+        </div>
+      </Shell>
+    )
+  }
 
   // ─────────────────────────────────────────────────────────────────
   // Waiting-room view
@@ -352,22 +418,22 @@ export default function MeetLobby() {
   if (waitingStatus === 'pending') {
     return (
       <Shell>
-        <div className="zk-glass zk-dock-enter w-full max-w-md rounded-3xl border border-white/60 p-8 text-center">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-b from-[#3b8bff] to-[#1a73e8] text-white shadow-[0_10px_24px_-8px_rgba(26,115,232,0.6)]">
+        <div className="zk-dock-enter w-full max-w-md rounded-[24px] border border-[#E4ECE7] bg-white/90 p-8 text-center shadow-[0_10px_40px_rgba(15,138,95,0.08)] backdrop-blur-xl">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-[#0F8A5F] to-[#16A34A] text-white shadow-[0_10px_24px_-8px_rgba(15,138,95,0.6)]">
             <Loader2 className="h-7 w-7 animate-spin" />
           </div>
-          <h2 className="mt-5 text-xl font-semibold text-zinc-900">Asking to be let in</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-zinc-500">
+          <h2 style={{ color: '#0F172A' }} className="mt-5 text-xl font-semibold">Asking to be let in</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-[#64748B]">
             You'll join automatically once the host lets you in. This usually takes a few seconds.
           </p>
-          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[12px]">
-            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-            <span className="text-zinc-500">Code</span>
-            <span className="font-mono font-semibold text-zinc-900">{code}</span>
+          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[#E4ECE7] bg-[#EAF8F2] px-3 py-1.5 text-[12px]">
+            <ShieldCheck className="h-3.5 w-3.5 text-[#0F8A5F]" />
+            <span className="text-[#64748B]">Code</span>
+            <span className="font-mono font-semibold text-[#0F172A]">{code}</span>
           </div>
           <button
             onClick={cancelWaiting}
-            className="mt-6 rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50"
+            className="zk-press mt-6 rounded-full border border-[#E4ECE7] bg-white px-5 py-2 text-sm font-medium text-[#0F172A] transition hover:bg-[#F7FAF8]"
           >Cancel</button>
         </div>
       </Shell>
@@ -377,13 +443,14 @@ export default function MeetLobby() {
   // ─────────────────────────────────────────────────────────────────
   // Main lobby
   // ─────────────────────────────────────────────────────────────────
+  const meetingLink = `${window.location.origin}/meet/${code}`
+
   return (
     <Shell>
-      <div className="zk-glass zk-dock-enter mx-auto w-full max-w-[1200px] rounded-[28px] border border-white/60 p-5 sm:p-7">
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
-        {/* ── Preview ───────────────────────────────────────────── */}
-        <div className="flex flex-col gap-4">
-          <div className="zk-tile zk-tile-spotlight relative isolate aspect-video w-full overflow-hidden rounded-[20px] bg-[#dfe3e8] ring-1 ring-black/[0.05]">
+      <div className="zk-dock-enter mx-auto grid w-full max-w-[1240px] gap-6 lg:gap-10 lg:grid-cols-[minmax(0,1.86fr)_minmax(0,1fr)] lg:items-stretch">
+        {/* ── Left: device preview (65%) ──────────────────────────── */}
+        <section className="flex flex-col gap-5">
+          <div className="relative isolate aspect-video w-full overflow-hidden rounded-[24px] border border-[#E4ECE7] bg-[#EEF4F1] shadow-[0_10px_40px_rgba(15,138,95,0.08)] ring-1 ring-[#0F8A5F]/[0.03]">
             {/* Video — ALWAYS mounted so the ref is stable. Visibility is
                 controlled with classes, not conditional rendering. */}
             <video
@@ -399,27 +466,27 @@ export default function MeetLobby() {
 
             {/* Fallback layer */}
             {!showVideo && (
-              <div className="absolute inset-0 grid place-items-center">
+              <div role="status" aria-live="polite" className="absolute inset-0 grid place-items-center bg-gradient-to-b from-[#F2FBF6] to-[#E7F4EE]">
                 {permState === PERM.granted && !videoOn && (
-                  <div className="flex flex-col items-center gap-3 text-[#202124]">
+                  <div className="flex flex-col items-center gap-4 text-[#0F172A]">
                     <div
-                      className="grid h-28 w-28 place-items-center rounded-full text-3xl font-semibold text-white shadow-sm"
-                      style={{ backgroundColor: user?.avatar_color || '#3a6ff3' }}
+                      className="grid h-28 w-28 place-items-center rounded-full text-4xl font-semibold text-white shadow-[0_12px_30px_-10px_rgba(15,138,95,0.55)] ring-4 ring-white/70"
+                      style={{ backgroundColor: user?.avatar_color || '#0F8A5F' }}
                     >{initial}</div>
-                    <div className="inline-flex items-center gap-2 text-[13px] text-[#5f6368]">
+                    <div className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1.5 text-[13px] font-medium text-[#64748B] shadow-sm ring-1 ring-[#E4ECE7]">
                       <CameraOff className="h-4 w-4" /> Camera is off
                     </div>
                   </div>
                 )}
                 {permState === PERM.pending && (
-                  <div className="flex flex-col items-center gap-3 text-[#5f6368]">
+                  <div className="flex flex-col items-center gap-3 text-[#0F8A5F]">
                     <Loader2 className="h-7 w-7 animate-spin" />
-                    <span className="text-[13px] font-medium">Starting camera…</span>
+                    <span className="text-[13px] font-medium text-[#64748B]">Starting camera…</span>
                   </div>
                 )}
                 {permState === PERM.denied && (
                   <PermError
-                    icon={<CameraOff className="h-7 w-7 text-[#ea4335]" />}
+                    icon={<CameraOff className="h-7 w-7 text-[#ef4444]" />}
                     title="Camera and mic are blocked"
                     detail={permDetail}
                     onRetry={acquire}
@@ -427,7 +494,7 @@ export default function MeetLobby() {
                 )}
                 {permState === PERM.unavailable && (
                   <PermError
-                    icon={<Monitor className="h-7 w-7 text-[#5f6368]" />}
+                    icon={<Monitor className="h-7 w-7 text-[#64748B]" />}
                     title="Can't reach your camera"
                     detail={permDetail}
                     onRetry={acquire}
@@ -438,25 +505,24 @@ export default function MeetLobby() {
 
             {/* Name pill (bottom-left) */}
             {user && (
-              <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-lg bg-black/45 px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
+              <div className="pointer-events-none absolute bottom-4 left-4 flex items-center gap-2 rounded-xl bg-[#0F172A]/55 px-3 py-1.5 text-[12.5px] font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
                 {user.name}
               </div>
             )}
 
-            {/* Audio meter (top-right) */}
+            {/* Audio meter (top-right) — decorative, hidden from AT */}
             {permState === PERM.granted && (
-              <div className="pointer-events-none absolute top-3 right-3 flex h-7 items-center gap-1.5 rounded-lg bg-black/45 px-2 ring-1 ring-white/10 backdrop-blur-md">
-                {audioOn ? <Mic className="h-3.5 w-3.5 text-emerald-300" /> : <MicOff className="h-3.5 w-3.5 text-red-400" />}
+              <div aria-hidden="true" className="pointer-events-none absolute top-4 right-4 flex h-8 items-center gap-1.5 rounded-xl bg-[#0F172A]/55 px-2.5 ring-1 ring-white/10 backdrop-blur-md">
+                {audioOn ? <Mic className="h-3.5 w-3.5 text-[#34d399]" /> : <MicOff className="h-3.5 w-3.5 text-red-400" />}
                 <AudioMeter level={audioOn ? audioLevel : 0} />
               </div>
             )}
 
-            {/* Mic + Camera toggle dock (center bottom) */}
-            <div className="absolute inset-x-0 bottom-4 flex justify-center">
-              <div className="zk-dock flex items-center gap-3 rounded-full px-2.5 py-2.5">
+            {/* Mic + Camera toggle pill (center bottom) */}
+            <div className="absolute inset-x-0 bottom-5 flex justify-center">
+              <div className="flex items-center gap-3 rounded-full border border-[#E4ECE7] bg-white/95 px-3 py-3 shadow-[0_8px_30px_rgba(0,0,0,0.08)] backdrop-blur-md">
                 <ToggleButton
                   on={audioOn}
-                  tone="mic"
                   onClick={toggleAudio}
                   disabled={permState !== PERM.granted}
                   label={audioOn ? 'Turn off microphone' : 'Turn on microphone'}
@@ -465,7 +531,6 @@ export default function MeetLobby() {
                 />
                 <ToggleButton
                   on={videoOn}
-                  tone="cam"
                   onClick={toggleVideo}
                   disabled={permState !== PERM.granted}
                   label={videoOn ? 'Turn off camera' : 'Turn on camera'}
@@ -497,92 +562,128 @@ export default function MeetLobby() {
               fallbackLabel="Default camera"
             />
           </div>
-        </div>
 
-        {/* ── Join panel ───────────────────────────────────────── */}
-        <aside className="flex flex-col items-center justify-center text-center">
-          <h1 className="text-[28px] font-medium leading-tight tracking-tight text-zinc-900">
-            {meeting?.title || 'Ready to join?'}
-          </h1>
+          {/* Keyboard hint — desktop only (touch devices have no modifier keys) */}
+          <p className="hidden items-center justify-center gap-1.5 text-[12px] text-[#64748B] sm:flex">
+            <Kbd>Ctrl</Kbd><span className="text-[#94a3b8]">/</span><Kbd>⌘</Kbd>
+            <span className="ml-0.5">+</span><Kbd>D</Kbd>
+            <span className="mx-1 text-[#cbd5e1]">·</span> mic
+            <span className="mx-2 text-[#cbd5e1]">|</span>
+            <Kbd>Ctrl</Kbd><span className="text-[#94a3b8]">/</span><Kbd>⌘</Kbd>
+            <span className="ml-0.5">+</span><Kbd>E</Kbd>
+            <span className="mx-1 text-[#cbd5e1]">·</span> camera
+          </p>
+        </section>
+
+        {/* ── Right: meeting info panel (35%) ─────────────────────── */}
+        <aside className="flex flex-col justify-center rounded-[24px] border border-[#E4ECE7] bg-white/85 p-6 shadow-[0_10px_40px_rgba(15,138,95,0.08)] backdrop-blur-xl sm:p-8">
+          <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[#0F8A5F]">
+            {firstName ? `${timeGreeting()}, ${firstName}` : 'Ready to join'}
+          </span>
+          {meeting ? (
+            <h1 style={{ color: '#0F172A' }} className="mt-2 text-[32px] font-bold leading-[1.1] tracking-tight sm:text-[40px]">
+              {meeting.title || 'Meeting'}
+            </h1>
+          ) : (
+            <div className="skeleton mt-3 h-9 w-3/4 rounded-lg sm:h-11" aria-hidden="true" />
+          )}
+          {meeting?.description && (
+            <p className="mt-3 text-[15px] leading-relaxed text-[#64748B]">{meeting.description}</p>
+          )}
           {user && (
-            <p className="mt-1.5 text-[13.5px] text-zinc-500">
-              Joining as <span className="font-medium text-zinc-700">{user.name}</span>
+            <p className="mt-3 text-[14px] text-[#64748B]">
+              Joining as <span className="font-semibold text-[#0F172A]">{user.name}</span>
             </p>
           )}
 
           {meeting?.scheduled_at && (
-            <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-600">
-              <Calendar className="h-3.5 w-3.5 text-[#1a73e8]" />
+            <div className="mt-5 inline-flex w-fit items-center gap-2 rounded-full border border-[#E4ECE7] bg-[#EAF8F2] px-3 py-1.5 text-[12.5px] text-[#0F172A]">
+              <Calendar className="h-3.5 w-3.5 text-[#0F8A5F]" />
               {new Date(meeting.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
               {meeting.timezone_name ? ` · ${meeting.timezone_name}` : ''}
             </div>
           )}
 
           {meeting?.waiting_room_enabled && meeting?.host_id !== user?.id && (
-            <div className="mt-4 flex max-w-md items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left text-[12.5px] text-amber-800">
+            <div className="mt-5 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-left text-[12.5px] text-amber-800">
               <Info className="mt-0.5 h-4 w-4 shrink-0" />
               <span>This meeting uses a waiting room — the host will let you in.</span>
             </div>
           )}
 
           {needsPassword && (
-            <div className="mt-4 w-full max-w-md">
-              <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 focus-within:border-[#1a73e8]">
-                <Lock className="h-4 w-4 shrink-0 text-zinc-400" />
+            <div className="mt-5">
+              <div className="flex items-center gap-2 rounded-2xl border border-[#E4ECE7] bg-white px-3 py-2.5 transition focus-within:border-[#0F8A5F] focus-within:ring-2 focus-within:ring-[#0F8A5F]/15">
+                <Lock className="h-4 w-4 shrink-0 text-[#64748B]" />
                 <input
                   type="password"
                   placeholder="Enter meeting password"
                   value={meetingPwd}
                   onChange={(e) => setMeetingPwd(e.target.value)}
                   autoComplete="off"
-                  className="min-w-0 flex-1 bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-400"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[#0F172A] outline-none placeholder:text-[#94a3b8]"
                 />
               </div>
             </div>
           )}
 
           {err && (
-            <div className="mt-4 flex max-w-md items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-left text-[12.5px] text-red-700">
+            <div role="alert" className="mt-5 flex items-start gap-2.5 rounded-2xl border border-red-200 bg-red-50 p-3 text-left text-[12.5px] text-red-700">
               <X className="mt-0.5 h-4 w-4 shrink-0" />
               <span className="font-medium">{err}</span>
             </div>
           )}
 
           {/* Action buttons */}
-          <div className="mt-6 flex w-full max-w-md flex-col gap-2">
+          <div className="mt-6 flex flex-col gap-3">
             <button
               onClick={join}
-              disabled={!meeting || (needsPassword && !meetingPwd) || permState === PERM.pending}
-              className="zk-press inline-flex h-12 items-center justify-center gap-2 rounded-full bg-gradient-to-b from-[#3b8bff] to-[#1a73e8] px-6 text-[15px] font-medium text-white shadow-[0_10px_26px_-8px_rgba(26,115,232,0.65),inset_0_1px_0_rgba(255,255,255,0.25)] hover:from-[#3b8bff] hover:to-[#1765c1] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+              disabled={joinDisabled}
+              aria-busy={joining}
+              className="zk-press inline-flex h-14 items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-[#0F8A5F] to-[#16A34A] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(15,138,95,0.7),inset_0_1px_0_rgba(255,255,255,0.25)] transition hover:from-[#0C744F] hover:to-[#0F8A5F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F8A5F]/45 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
-              <Video className="h-4 w-4" /> Join now
+              {joining
+                ? <><Loader2 className="h-[18px] w-[18px] animate-spin" /> Joining…</>
+                : <><Video className="h-[18px] w-[18px]" /> Join Meeting</>}
             </button>
             <button
               onClick={() => navigate('/')}
-              className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 bg-white px-6 text-[14px] font-medium text-zinc-800 transition hover:bg-zinc-50"
+              className="zk-press inline-flex h-14 items-center justify-center rounded-2xl border border-[#E4ECE7] bg-white px-6 text-[15px] font-semibold text-[#0F172A] transition hover:bg-[#F7FAF8] hover:border-[#cfe0d8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F8A5F]/25"
             >Cancel</button>
           </div>
 
           {/* Share link */}
-          <div className="mt-6 flex w-full max-w-md items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2">
-            <LinkIcon className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-            <code className="min-w-0 flex-1 truncate text-left font-mono text-[12px] text-zinc-500">
-              {`${window.location.origin}/meet/${code}`}
-            </code>
-            <button
-              onClick={copyLink}
-              className={
-                'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11.5px] font-medium transition ' +
-                (copied
-                  ? 'bg-emerald-500/15 text-emerald-600'
-                  : 'text-zinc-500 hover:bg-zinc-100')
-              }
-            >
-              {copied ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
-            </button>
+          <div className="mt-6">
+            <div className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#64748B]">Meeting link</div>
+            <div className="mt-2 flex items-center gap-2 rounded-2xl border border-[#E4ECE7] bg-[#F7FAF8] py-1.5 pl-3 pr-1.5">
+              <LinkIcon className="h-4 w-4 shrink-0 text-[#0F8A5F]" />
+              <code className="min-w-0 flex-1 truncate text-left font-mono text-[12.5px] text-[#64748B]">
+                {meetingLink}
+              </code>
+              <button
+                onClick={copyLink}
+                aria-label={copied ? 'Link copied' : 'Copy meeting link'}
+                className={
+                  'zk-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-3 text-[12.5px] font-semibold transition ' +
+                  (copied
+                    ? 'bg-[#16A34A] text-white shadow-[0_6px_16px_-6px_rgba(22,163,74,0.7)]'
+                    : 'border border-[#E4ECE7] bg-white text-[#0F172A] hover:border-[#0F8A5F] hover:text-[#0F8A5F]')
+                }
+              >
+                {copied ? <><Check className="h-3.5 w-3.5" /> Copied</> : <><Copy className="h-3.5 w-3.5" /> Copy</>}
+              </button>
+            </div>
+            <span className="sr-only" role="status" aria-live="polite">
+              {copied ? 'Meeting link copied to clipboard' : ''}
+            </span>
+          </div>
+
+          {/* Trust signal */}
+          <div className="mt-5 flex items-center gap-2 text-[12px] text-[#64748B]">
+            <ShieldCheck className="h-4 w-4 shrink-0 text-[#0F8A5F]" />
+            <span>Secured by Zoiko · your camera and mic stay private until you join.</span>
           </div>
         </aside>
-      </div>
       </div>
     </Shell>
   )
@@ -594,31 +695,43 @@ export default function MeetLobby() {
 
 function Shell({ children }) {
   return (
-    <div className="zk-room-bg relative flex min-h-screen flex-col text-zinc-900">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/60 bg-white/70 px-6 backdrop-blur-xl">
+    <div
+      className="relative flex min-h-screen flex-col overflow-hidden text-[#0F172A]"
+      style={{
+        background:
+          'radial-gradient(1100px 600px at 85% -10%, rgba(15,138,95,0.10), transparent 60%),' +
+          'radial-gradient(900px 520px at -5% 110%, rgba(22,163,74,0.08), transparent 58%),' +
+          'linear-gradient(135deg, #F7FAF8 0%, #F2FBF6 50%, #EDF9F3 100%)',
+      }}
+    >
+      <LobbyLeaves />
+      <header className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-[#E4ECE7] bg-white/70 px-6 backdrop-blur-xl">
         <div className="flex items-center gap-2">
-          <div className="grid h-8 w-8 place-items-center rounded-lg bg-[#1a73e8] text-white">
-            <Video className="h-4 w-4" />
-          </div>
-          <span className="text-[15px] font-medium tracking-tight">Zoiko Meet</span>
+          <Logo size={30} withWordmark />
         </div>
-        <div className="inline-flex items-center gap-1.5 text-[12.5px] text-zinc-500">
+        <div className="inline-flex items-center gap-1.5 text-[12.5px] text-[#64748B]">
           <Clock className="h-3.5 w-3.5" />
           {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
       </header>
-      <main className="flex flex-1 items-center justify-center px-4 py-6 sm:px-8 sm:py-10">
+      <main className="relative z-10 flex flex-1 items-center justify-center px-4 py-6 sm:px-12 sm:py-12">
         {children}
       </main>
     </div>
   )
 }
 
-function ToggleButton({ on, tone, onClick, disabled, label, iconOn, iconOff }) {
-  const onPalette = tone === 'cam'
-    ? 'bg-blue-600/[0.13] text-blue-700 hover:bg-blue-600/[0.2] shadow-[0_0_0_1px_rgba(37,99,235,0.22),0_6px_18px_-8px_rgba(37,99,235,0.5)]'
-    : 'bg-emerald-500/[0.14] text-emerald-700 hover:bg-emerald-500/[0.22] shadow-[0_0_0_1px_rgba(16,163,74,0.22),0_6px_18px_-8px_rgba(16,163,74,0.5)]'
-  const offPalette = 'bg-[#ea4335]/[0.14] text-[#d93829] hover:bg-[#ea4335]/[0.22] shadow-[0_0_0_1px_rgba(234,67,53,0.24),0_6px_18px_-8px_rgba(234,67,53,0.5)]'
+function Kbd({ children }) {
+  return (
+    <kbd className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-md border border-[#E4ECE7] bg-white px-1.5 font-sans text-[11px] font-semibold text-[#475569] shadow-[0_1px_0_#E4ECE7]">
+      {children}
+    </kbd>
+  )
+}
+
+function ToggleButton({ on, onClick, disabled, label, iconOn, iconOff }) {
+  const onPalette = 'bg-[#EAF8F2] text-[#0F8A5F] hover:bg-[#dbf2e7] shadow-[0_0_0_1px_rgba(15,138,95,0.22),0_6px_18px_-8px_rgba(15,138,95,0.5)]'
+  const offPalette = 'bg-[#fdecec] text-[#dc2626] hover:bg-[#fbdddd] shadow-[0_0_0_1px_rgba(220,38,38,0.22),0_6px_18px_-8px_rgba(220,38,38,0.5)]'
   return (
     <button
       onClick={onClick}
@@ -628,7 +741,7 @@ function ToggleButton({ on, tone, onClick, disabled, label, iconOn, iconOff }) {
       aria-pressed={!on}
       className={
         'zk-press grid h-[52px] w-[52px] place-items-center rounded-full disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-white ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F8A5F]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-white ' +
         (on ? onPalette : offPalette)
       }
     >{on ? iconOn : iconOff}</button>
@@ -659,15 +772,15 @@ function AudioMeter({ level }) {
 
 function PermError({ icon, title, detail, onRetry }) {
   return (
-    <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center text-[#202124]">
-      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-black/[0.04] ring-1 ring-black/[0.08]">{icon}</div>
+    <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center text-[#0F172A]">
+      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-white/80 shadow-sm ring-1 ring-[#E4ECE7]">{icon}</div>
       <div>
-        <div className="text-[14.5px] font-medium">{title}</div>
-        <div className="mt-1 text-[12.5px] leading-relaxed text-[#5f6368]">{detail}</div>
+        <div className="text-[14.5px] font-semibold">{title}</div>
+        <div className="mt-1 text-[12.5px] leading-relaxed text-[#64748B]">{detail}</div>
       </div>
       <button
         onClick={onRetry}
-        className="rounded-full border border-black/[0.08] bg-white px-4 py-2 text-[12.5px] font-medium text-[#202124] shadow-sm transition hover:bg-[#f1f3f4]"
+        className="zk-press rounded-full border border-[#E4ECE7] bg-white px-4 py-2 text-[12.5px] font-semibold text-[#0F8A5F] shadow-sm transition hover:bg-[#EAF8F2]"
       >Retry</button>
     </div>
   )
@@ -679,19 +792,19 @@ function DevicePicker({ label, icon, devices, value, onChange, disabled, fallbac
   return (
     <label
       className={
-        'relative flex h-12 cursor-pointer items-center gap-2.5 rounded-full border bg-white px-4 transition ' +
-        'border-zinc-200 hover:border-zinc-300 ' +
+        'relative flex h-14 cursor-pointer items-center gap-2.5 rounded-2xl border bg-white px-4 transition ' +
+        'border-[#E4ECE7] hover:border-[#0F8A5F] focus-within:border-[#0F8A5F] focus-within:ring-2 focus-within:ring-[#0F8A5F]/15 ' +
         (disabled ? 'pointer-events-none cursor-not-allowed opacity-50' : '')
       }
     >
-      <span className="grid h-7 w-7 place-items-center rounded-full bg-zinc-100 text-zinc-500">
+      <span className="grid h-8 w-8 place-items-center rounded-full bg-[#EAF8F2] text-[#0F8A5F]">
         {icon}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-500">{label}</div>
-        <div className="truncate text-[13px] text-zinc-800">{display}</div>
+        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[#64748B]">{label}</div>
+        <div className="truncate text-[13px] font-medium text-[#0F172A]">{display}</div>
       </div>
-      <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" />
+      <ChevronDown className="h-4 w-4 shrink-0 text-[#64748B]" />
       <select
         disabled={disabled}
         value={value || ''}
