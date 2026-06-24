@@ -25,6 +25,9 @@ export default function ThemePicker({
   themeId,
   onSelectTheme,
   canEditTheme,
+  // Hide the local-camera Background section entirely (e.g. the LiveKit room
+  // before virtual backgrounds are wired up — themes only).
+  showBackground = true,
 }) {
   const fileRef = useRef(null)
 
@@ -38,6 +41,8 @@ export default function ThemePicker({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
       {/* ── Background (local) ──────────────────────────────────────── */}
+      {showBackground && (
+      <>
       <SectionHead
         icon={<Sparkles className="h-4 w-4" />}
         title="Background"
@@ -144,8 +149,12 @@ export default function ThemePicker({
         </>
       )}
 
-      {/* ── Theme (meeting-wide) ────────────────────────────────────── */}
+      {/* divider between the local Background section and the Theme section */}
       <div className="my-4 h-px bg-black/[0.06]" />
+      </>
+      )}
+
+      {/* ── Theme (meeting-wide) ────────────────────────────────────── */}
       <SectionHead
         icon={<Palette className="h-4 w-4" />}
         title="Room theme"

@@ -290,6 +290,16 @@ h4 { line-height: 1.40; font-weight: 600; }
 
   /* ─── Meeting room — Tailwind can't express these inline ─────────── */
 
+  /* Apple emoji pack image. Inline-aligns with surrounding text and never
+     shrinks below its set size inside flex rows (reaction chips, picker). */
+  .zk-emoji {
+    display: inline-block;
+    object-fit: contain;
+    vertical-align: -0.18em;
+    flex-shrink: 0;
+    user-select: none;
+  }
+
   /* Reaction emoji float (used by MeetRoom + LK room overlays). */
   @keyframes zk-reaction-rise {
     0%   { transform: translateY(0) scale(1);     opacity: 0; }

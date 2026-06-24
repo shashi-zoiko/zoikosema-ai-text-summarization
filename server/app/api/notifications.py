@@ -163,6 +163,11 @@ async def ws_notifications(
     try:
         user = get_user_from_token(token, db)
     except Exception:
+        user = None
+    # get_user_from_token returns None (not an exception) for an expired or
+    # invalid token. Guard it explicitly — otherwise `user.id` below raised
+    # AttributeError: 'NoneType' has no attribute 'id' and crashed the socket.
+    if user is None:
         await ws.close(code=4401)
         db.close()
         return

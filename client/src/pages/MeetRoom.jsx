@@ -10,6 +10,7 @@ import { PinButton, PinnedNameIcon } from '../components/meeting/PinControls'
 import { RoomThemeProvider, useRoomTheme } from '../features/meeting/RoomThemeContext'
 import { getTheme, DEFAULT_THEME_ID } from '../features/meeting/roomThemes'
 import ThemePicker from '../features/meeting/ThemePicker'
+import Emoji from '../features/emoji/Emoji'
 import { getPreset } from '../features/meeting/backgroundPresets'
 // backgroundEngine (and the MediaPipe runtime it pulls in) is imported lazily
 // the first time a background effect is actually used — see buildOutboundVideo
@@ -2381,9 +2382,9 @@ export default function MeetRoom() {
           {reactions.map((r) => (
             <span
               key={r.id}
-              className="zk-reaction-rise absolute bottom-28 select-none text-5xl drop-shadow-[0_6px_16px_rgba(0,0,0,0.25)]"
+              className="zk-reaction-rise absolute bottom-28 select-none drop-shadow-[0_6px_16px_rgba(0,0,0,0.25)]"
               style={{ left: `${r.left}%` }}
-            >{r.emoji}</span>
+            ><Emoji char={r.emoji} size="3rem" /></span>
           ))}
         </div>
       )}
