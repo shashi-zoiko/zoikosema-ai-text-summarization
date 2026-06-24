@@ -43,4 +43,16 @@ export const useRoomStore = create((set) => ({
     }),
   seedRoles: (entries) =>
     set(() => ({ roles: new Map(entries) })),
+
+  // Clear all per-meeting transient state. This store is module-global, so
+  // without a reset on room entry the previous meeting's reactions (replayed
+  // by ReactionOverlay on mount), pins, raised hands and roles leak into the
+  // next one.
+  reset: () =>
+    set({
+      pinnedIdentity: null,
+      raisedHands: new Set(),
+      reactions: [],
+      roles: new Map(),
+    }),
 }))

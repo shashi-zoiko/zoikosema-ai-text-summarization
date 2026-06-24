@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   LiveKitRoom,
   RoomAudioRenderer,
   useConnectionState,
 } from '@livekit/components-react'
-import { ConnectionState, DisconnectReason, VideoPresets } from 'livekit-client'
-import { PencilLine, Users } from 'lucide-react'
+import { ConnectionState, DisconnectReason, Track, VideoPresets } from 'livekit-client'
+import { PencilLine, UserPlus, X } from 'lucide-react'
 import '@livekit/components-styles'
 
 import { fetchMediaToken } from './api/media.js'
@@ -23,6 +23,12 @@ import DevicePicker from './components/DevicePicker.jsx'
 import ReactionOverlay from './components/ReactionOverlay.jsx'
 import ParticipantsPanel from './components/ParticipantsPanel.jsx'
 import CaptionsOverlay from './components/CaptionsOverlay.jsx'
+import ThemePicker from './ThemePicker.jsx'
+import { RoomThemeProvider } from './RoomThemeContext.jsx'
+import { getTheme, DEFAULT_THEME_ID } from './roomThemes.js'
+import { backgroundEffectsSupported } from './backgroundEngine.js'
+import { getPreset, NONE_EFFECT } from './backgroundPresets.js'
+import { LkBackgroundProcessor } from './lkBackgroundProcessor.js'
 import Whiteboard from '../../components/Whiteboard.jsx'   // reused from legacy
 import useMeetingControlWs from './hooks/useMeetingControlWs.js'
 import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
@@ -50,6 +56,14 @@ export default function MeetRoomLivekit() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
+  // Mic/camera choice the user made in the lobby (persisted there before
+  // navigating). The room must honour it — hardcoding `audio video` on
+  // <LiveKitRoom> force-enabled both on join AND on every refresh, overriding
+  // a user who joined muted / camera-off.
+  const joinPrefs = useMemo(() => {
+    try { return JSON.parse(sessionStorage.getItem(`zoiko_meet_prefs_${code}`) || '{}') } catch { return {} }
+  }, [code])
+
   // Connection bootstrap
   const [token, setToken] = useState(null)
   const [wsUrl, setWsUrl] = useState(null)
@@ -69,7 +83,21 @@ export default function MeetRoomLivekit() {
   const [recording, setRecording] = useState({ recording: false, recording_id: null })
 
   // Local UI state
-  const [sidebar, setSidebar] = useState(null) // 'chat' | 'waiting' | 'people' | null
+  const [sidebar, setSidebar] = useState(null) // 'chat' | 'waiting' | 'people' | 'theme' | null
+  // Meeting-wide visual theme (host-controlled, synced over the control WS) and
+  // the local grid/speaker layout preference (per-viewer, not synced).
+  const [themeId, setThemeId] = useState(DEFAULT_THEME_ID)
+  const [layout, setLayout] = useState('grid') // 'grid' | 'speaker'
+
+  // Virtual background — LOCAL per-participant camera effect (blur / image),
+  // applied via a LiveKit track processor. Persisted across sessions.
+  const bgSupported = backgroundEffectsSupported()
+  const [bgEffectId, setBgEffectId] = useState(() => {
+    try { return localStorage.getItem('zoiko_bg_effect') || 'none' } catch { return 'none' }
+  })
+  const [bgUploads, setBgUploads] = useState([])
+  const [bgLoading, setBgLoading] = useState(false)
+  const [cameraOn, setCameraOn] = useState(false)
   const [chatMessages, setChatMessages] = useState([])
   const [unreadChat, setUnreadChat] = useState(0)
   const [unreadWaiting, setUnreadWaiting] = useState(0)
@@ -95,6 +123,11 @@ export default function MeetRoomLivekit() {
   const setHand = useRoomStore((s) => s.setHand)
   const setRole = useRoomStore((s) => s.setRole)
   const seedRoles = useRoomStore((s) => s.seedRoles)
+  const resetRoom = useRoomStore((s) => s.reset)
+
+  // Wipe carried-over reactions/pins/hands/roles when entering a meeting — the
+  // store is module-global, so otherwise the last meeting's state leaks in.
+  useEffect(() => { resetRoom() }, [resetRoom])
 
   // ── Control WS ──────────────────────────────────────────────────────────
   const { connected: ctrlConnected, send: ctrlSend, subscribe: ctrlSubscribe } =
@@ -111,6 +144,7 @@ export default function MeetRoomLivekit() {
           chat_enabled: !!data.meeting?.chat_enabled,
           screenshare_enabled: !!data.meeting?.screenshare_enabled,
         })
+        if (data.meeting?.theme) setThemeId(data.meeting.theme)
         // Seed the role map: self + every peer already in the room.
         const entries = []
         if (data.self?.user_id) entries.push([data.self.user_id, data.role || 'participant'])
@@ -157,6 +191,8 @@ export default function MeetRoomLivekit() {
         setToast({ kind: 'error', text: data.reason || 'Action not allowed' })
       } else if (t === 'caption') {
         pushCaption(data.peer_id, { name: data.name, color: data.color, text: data.text })
+      } else if (t === 'theme-changed') {
+        if (data.theme) setThemeId(data.theme)
       } else if (t === 'wb-stroke') {
         if (data.stroke) setWbStrokes((prev) => [...prev, data.stroke])
       } else if (t === 'wb-clear') {
@@ -213,15 +249,71 @@ export default function MeetRoomLivekit() {
       return next
     })
   }, [ctrlSend])
-  const admitUser = useCallback((uid) => ctrlSend({ type: 'admit', user_id: uid }), [ctrlSend])
-  const denyUser = useCallback((uid) => ctrlSend({ type: 'deny', user_id: uid }), [ctrlSend])
-  const admitAll = useCallback(() => ctrlSend({ type: 'admit-all' }), [ctrlSend])
+  // Admit / deny go over REST, not the control WS. ctrlSend silently drops the
+  // message whenever the socket is mid-reconnect, which made "Admit" appear to
+  // do nothing. REST always lands; the waiting user's server-side hold loop
+  // polls status (~3s) and auto-navigates once admitted, and re-broadcasts the
+  // updated waiting list to hosts. We also drop the row locally for instant UI.
+  const admitUser = useCallback(async (uid) => {
+    try {
+      await api(`/api/meetings/${code}/admit`, { method: 'POST', body: { user_id: uid } })
+      setWaiting((prev) => prev.filter((w) => w.user_id !== uid))
+    } catch (e) {
+      setToast({ kind: 'error', text: e?.message || 'Could not admit participant' })
+    }
+  }, [code])
+  const denyUser = useCallback(async (uid) => {
+    try {
+      await api(`/api/meetings/${code}/deny`, { method: 'POST', body: { user_id: uid } })
+      setWaiting((prev) => prev.filter((w) => w.user_id !== uid))
+    } catch (e) {
+      setToast({ kind: 'error', text: e?.message || 'Could not deny participant' })
+    }
+  }, [code])
+  const admitAll = useCallback(async () => {
+    const pending = waiting.slice()
+    setWaiting([])
+    for (const w of pending) {
+      try {
+        await api(`/api/meetings/${code}/admit`, { method: 'POST', body: { user_id: w.user_id } })
+      } catch { /* ignore individual failures; list re-syncs from WS */ }
+    }
+  }, [code, waiting])
   const kickUser = useCallback((uid, name) => {
     if (!confirm(`Remove ${name || 'this participant'} from the meeting?`)) return
     ctrlSend({ type: 'kick', user_id: uid })
   }, [ctrlSend])
   const promoteUser = useCallback((uid) => ctrlSend({ type: 'promote', user_id: uid }), [ctrlSend])
   const setLock = useCallback((locked) => ctrlSend({ type: 'lock', locked }), [ctrlSend])
+  // Theme is meeting-wide: optimistically apply locally, then broadcast so every
+  // participant re-skins (server persists it + relays 'theme-changed').
+  const changeTheme = useCallback((id) => {
+    setThemeId(id)
+    ctrlSend({ type: 'set-theme', theme: id })
+  }, [ctrlSend])
+  const toggleLayout = useCallback(() => {
+    setLayout((l) => (l === 'grid' ? 'speaker' : 'grid'))
+  }, [])
+  // Background is local-only (no WS broadcast). Persist the choice; the
+  // VirtualBackgroundController inside <LiveKitRoom> applies it to the camera.
+  const changeBgEffect = useCallback((preset) => {
+    const id = preset?.id || 'none'
+    setBgEffectId(id)
+    try { localStorage.setItem('zoiko_bg_effect', id) } catch { /* private mode */ }
+  }, [])
+  const addUpload = useCallback((file) => {
+    if (!file) return
+    const url = URL.createObjectURL(file)
+    const id = `upload-${url.slice(-12)}`
+    const preset = { id, name: file.name || 'Custom', type: 'image', src: url }
+    setBgUploads((prev) => [...prev, preset])
+    changeBgEffect(preset)
+  }, [changeBgEffect])
+  // Resolve the active effect object from its id (built-in preset or upload).
+  const bgEffect =
+    bgEffectId === 'none'
+      ? NONE_EFFECT
+      : (getPreset(bgEffectId) || bgUploads.find((u) => u.id === bgEffectId) || NONE_EFFECT)
   const setChatEnabled = useCallback((v) => ctrlSend({ type: 'set-permissions', chat_enabled: v }), [ctrlSend])
   const setScreenEnabled = useCallback((v) => ctrlSend({ type: 'set-permissions', screenshare_enabled: v }), [ctrlSend])
   const endMeeting = useCallback(() => {
@@ -307,17 +399,27 @@ export default function MeetRoomLivekit() {
     )
   }
 
+  const theme = getTheme(themeId)
   return (
+    <RoomThemeProvider theme={theme}>
     <LiveKitRoom
       token={token}
       serverUrl={wsUrl}
       options={ROOM_OPTIONS}
       connect
-      audio
-      video
+      audio={joinPrefs.audio !== false}
+      video={joinPrefs.video !== false}
       onDisconnected={handleDisconnected}
       onError={(e) => setError(e?.message || String(e))}
-      className="h-screen w-screen flex flex-col bg-[#f1f3f4] text-[#202124]"
+      className="zk-room-bg h-screen w-screen flex flex-col overflow-hidden transition-[background] duration-500"
+      style={{
+        background: theme.roomBg,
+        color: theme.fg,
+        '--zk-active': theme.accent,
+        '--zk-tile-accent': theme.accent,
+        '--zk-room-fg': theme.fg,
+        '--zk-room-fg-dim': theme.fgDim,
+      }}
     >
       <Header
         code={code}
@@ -333,7 +435,7 @@ export default function MeetRoomLivekit() {
 
       <div className="flex-1 flex min-h-0 relative">
         <div className="flex-1 flex flex-col min-w-0 relative">
-          <Stage />
+          <Stage layout={layout} />
           <ReactionOverlay events={reactions} />
           <CaptionsOverlay captions={liveCaptions} />
           {showWhiteboard && (
@@ -373,6 +475,32 @@ export default function MeetRoomLivekit() {
             onPromote={promoteUser}
           />
         )}
+        {sidebar === 'theme' && (
+          <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-[#202124] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.25)] ring-1 ring-black/[0.06]">
+            <header className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-4">
+              <h2 className="text-[15px] font-medium">Themes &amp; background</h2>
+              <button
+                onClick={() => setSidebar(null)}
+                aria-label="Close themes"
+                className="grid h-8 w-8 place-items-center rounded-full text-[#5f6368] transition hover:bg-black/[0.06] hover:text-[#202124]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+            <ThemePicker
+              bgEffectId={bgEffectId}
+              onSelectBg={changeBgEffect}
+              bgLoading={bgLoading}
+              bgSupported={bgSupported}
+              uploads={bgUploads}
+              onUpload={addUpload}
+              cameraOn={cameraOn}
+              themeId={themeId}
+              onSelectTheme={changeTheme}
+              canEditTheme={isHostOrCohost}
+            />
+          </aside>
+        )}
       </div>
 
       <RoomAudioRenderer />
@@ -381,6 +509,8 @@ export default function MeetRoomLivekit() {
         code={code}
         isHostOrCohost={isHostOrCohost}
         screenshareEnabled={meeting.screenshare_enabled}
+        layout={layout}
+        toggleLayout={toggleLayout}
         sidebar={sidebar}
         setSidebar={setSidebar}
         waitingList={isHostOrCohost ? waiting : []}
@@ -402,6 +532,7 @@ export default function MeetRoomLivekit() {
       {showDevices && <DevicePicker onClose={() => setShowDevices(false)} />}
 
       <RoomEffects pushToast={pushToast} />
+      <VirtualBackgroundController effect={bgEffect} setLoading={setBgLoading} onCameraState={setCameraOn} />
       <ReconnectToast />
       <ToastStack toasts={toasts} />
       {error && (
@@ -410,6 +541,7 @@ export default function MeetRoomLivekit() {
         </div>
       )}
     </LiveKitRoom>
+    </RoomThemeProvider>
   )
 }
 
@@ -427,6 +559,8 @@ function LivekitDockAdapter({
   code,
   isHostOrCohost,
   screenshareEnabled,
+  layout,
+  toggleLayout,
   sidebar,
   setSidebar,
   waitingList,
@@ -529,9 +663,13 @@ function LivekitDockAdapter({
       showEmoji={showEmoji}
       setShowEmoji={setShowEmoji}
       sendReaction={sendReaction}
+      layout={layout}
+      toggleLayout={toggleLayout}
+      onOpenThemes={() => setSidebar((s) => (s === 'theme' ? null : 'theme'))}
+      themesOpen={sidebar === 'theme'}
       sidebar={sidebar}
       setSidebar={setSidebar}
-      waitingList={waitingList}
+      waitingList={[]}
       unreadChat={unreadChat}
       onInfo={openDevices}
       extraCenterSlot={
@@ -544,14 +682,19 @@ function LivekitDockAdapter({
         </RoundDockExtra>
       }
       extraRightSlot={
-        isHostOrCohost && unreadWaiting > 0 ? (
+        // Distinct, persistent waiting-room button — shown whenever anyone is
+        // actually waiting (not gated on the unread counter, which reset to 0
+        // the instant the panel opened and made the only access point vanish).
+        // UserPlus (not Users) so it doesn't read as a duplicate of the People
+        // icon next to it.
+        isHostOrCohost && waitingList.length > 0 ? (
           <RoundDockExtra
             active={sidebar === 'waiting'}
             onClick={() => setSidebar((s) => (s === 'waiting' ? null : 'waiting'))}
             label="Waiting room"
-            badge={unreadWaiting}
+            badge={waitingList.length}
           >
-            <Users className="h-5 w-5" />
+            <UserPlus className="h-5 w-5" />
           </RoundDockExtra>
         ) : null
       }
@@ -675,7 +818,7 @@ function Header({ code, ctrlConnected, recording, isHostOrCohost, meeting, onLoc
       </div>
 
       <div className="flex items-center gap-2">
-        <span className="font-mono text-[13px] tracking-wide text-[#444746]">{code}</span>
+        <span className="font-mono text-[13px] tracking-wide text-[color:var(--zk-room-fg-dim,#444746)]">{code}</span>
         <button
           onClick={copyLink}
           title="Copy invite link"
@@ -767,6 +910,61 @@ function RoomEffects({ pushToast }) {
       You're muted — press <kbd className="px-1.5 py-0.5 text-xs rounded bg-zinc-700">Ctrl+D</kbd> to unmute
     </div>
   )
+}
+
+/**
+ * Applies the chosen virtual-background effect to the LOCAL camera track via a
+ * LiveKit track processor, and reports camera on/off up to the parent so the
+ * Themes panel can show the "turn your camera on" hint. Renders nothing.
+ * Must live inside <LiveKitRoom> for the LK hooks.
+ */
+function VirtualBackgroundController({ effect, setLoading, onCameraState }) {
+  const { localParticipant } = useLocalParticipant()
+  const procRef = useRef(null)
+
+  const camPub = localParticipant?.getTrackPublication?.(Track.Source.Camera)
+  const camTrackSid = camPub?.trackSid
+  const camOn = !!localParticipant?.isCameraEnabled
+
+  useEffect(() => { onCameraState?.(camOn) }, [camOn, onCameraState])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const lvTrack = localParticipant?.getTrackPublication?.(Track.Source.Camera)?.videoTrack
+      // Only attach to a live, published camera. When the camera is off we do
+      // nothing; this effect re-runs once it turns on (camOn / sid change).
+      if (!lvTrack || !camOn || typeof lvTrack.setProcessor !== 'function') return
+      try {
+        const none = !effect || effect.type === 'none'
+        const current = lvTrack.getProcessor?.()
+        if (none) {
+          if (current) await lvTrack.stopProcessor()
+          procRef.current = null
+          return
+        }
+        setLoading?.(true)
+        if (procRef.current && current === procRef.current) {
+          // Same processor already on this track — swap the effect in place.
+          procRef.current.updateEffect(effect)
+        } else {
+          const proc = new LkBackgroundProcessor(effect)
+          procRef.current = proc
+          await lvTrack.setProcessor(proc)
+        }
+      } catch (e) {
+        if (import.meta.env.DEV) console.error('[bg] apply failed', e)
+      } finally {
+        if (!cancelled) setLoading?.(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [effect, camOn, camTrackSid, localParticipant, setLoading])
+
+  // Tear down the segmenter when leaving the room.
+  useEffect(() => () => { try { procRef.current?.destroy() } catch {} }, [])
+
+  return null
 }
 
 function ReconnectToast() {

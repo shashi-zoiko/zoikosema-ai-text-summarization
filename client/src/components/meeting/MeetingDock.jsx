@@ -4,6 +4,7 @@ import {
   MessageSquare, Mic, MicOff, MonitorUp, MonitorX, MoreVertical, Palette, PhoneOff,
   Settings, Smile, Square, Users, Video, VideoOff,
 } from 'lucide-react'
+import Emoji from '../../features/emoji/Emoji'
 
 /**
  * Meeting bottom dock — elevated light theme, floating glass capsule.
@@ -502,17 +503,22 @@ function ReactionPicker({ onClose, onPick }) {
   return (
     <>
       <div className="fixed inset-0 z-10" onClick={onClose} />
-      <div className="absolute bottom-[calc(100%+14px)] left-1/2 z-20 -translate-x-1/2">
+      <div className="absolute bottom-[calc(100%+16px)] left-1/2 z-20 -translate-x-1/2">
+        {/* Google-Meet-style reaction bar: emoji float directly in one glass
+            pill (no per-emoji chips), with a subtle round highlight + lift on
+            hover. The `!` resets neutralise the app's global <button> chrome
+            (white fill, border, shadow, padding) that otherwise boxes each in. */}
         <div
           role="menu"
-          className="zk-glass zk-pop-in flex items-center gap-1 rounded-full border border-black/[0.06] p-1.5"
+          className="zk-glass zk-pop-in flex items-center gap-0.5 rounded-full border border-black/[0.06] px-2 py-1.5"
         >
           {EMOJIS.map((e) => (
             <button
               key={e}
               onClick={() => onPick(e)}
-              className="zk-press grid h-10 w-10 place-items-center rounded-full text-xl hover:bg-black/[0.06] hover:scale-110"
-            >{e}</button>
+              aria-label={`React with ${e}`}
+              className="grid h-11 w-11 origin-bottom place-items-center !rounded-full !border-0 !bg-transparent !p-0 !shadow-none transition-transform duration-150 hover:!bg-black/[0.07] hover:-translate-y-1 hover:scale-125"
+            ><Emoji char={e} size="26px" /></button>
           ))}
         </div>
       </div>

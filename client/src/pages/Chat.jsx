@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import { useCall } from '../context/CallContext'
 import Avatar from '../components/Avatar'
 import Icon from '../components/Icon'
+import Emoji, { EmojiText } from '../features/emoji/Emoji'
 import { cn } from '../lib/cn'
 import {
   getCachedChannels, setCachedChannels,
@@ -139,7 +140,7 @@ function renderBodyWithMentions(body, currentUserHandle) {
   MENTION_RE.lastIndex = 0
   while ((m = MENTION_RE.exec(body)) !== null) {
     const start = m.index + m[1].length
-    if (start > last) out.push(body.slice(last, start))
+    if (start > last) out.push(<EmojiText key={`t-${last}`} text={body.slice(last, start)} />)
     const isMe = currentUserHandle && m[2].toLowerCase() === currentUserHandle
     out.push(
       <span
@@ -156,7 +157,7 @@ function renderBodyWithMentions(body, currentUserHandle) {
     )
     last = start + 1 + m[2].length
   }
-  if (last < body.length) out.push(body.slice(last))
+  if (last < body.length) out.push(<EmojiText key={`t-${last}`} text={body.slice(last)} />)
   return out.length ? out : body
 }
 
@@ -1075,7 +1076,9 @@ export default function Chat() {
                     </div>
                   </div>
                   <div className="truncate text-[12px] text-fg-muted">
-                    {c.last_message_preview || (c.is_direct ? 'Start a conversation' : 'No messages yet')}
+                    {c.last_message_preview
+                      ? <EmojiText text={c.last_message_preview} emojiSize="1.1em" />
+                      : (c.is_direct ? 'Start a conversation' : 'No messages yet')}
                   </div>
                 </div>
               </button>
@@ -1311,7 +1314,7 @@ export default function Chat() {
               >
                 <Icon name="reply" size={14} />
                 <span className="min-w-0 flex-1 truncate">
-                  Replying to <strong className="text-fg">{replyTo.sender_name}</strong>: {replyTo.body?.slice(0, 80)}
+                  Replying to <strong className="text-fg">{replyTo.sender_name}</strong>: <EmojiText text={replyTo.body?.slice(0, 80)} emojiSize="1.1em" />
                 </span>
                 <button
                   className="ghost"
@@ -1610,7 +1613,7 @@ const MessageBubble = memo(function MessageBubble({
       {msg.reply_to_id && msg.reply_preview && (
         <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border-l-2 border-l-accent bg-bg-2 px-2 py-1 text-[12px] text-fg-muted">
           <Icon name="reply" size={12} />
-          <span className="truncate">{msg.reply_preview}</span>
+          <span className="truncate"><EmojiText text={msg.reply_preview} emojiSize="1.1em" /></span>
         </div>
       )}
 
@@ -1699,10 +1702,10 @@ const MessageBubble = memo(function MessageBubble({
             <button
               key={em}
               onClick={() => onReact(em)}
-              className="grid h-8 w-8 place-items-center !rounded-full !border-0 !bg-transparent text-[18px] !shadow-none transition hover:scale-110 hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)]"
+              className="grid h-8 w-8 place-items-center !rounded-full !border-0 !bg-transparent !shadow-none transition hover:scale-110 hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)]"
               style={{ padding: 0 }}
             >
-              {em}
+              <Emoji char={em} size="20px" />
             </button>
           ))}
         </div>
@@ -1718,7 +1721,7 @@ const MessageBubble = memo(function MessageBubble({
               title={users.map((u) => u.user_name).join(', ')}
               className="inline-flex items-center gap-1 !rounded-full !border-line !bg-bg-3 !px-2 !py-0.5 text-[12.5px] !shadow-none transition hover:!border-accent hover:!bg-accent-soft"
             >
-              <span>{emoji}</span>
+              <Emoji char={emoji} size="16px" />
               <span className="font-semibold tabular-nums text-fg-dim">{users.length}</span>
             </button>
           ))}
@@ -1819,7 +1822,7 @@ function ComposerEmojiPicker({ activeTab, onTabChange, onPick, onClose }) {
                 : '!bg-transparent hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)]'
             )}
           >
-            {c.icon}
+            <Emoji char={c.icon} size="17px" />
           </button>
         ))}
       </div>
@@ -1831,9 +1834,9 @@ function ComposerEmojiPicker({ activeTab, onTabChange, onPick, onClose }) {
           <button
             key={`${active.key}-${i}`}
             onClick={() => onPick(em)}
-            className="grid h-9 w-9 place-items-center !rounded-md !border-0 !bg-transparent !p-0 text-[20px] !shadow-none transition hover:scale-[1.15] hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)]"
+            className="grid h-9 w-9 place-items-center !rounded-md !border-0 !bg-transparent !p-0 !shadow-none transition hover:scale-[1.15] hover:!bg-[color-mix(in_srgb,var(--c-fg)_6%,transparent)]"
           >
-            {em}
+            <Emoji char={em} size="22px" />
           </button>
         ))}
       </div>

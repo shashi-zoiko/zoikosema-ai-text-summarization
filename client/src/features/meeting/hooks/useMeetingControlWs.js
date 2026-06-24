@@ -4,7 +4,7 @@ import { getWsBase } from '../../../api/client'
 /**
  * Connects to the existing /ws/meetings/{code} control WS and exposes:
  *   - `connected`: boolean
- *   - `send(payload)`: stringifies + sends
+ *   - `send(payload)`: stringifies + sends (queues while reconnecting)
  *   - `subscribe(handler)`: receive parsed JSON messages
  *
  * Media (offer/answer/ICE) is NOT handled here — that's LiveKit's job. This
@@ -16,12 +16,17 @@ export default function useMeetingControlWs(code, { password } = {}) {
   const handlersRef = useRef(new Set())
   const reconnectAttemptRef = useRef(0)
   const reconnectTimerRef = useRef(null)
+  const outboxRef = useRef([]) // sends queued while the socket is down
   const [connected, setConnected] = useState(false)
 
   const send = useCallback((payload) => {
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(payload))
+    } else {
+      // Socket is mid-(re)connect — queue and flush on open so control-plane
+      // messages (chat, reactions, raise-hand) aren't silently lost.
+      outboxRef.current.push(payload)
     }
   }, [])
 
@@ -44,8 +49,16 @@ export default function useMeetingControlWs(code, { password } = {}) {
       wsRef.current = ws
 
       ws.onopen = () => {
+        // Ignore a stale socket that has already been superseded (see onclose).
+        if (wsRef.current !== ws) return
         reconnectAttemptRef.current = 0
         setConnected(true)
+        // Flush anything queued while we were down.
+        const queued = outboxRef.current
+        outboxRef.current = []
+        for (const p of queued) {
+          try { ws.send(JSON.stringify(p)) } catch { outboxRef.current.push(p) }
+        }
       }
       ws.onmessage = (e) => {
         let data
@@ -56,6 +69,12 @@ export default function useMeetingControlWs(code, { password } = {}) {
       }
       ws.onerror = () => { /* surfaced by onclose */ }
       ws.onclose = (ev) => {
+        // CRITICAL: a superseded socket's late onclose must NOT clobber the
+        // live one. React StrictMode (dev) double-mounts, so socket A can fire
+        // onclose AFTER its replacement B is already in wsRef. Without this
+        // guard that nulled the live ref and every send silently dropped —
+        // the socket kept *receiving* (handlers fire) but `send` no-op'd.
+        if (wsRef.current !== ws) return
         setConnected(false)
         wsRef.current = null
         // 4001 = superseded by a newer session (server-side); don't reconnect.

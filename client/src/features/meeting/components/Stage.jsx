@@ -9,7 +9,7 @@ import { useRoomStore } from '../state/roomStore.js'
  * present, that participant's camera is promoted to the hero slot and gets
  * the high video quality; everyone else is downgraded to low.
  */
-export default function Stage() {
+export default function Stage({ layout = 'grid' }) {
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
   const setPinned = useRoomStore((s) => s.setPinned)
 
@@ -29,7 +29,14 @@ export default function Stage() {
   // them to share screen.
   const heroIdentity = pinnedIdentity || screen?.participant?.identity
   const heroFromCam = cams.find((t) => t.participant.identity === heroIdentity)
-  const hero = screen ?? heroFromCam
+  let hero = screen ?? heroFromCam
+  // Speaker layout promotes one tile to a big hero + filmstrip — but only when
+  // there are 2+ people (otherwise a lone participant fills the whole screen,
+  // which looks worse than the centered grid tile). Prefer a remote participant
+  // as the hero. Grid layout only heroes an explicit screen-share / pin.
+  if (!hero && layout === 'speaker' && cams.length > 1) {
+    hero = cams.find((t) => !t.participant.isLocal) || cams[0]
+  }
   let others = hero ? cams.filter((t) => t.participant.identity !== hero.participant.identity) : cams
 
   // A screen share keeps the main stage — it is never replaced by a pinned
@@ -79,22 +86,32 @@ export default function Stage() {
           <ParticipantTile trackRef={hero} isHero />
         </div>
       )}
-      <div
-        className={
-          (hero ? 'h-32 sm:h-40 flex gap-3 overflow-x-auto' : 'flex-1 grid gap-3 min-h-0')
-        }
-        style={
-          hero
-            ? undefined
-            : { gridTemplateColumns: `repeat(${gridCols(others.length)}, minmax(0, 1fr))` }
-        }
-      >
-        {others.map((t) => (
-          <div key={`${t.participant.sid}:${t.source}`} className={hero ? 'shrink-0 w-48 sm:w-56 aspect-video' : ''}>
-            <ParticipantTile trackRef={t} />
+      {hero ? (
+        // Filmstrip beneath the hero — fixed-height, horizontally scrollable.
+        <div className="h-32 sm:h-40 flex gap-3 overflow-x-auto">
+          {others.map((t) => (
+            <div key={`${t.participant.sid}:${t.source}`} className="shrink-0 w-48 sm:w-56 aspect-video">
+              <ParticipantTile trackRef={t} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        // Gallery grid. Cap the width by participant count and center it
+        // (mirrors the mesh room's gridView) so a solo/small meeting doesn't
+        // blow one tile up to fill the whole stage.
+        <div className={`mx-auto flex min-h-0 w-full flex-1 ${gridMaxWidth(others.length)}`}>
+          <div
+            className="grid h-full w-full auto-rows-fr gap-3"
+            style={{ gridTemplateColumns: `repeat(${gridCols(others.length)}, minmax(0, 1fr))` }}
+          >
+            {others.map((t) => (
+              <div key={`${t.participant.sid}:${t.source}`} className="min-h-0">
+                <ParticipantTile trackRef={t} />
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -104,4 +121,12 @@ function gridCols(n) {
   if (n <= 4) return 2
   if (n <= 9) return 3
   return 4
+}
+
+// Mirrors MeetRoom.jsx's maxWidthFor — keeps a solo or small gallery centered
+// at a sane width instead of stretching a single tile across the whole stage.
+function gridMaxWidth(n) {
+  if (n <= 1) return 'max-w-4xl'
+  if (n <= 4) return 'max-w-6xl'
+  return 'max-w-none'
 }

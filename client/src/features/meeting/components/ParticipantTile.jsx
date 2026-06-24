@@ -8,6 +8,7 @@ import {
 import { ConnectionQuality, Track } from 'livekit-client'
 import { Hand, MicOff } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
+import { useRoomTheme } from '../RoomThemeContext.jsx'
 import { PinButton, PinnedNameIcon } from '../../../components/meeting/PinControls.jsx'
 
 function identityToUserId(identity) {
@@ -31,12 +32,22 @@ function useConnectionQuality(participant) {
 }
 
 function ParticipantTileImpl({ trackRef, isHero }) {
+  const theme = useRoomTheme()
   const { name, identity } = useParticipantInfo({ participant: trackRef.participant })
   const isSpeaking = useIsSpeaking(trackRef.participant)
   const quality = useConnectionQuality(trackRef.participant)
   const { isMuted: micMuted } = useTrackMutedIndicator({
     participant: trackRef.participant,
     source: Track.Source.Microphone,
+  })
+  // Subscribe to THIS track's mute state (camera or screen-share). Without a
+  // subscription, toggling the camera off→on never re-renders the tile and it
+  // stays stuck on the avatar placeholder even though video is publishing
+  // again. Driving `hasVideo` off this hook (not a raw publication read) keeps
+  // the tile in sync through every mute/unmute cycle.
+  const { isMuted: videoMuted } = useTrackMutedIndicator({
+    participant: trackRef.participant,
+    source: trackRef.source,
   })
 
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
@@ -52,7 +63,7 @@ function ParticipantTileImpl({ trackRef, isHero }) {
     [identity, togglePinned],
   )
 
-  const hasVideo = !!trackRef.publication && !trackRef.publication.isMuted
+  const hasVideo = !!trackRef.publication && !videoMuted
   const displayName = name || identity || 'Guest'
   // Deterministic colour per identity so the same user always gets the same
   // tile background — Meet does the same trick.
@@ -63,39 +74,44 @@ function ParticipantTileImpl({ trackRef, isHero }) {
       onDoubleClick={onPinToggle}
       title="Double-click to pin"
       className={
-        'group relative isolate aspect-video overflow-hidden rounded-2xl bg-[#e8eaed] transition-shadow ' +
-        (isSpeaking ? 'ring-2 ring-[#1a73e8]' : 'ring-1 ring-black/[0.06]')
+        'group relative isolate aspect-video overflow-hidden rounded-2xl transition-shadow ' +
+        (isSpeaking ? 'ring-2' : 'ring-1 ring-white/10')
       }
+      style={isSpeaking ? { boxShadow: `0 0 0 2px ${theme.accent}` } : undefined}
     >
       {hasVideo ? (
         <VideoTrack trackRef={trackRef} className="absolute inset-0 h-full w-full object-cover" />
       ) : (
         <div
           className="absolute inset-0 grid place-items-center"
-          style={{
-            background: `radial-gradient(circle at 50% 35%, ${avatarColor} 0%, color-mix(in srgb, ${avatarColor} 55%, #000) 100%)`,
-          }}
+          style={{ background: theme.tileBg }}
         >
-          <div className={
-            'grid place-items-center rounded-full font-semibold text-white ring-1 ring-white/15 backdrop-blur-sm bg-white/[0.08] ' +
-            (isHero ? 'h-36 w-36 text-5xl' : 'h-24 w-24 text-3xl')
-          }>
+          <div
+            className={
+              'grid place-items-center rounded-full font-semibold text-white ' +
+              (isHero ? 'h-36 w-36 text-5xl' : 'h-24 w-24 text-3xl')
+            }
+            style={{
+              backgroundColor: avatarColor,
+              boxShadow: `0 0 0 1px rgba(255,255,255,0.18), 0 0 0 5px color-mix(in srgb, ${theme.accent} 22%, transparent), 0 18px 44px -18px rgba(0,0,0,0.65)`,
+            }}
+          >
             {displayName.slice(0, 1).toUpperCase()}
           </div>
         </div>
       )}
 
-      {/* Hand raised — top-left */}
+      {/* Hand raised — top-left, warm gradient chip (matches mesh PeerTile) */}
       {raised && (
-        <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-amber-400 text-zinc-900 shadow-md" title="Hand raised">
+        <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-gradient-to-b from-amber-300 to-amber-400 text-amber-950 shadow-[0_4px_12px_-3px_rgba(217,119,6,0.6),inset_0_1px_0_rgba(255,255,255,0.5)] ring-1 ring-white/40" title="Hand raised">
           <Hand className="h-4 w-4" />
         </div>
       )}
 
-      {/* Mic-off badge — top-right (matches Meet) */}
+      {/* Mic-off badge — top-right, glass chip */}
       {micMuted && (
-        <div className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm" title="Muted">
-          <MicOff className="h-3.5 w-3.5 text-[#ea4335]" />
+        <div className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/45 text-white shadow-sm ring-1 ring-white/15 backdrop-blur-md" title="Muted">
+          <MicOff className="h-4 w-4 text-[#ff6b5e]" />
         </div>
       )}
 
@@ -110,9 +126,14 @@ function ParticipantTileImpl({ trackRef, isHero }) {
 
       <QualityBars quality={quality} />
 
-      {/* Bottom name pill */}
+      {/* Bottom scrim — keeps the name pill legible over bright video. */}
+      {hasVideo && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/35 to-transparent" />
+      )}
+
+      {/* Bottom name pill — glass chip (matches mesh PeerTile) */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
-        <div className="flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[12.5px] font-medium text-white backdrop-blur-sm">
+        <div className="flex items-center gap-1.5 rounded-lg bg-black/45 px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
           {isPinned && <PinnedNameIcon />}
           <span className="truncate">{displayName}</span>
         </div>
