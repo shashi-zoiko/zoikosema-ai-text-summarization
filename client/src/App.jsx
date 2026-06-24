@@ -13,12 +13,11 @@ import Register from './pages/Register.jsx'
 import Home from './pages/Home.jsx'
 
 // Everything else is route-split so the home-page bundle stays lean.
-// MeetRoom and MeetingIntelligence in particular pull in framer-motion +
+// MeetRoomLivekit and MeetingIntelligence in particular pull in framer-motion +
 // lucide trees that don't need to load until the user actually navigates.
 const Chat = lazy(() => import('./pages/Chat.jsx'))
 const Meet = lazy(() => import('./pages/Meet.jsx'))
 const MeetLobby = lazy(() => import('./pages/MeetLobby.jsx'))
-const MeetRoom = lazy(() => import('./pages/MeetRoom.jsx'))
 const MeetRoomLivekit = lazy(() => import('./features/meeting/MeetRoomLivekit.jsx'))
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
 const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx'))
@@ -87,17 +86,20 @@ export default function App() {
             </RequireAuth>
           }
         />
+        {/* LiveKit SFU is the only media plane. /room is kept as an alias for
+            old links/bookmarks and the 1:1 call flow; the legacy WebRTC mesh
+            room (pages/MeetRoom.jsx) has been removed. Both paths render the
+            same LiveKit room. */}
         <Route
           path="/meet/:code/room"
           element={
             <RequireAuth>
-              <MeetRoom />
+              <RoomErrorBoundary>
+                <MeetRoomLivekit />
+              </RoomErrorBoundary>
             </RequireAuth>
           }
         />
-        {/* Strangler-fig route for the LiveKit migration. Selected by appending
-            ?lk=1 in the lobby (or globally via VITE_USE_LIVEKIT=1). Will replace
-            /meet/:code/room once dogfooded. */}
         <Route
           path="/meet/:code/room-lk"
           element={

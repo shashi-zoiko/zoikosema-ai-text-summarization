@@ -69,6 +69,24 @@ function ParticipantTileImpl({ trackRef, isHero }) {
   // tile background — Meet does the same trick.
   const avatarColor = pickColor(identity || displayName)
 
+  // Mask the gap between "track subscribed" and "first frame decoded". That
+  // gap is keyframe latency — short on a healthy link, but long when the
+  // publisher's encoder is starved (e.g. heavy local effects) or the network
+  // is poor. Without this the remote tile showed a BLACK rectangle until the
+  // first keyframe landed; now we keep the avatar up until the <video> paints,
+  // exactly like Meet/Zoom.
+  const [videoReady, setVideoReady] = useState(false)
+  const trackSid = trackRef.publication?.trackSid
+  useEffect(() => {
+    setVideoReady(false)
+    if (!hasVideo) return undefined
+    // Safety net: reveal the video even if the load event never fires, so a
+    // working stream can never get stuck hidden behind the placeholder.
+    const t = setTimeout(() => setVideoReady(true), 6000)
+    return () => clearTimeout(t)
+  }, [trackSid, hasVideo])
+  const onVideoLive = useCallback(() => setVideoReady(true), [])
+
   return (
     <div
       onDoubleClick={onPinToggle}
@@ -79,9 +97,18 @@ function ParticipantTileImpl({ trackRef, isHero }) {
       }
       style={isSpeaking ? { boxShadow: `0 0 0 2px ${theme.accent}` } : undefined}
     >
-      {hasVideo ? (
-        <VideoTrack trackRef={trackRef} className="absolute inset-0 h-full w-full object-cover" />
-      ) : (
+      {/* Render the video as soon as the track exists so it can start decoding,
+          but keep the avatar overlaid on top until the first frame paints
+          (videoReady) so a subscribe/keyframe delay shows the avatar, not black. */}
+      {hasVideo && (
+        <VideoTrack
+          trackRef={trackRef}
+          onLoadedData={onVideoLive}
+          onPlaying={onVideoLive}
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      )}
+      {(!hasVideo || !videoReady) && (
         <div
           className="absolute inset-0 grid place-items-center"
           style={{ background: theme.tileBg }}

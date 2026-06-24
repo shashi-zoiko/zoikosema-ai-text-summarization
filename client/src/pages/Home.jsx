@@ -447,11 +447,15 @@ export default function Home() {
                       <AnimatePresence>
                         {showNewMenu && (
                           <>
-                            {/* Click-away layer — closes the menu on any outside click. */}
+                            {/* Click-away layer — closes the menu on any outside click.
+                                The global base `button` rule (index.css) forces an opaque
+                                fill + a :hover background on every <button>, which turned
+                                this full-screen overlay into a white panel that hid the
+                                whole page on hover. Reset it to a true transparent layer. */}
                             <button
                               aria-hidden
                               tabIndex={-1}
-                              className="fixed inset-0 z-[60] cursor-default"
+                              className="fixed inset-0 z-[60] cursor-default !bg-transparent !border-0 !p-0 !shadow-none"
                               onClick={() => setShowNewMenu(false)}
                             />
                             <motion.div

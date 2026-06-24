@@ -29,17 +29,12 @@ const PERM = {
   unavailable: 'unavailable',
 }
 
-// Strangler-fig switch — three layers, first match wins:
-//   1. Per-meeting flag set on the row (meeting.media_provider === 'livekit')
-//   2. URL flag ?lk=1   (override for one-off testing of an old meeting)
-//   3. Global env flag VITE_USE_LIVEKIT=1
-function pickRoomPath(code, meeting) {
-  const fromMeeting = meeting?.media_provider === 'livekit'
-  const urlFlag = new URLSearchParams(window.location.search).get('lk') === '1'
-  const envFlag = import.meta.env.VITE_USE_LIVEKIT === '1'
-  return fromMeeting || urlFlag || envFlag
-    ? `/meet/${code}/room-lk`
-    : `/meet/${code}/room`
+// LiveKit is the only media plane now — the legacy WebRTC mesh room has been
+// removed. Every meeting (including old rows still flagged 'mesh') routes to
+// the SFU room; the server gates joins on the global MEDIA_PROVIDER setting,
+// not the per-meeting media_provider column, so old meetings work too.
+function pickRoomPath(code) {
+  return `/meet/${code}/room-lk`
 }
 
 // Restore the participant's last mic/cam choice for this meeting so a refresh
@@ -90,6 +85,13 @@ export default function MeetLobby() {
   const [joining, setJoining] = useState(false)
 
   const audioLevel = useAudioLevel(stream, audioOn && permState === PERM.granted)
+
+  // Warm the room bundle (LiveKit vendor + room chunk, ~500KB+) while the user
+  // is granting camera/mic and reviewing their setup, so clicking "Join" swaps
+  // to the room instantly instead of waiting on a cold chunk download.
+  useEffect(() => {
+    import('../features/meeting/MeetRoomLivekit.jsx').catch(() => {})
+  }, [])
 
   // ── Meeting metadata ────────────────────────────────────────────────
   useEffect(() => {
@@ -346,7 +348,7 @@ export default function MeetLobby() {
             try { ws.close() } catch {}
             wsRef.current = null
             releasePreview()
-            navigate(pickRoomPath(code, meeting))
+            navigate(pickRoomPath(code))
           } else if (data.type === 'denied') {
             setWaitingStatus('denied')
             setErr('The host denied your request to join.')
@@ -359,7 +361,7 @@ export default function MeetLobby() {
           else clearInterval(keepalive)
         }, 3000)
       } else {
-        navigate(pickRoomPath(code, meeting))
+        navigate(pickRoomPath(code))
       }
     } catch (e) {
       setErr(e.message || 'Could not join meeting')

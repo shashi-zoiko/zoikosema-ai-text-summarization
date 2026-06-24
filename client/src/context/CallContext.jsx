@@ -19,7 +19,7 @@ export function CallProvider({ children }) {
         JSON.stringify({ audio: true, video: kind === 'video' })
       )
     } catch {}
-    navigate(`/meet/${meeting_code}/room`)
+    navigate(`/meet/${meeting_code}/room-lk`)
   }, [navigate])
 
   useEffect(() => {
