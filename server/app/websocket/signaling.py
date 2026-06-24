@@ -373,22 +373,17 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 data = await websocket.receive_json()
                 kind = data.get("type")
 
+                # WebRTC SDP/ICE relay (offer/answer/ice-candidate) was removed
+                # together with the peer-to-peer mesh room. LiveKit's SFU owns
+                # ALL media signaling now — this control WS carries app-level
+                # events only (chat, reactions, hand, waiting-room, host
+                # actions, captions, whiteboard, theme). A stray media-signaling
+                # frame from a stale client is ignored rather than relayed, so
+                # no browser-to-browser media path can ever be established.
                 if kind in {"offer", "answer", "ice-candidate"}:
-                    target_peer_id = data.get("target")
-                    if not target_peer_id:
-                        continue
-                    for member_ws in meet_manager.members(room):
-                        info = _conn_info.get(member_ws)
-                        if info and info["peer_id"] == target_peer_id:
-                            await member_ws.send_json({
-                                "type": kind,
-                                "from": peer_id,
-                                "from_user": user.name,
-                                "payload": data.get("payload"),
-                            })
-                            break
+                    continue
 
-                elif kind == "media-state":
+                if kind == "media-state":
                     audio_state = bool(data.get("audio", True))
                     video_state = bool(data.get("video", True))
                     screen_state = bool(data.get("screen", False))

@@ -169,6 +169,17 @@ if os.path.isdir(_dist_dir):
         # client sees a real error instead of an HTML page it can't parse.
         if full_path.startswith(("api/", "ws/")):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
+        # Serve real static files that Vite copies from public/ into the dist
+        # root (emoji PNGs under /emoji, MediaPipe wasm+model under /mediapipe,
+        # favicon, robots.txt, …). Only /assets was mounted above, so without
+        # this every such request fell through to the SPA shell and the browser
+        # got index.html where it expected a PNG/wasm — hence broken emoji and
+        # virtual-background fetches in the single-service deploy.
+        if full_path:
+            candidate = os.path.normpath(os.path.join(_dist_dir, full_path))
+            # Guard against path traversal (../) escaping the dist root.
+            if candidate.startswith(_dist_dir + os.sep) and os.path.isfile(candidate):
+                return FileResponse(candidate)
         return FileResponse(_index_html)
 else:
     log.warning("frontend dist not found at %s; SPA routes will 404", _dist_dir)

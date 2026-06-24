@@ -220,13 +220,13 @@ export default function MeetRoomLivekit() {
       } catch (e) {
         if (cancelled) return
         const msg = e?.message || 'Failed to join'
-        // Auto-fallback: if /media-token 503s because LiveKit isn't
-        // configured in this environment, bounce to the mesh room instead
-        // of dead-ending on an error screen. This happens when a user
-        // deep-links /room-lk on a deployment that hasn't enabled the SFU
-        // yet — common during the strangler-fig migration.
+        // LiveKit is the only media plane — there's no mesh room to fall back
+        // to. A 503 here means the server is missing MEDIA_PROVIDER=livekit /
+        // LIVEKIT_* credentials; surface a clear message so it's fixed in ops
+        // rather than silently degrading.
         if (/livekit is not enabled/i.test(msg)) {
-          navigate(`/meet/${code}/room`, { replace: true })
+          setError('Live video is temporarily unavailable. The meeting server is not configured for video right now — please try again shortly.')
+          setPhase('error')
           return
         }
         setError(msg)
@@ -402,6 +402,15 @@ export default function MeetRoomLivekit() {
   const theme = getTheme(themeId)
   return (
     <RoomThemeProvider theme={theme}>
+    {/* Pin the LIGHT token set on the whole room subtree. The dock and every
+        glass popover are a fixed light "Meet" aesthetic (.zk-dock / .zk-glass
+        are hardcoded white). Without this, the global base `button` rule
+        (index.css) paints any bare menu button with the app's dark --c-bg-1
+        when the app is in dark mode → dark boxes with dark text in the More
+        menu, device pickers, Host menu, etc. Scoping light tokens here makes
+        the room render identically regardless of the app's light/dark setting.
+        `display: contents` adds no box, so layout is untouched. */}
+    <div data-theme="light" className="contents">
     <LiveKitRoom
       token={token}
       serverUrl={wsUrl}
@@ -541,6 +550,7 @@ export default function MeetRoomLivekit() {
         </div>
       )}
     </LiveKitRoom>
+    </div>
     </RoomThemeProvider>
   )
 }

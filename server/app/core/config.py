@@ -38,7 +38,12 @@ class Settings(BaseSettings):
     livekit_api_secret: str = ""
     livekit_ws_url: str = ""               # e.g. ws://livekit:7880 (server-side, container DNS)
     livekit_public_ws_url: str = ""        # e.g. ws://localhost:7880 (browser-visible)
-    livekit_token_ttl_seconds: int = 900   # 15 min — clients reconnect with fresh token
+    # 6 hours. The browser mints this JWT once at join; the LiveKit SDK reuses
+    # it for the lifetime of the session, including hard reconnects after a long
+    # network outage. A short TTL (the old 15 min) meant a reconnect part-way
+    # through a normal meeting could fail auth, since the client never re-mints.
+    # 6h comfortably outlasts any real meeting while still bounding token replay.
+    livekit_token_ttl_seconds: int = 21600
 
     # Redis (control-plane fanout + idempotency cache)
     redis_url: str = ""
