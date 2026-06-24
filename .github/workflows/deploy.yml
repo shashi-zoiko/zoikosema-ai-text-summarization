@@ -60,11 +60,27 @@ jobs:
           # the SPA itself is same-origin now so CORS isn't on the hot path.
           # DATABASE_URL points at Supabase (Session Pooler — Cloud Run is
           # IPv4-only, the direct db.<ref>.supabase.co host won't work).
+          #
+          # IMPORTANT: this action REPLACES the service's full runtime env on
+          # every deploy. Any var NOT listed here is wiped — so MEDIA_PROVIDER /
+          # LIVEKIT_* MUST live here, not just in the GCP console, or the SFU
+          # silently turns off after each deploy and /media-token 503s
+          # ("Live video is temporarily unavailable"). LIVEKIT_WS_URL and
+          # LIVEKIT_PUBLIC_WS_URL are both the wss://<project>.livekit.cloud URL.
+          # NB: the server env var is LIVEKIT_WS_URL (config field name), but the
+          # GitHub secret holding that value is named LIVEKIT_URL — hence the
+          # name difference on that one line below. (Comments must stay OUT of
+          # the env_vars block: it is a literal string parsed as KEY=VALUE lines.)
           env_vars: |
             JWT_SECRET=${{ secrets.JWT_SECRET }}
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
             FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+            MEDIA_PROVIDER=livekit
+            LIVEKIT_API_KEY=${{ secrets.LIVEKIT_API_KEY }}
+            LIVEKIT_API_SECRET=${{ secrets.LIVEKIT_API_SECRET }}
+            LIVEKIT_WS_URL=${{ secrets.LIVEKIT_URL }}
+            LIVEKIT_PUBLIC_WS_URL=${{ secrets.LIVEKIT_PUBLIC_WS_URL }}
           # min-instances=1 eliminates cold starts on the first request after
           # idle (default is 0 → ~5-10s pull+boot on each idle wake). 2 CPU
           # + 1Gi memory is the smallest tier that comfortably runs uvicorn +
