@@ -335,6 +335,7 @@ export default function MeetLobby() {
       }
       if (participant.status === 'pending') {
         setWaitingStatus('pending')
+        console.info('[WAITING_FOR_ADMISSION]', code)
         const token = localStorage.getItem('zoiko_token')
         let wsUrl = `${getWsBase()}/ws/meetings/${code}?token=${encodeURIComponent(token)}`
         if (needsPassword && meetingPwd) wsUrl += `&pwd=${encodeURIComponent(meetingPwd)}`
@@ -344,6 +345,7 @@ export default function MeetLobby() {
           let data
           try { data = JSON.parse(e.data) } catch { return }
           if (data.type === 'admitted' || data.type === 'welcome') {
+            console.info('[ADMISSION_RECEIVED]', code, '→ [JOINING_ROOM]')
             setWaitingStatus('admitted')
             try { ws.close() } catch {}
             wsRef.current = null

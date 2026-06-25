@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -23,6 +25,8 @@ from app.models.meeting import (
 )
 from app.websocket.manager import meet_manager
 
+log = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -30,6 +34,83 @@ router = APIRouter()
 _conn_info: dict[WebSocket, dict] = {}
 # Reverse lookup: (meeting_id, user_id) -> WebSocket (for sending admission signals)
 _user_ws: dict[tuple[int, int], WebSocket] = {}
+# (meeting_id, user_id) -> asyncio.Event that wakes a waiting-room hold loop the
+# instant the host admits/denies, instead of waiting for the next safety poll or
+# a client keepalive ping. Set by both the WS host-action handler and the REST
+# admit/deny endpoints (which run on the same event loop).
+_status_events: dict[tuple[int, int], asyncio.Event] = {}
+
+
+def _status_event(meeting_id: int, user_id: int) -> asyncio.Event:
+    key = (meeting_id, user_id)
+    ev = _status_events.get(key)
+    if ev is None:
+        ev = asyncio.Event()
+        _status_events[key] = ev
+    return ev
+
+
+def wake_status_waiter(meeting_id: int, user_id: int) -> None:
+    """Wake this user's waiting-room hold loop so it re-reads status now."""
+    ev = _status_events.get((meeting_id, user_id))
+    if ev is not None:
+        ev.set()
+
+
+async def notify_user(meeting_id: int, user_id: int, payload: dict) -> bool:
+    """Push a JSON payload to a single user's live meeting socket.
+
+    Returns True if a socket existed and the send succeeded. Safe to call from
+    any coroutine running on the serving loop (REST admit/deny do).
+    """
+    ws = _user_ws.get((meeting_id, user_id))
+    if ws is None:
+        return False
+    try:
+        await ws.send_json(payload)
+        return True
+    except Exception:
+        return False
+
+
+async def signal_admitted(meeting_id: int, user_id: int) -> None:
+    """Instant admission notification: push 'admitted' to the waiting client AND
+    wake its server-side hold loop. Idempotent — safe to call more than once."""
+    delivered = await notify_user(meeting_id, user_id, {"type": "admitted"})
+    wake_status_waiter(meeting_id, user_id)
+    log.info(
+        "[ADMISSION_EVENT_SENT] meeting=%s user=%s type=admitted delivered=%s",
+        meeting_id, user_id, delivered,
+    )
+
+
+async def signal_denied(meeting_id: int, user_id: int) -> None:
+    """Instant denial notification: push 'denied' + wake the hold loop."""
+    await notify_user(meeting_id, user_id, {"type": "denied"})
+    wake_status_waiter(meeting_id, user_id)
+    log.info("[ADMISSION_EVENT_SENT] meeting=%s user=%s type=denied", meeting_id, user_id)
+
+
+async def broadcast_event(code: str, payload: dict) -> None:
+    """Broadcast an app-level event to every connected socket in a meeting room.
+
+    Callable from REST handlers (running on the serving loop) so server-side
+    state changes — e.g. recording start/stop — reach all participants over the
+    same control WS that carries chat/reactions/etc.
+    """
+    await meet_manager.broadcast(f"meeting:{code}", payload)
+
+
+async def broadcast_waiting_list(code: str, meeting_id: int) -> None:
+    """Recompute and push the waiting list to all host/co-host sockets in the
+    room. Opens its own short-lived DB session so REST endpoints can call it."""
+    db: Session = SessionLocal()
+    try:
+        meeting = db.get(Meeting, meeting_id)
+        if meeting is not None:
+            await _send_waiting_list(f"meeting:{code}", meeting, db)
+    finally:
+        db.close()
 
 
 def _is_host_or_cohost(meeting: Meeting, user_id: int, db: Session) -> bool:
@@ -192,6 +273,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 "role": participant.role,
                 "status": STATUS_PENDING,
             }
+            log.info("[WAITING_USER_CREATED] meeting=%s user=%s name=%s", meeting.id, user.id, user.name)
 
             await websocket.send_json({
                 "type": "waiting-room-hold",
@@ -202,49 +284,101 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
             await meet_manager.join(room, websocket)
             await _send_waiting_list(room, meeting, db)
 
+            # ── Event-driven hold (no client-ping dependency) ───────────
+            # Race three signals: (a) a frame from the client (leave / ping /
+            # disconnect), (b) an admit/deny Event set the instant the host
+            # acts, and (c) a 2 s safety timeout that re-reads the DB so the
+            # user is NEVER stuck even if the push was lost or the tab is
+            # backgrounded (which freezes the client's keepalive). On
+            # admission we notify the client and close THIS socket — the
+            # client then opens a fresh room socket (status is already
+            # ADMITTED), so we never fall through to the welcome path here
+            # and never risk a ghost from sending on a socket the client is
+            # tearing down.
+            status_ev = _status_event(meeting.id, user.id)
+            status_ev.clear()
+            recv_task = asyncio.ensure_future(websocket.receive_json())
+            wait_task = asyncio.ensure_future(status_ev.wait())
+            outcome = None  # 'admitted' | 'denied' | 'left' | 'disconnect'
             try:
-                while True:
-                    data = await websocket.receive_json()
-                    kind = data.get("type")
-
-                    if kind == "leave":
-                        participant.status = STATUS_LEFT
-                        participant.left_at = datetime.now(timezone.utc)
-                        db.commit()
-                        break
-
-                    # Check if status changed (admitted by host via REST or WS)
+                while outcome is None:
+                    done, _ = await asyncio.wait(
+                        {recv_task, wait_task},
+                        timeout=2.0,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if recv_task in done:
+                        try:
+                            data = recv_task.result()
+                        except Exception:
+                            outcome = "disconnect"
+                            break
+                        if (data or {}).get("type") == "leave":
+                            outcome = "left"
+                            break
+                        # ping or other frame — keep listening
+                        recv_task = asyncio.ensure_future(websocket.receive_json())
+                    if wait_task in done:
+                        status_ev.clear()
+                        wait_task = asyncio.ensure_future(status_ev.wait())
+                    # Re-read status on every wake (event or timeout). A fresh
+                    # SELECT under READ COMMITTED sees the host's committed
+                    # change made on another connection.
                     db.refresh(participant)
-                    if participant.status == STATUS_ADMITTED:
+                    status_now = participant.status
+                    if status_now == STATUS_ADMITTED:
+                        outcome = "admitted"
                         break
-                    if participant.status in (STATUS_DENIED, STATUS_KICKED):
-                        await websocket.send_json({"type": "denied"})
-                        await websocket.close(code=4403)
-                        await meet_manager.leave(room, websocket)
-                        _conn_info.pop(websocket, None)
-                        if _user_ws.get((meeting.id, user.id)) is websocket:
-                            _user_ws.pop((meeting.id, user.id), None)
-                        await _send_waiting_list(room, meeting, db)
-                        return
-            except WebSocketDisconnect:
-                await meet_manager.leave(room, websocket)
-                _conn_info.pop(websocket, None)
-                if _user_ws.get((meeting.id, user.id)) is websocket:
-                    _user_ws.pop((meeting.id, user.id), None)
-                await _send_waiting_list(room, meeting, db)
-                return
+                    if status_now in (STATUS_DENIED, STATUS_KICKED):
+                        outcome = "denied"
+                        break
+                    # Release the pooled DB connection back between polls so N
+                    # concurrent waiters don't each pin one for the whole wait
+                    # (keeps headroom under the Supabase pooler at 20+ waiting
+                    # users). The next refresh re-checks the row out cheaply.
+                    db.rollback()
+            finally:
+                recv_task.cancel()
+                wait_task.cancel()
 
-            # If we get here, check if participant left voluntarily
-            if participant.status == STATUS_LEFT:
-                await meet_manager.leave(room, websocket)
-                _conn_info.pop(websocket, None)
-                if _user_ws.get((meeting.id, user.id)) is websocket:
-                    _user_ws.pop((meeting.id, user.id), None)
-                await _send_waiting_list(room, meeting, db)
-                return
+            # ── Common cleanup for every pending exit ───────────────────
+            # Only touch shared (meeting,user)-keyed state if THIS socket is
+            # still the registered one. A newer tab/reconnect may have already
+            # superseded us (dedup at join) and owns the key now — clobbering
+            # its _user_ws / _status_events would strand the live socket.
+            was_active = _user_ws.get((meeting.id, user.id)) is websocket
+            await meet_manager.leave(room, websocket)
+            _conn_info.pop(websocket, None)
+            if was_active:
+                _user_ws.pop((meeting.id, user.id), None)
+                _status_events.pop((meeting.id, user.id), None)
 
-            # Admitted — fall through to main meeting loop
+            if outcome == "left" and was_active:
+                participant.status = STATUS_LEFT
+                participant.left_at = datetime.now(timezone.utc)
+                db.commit()
+
+            if outcome == "admitted":
+                log.info("[ADMISSION_RECEIVED] meeting=%s user=%s", meeting.id, user.id)
+                # Tell the lobby client to proceed; it closes this socket and
+                # opens a fresh room socket. Guarded — the client may have
+                # already closed after the host-side push.
+                try:
+                    await websocket.send_json({"type": "admitted"})
+                except Exception:
+                    pass
+            elif outcome == "denied":
+                try:
+                    await websocket.send_json({"type": "denied"})
+                    await websocket.close(code=4403)
+                except Exception:
+                    pass
+
+            # Refresh the host's waiting list (someone left it) and exit. The
+            # participant row keeps its ADMITTED status so the room socket
+            # the client opens next is admitted straight through.
             await _send_waiting_list(room, meeting, db)
+            return
 
         else:
             # Directly admitted — join the room
@@ -570,18 +704,13 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     target_user_id = data.get("user_id")
                     if not target_user_id:
                         continue
+                    log.info("[ADMISSION_REQUEST] meeting=%s host=%s target=%s via=ws", meeting.id, user.id, target_user_id)
                     tp = _get_participant(meeting.id, target_user_id, db)
                     if tp and tp.status == STATUS_PENDING:
                         tp.status = STATUS_ADMITTED
                         tp.last_seen_at = datetime.now(timezone.utc)
                         db.commit()
-                        # Notify the waiting user
-                        target_ws = _user_ws.get((meeting.id, target_user_id))
-                        if target_ws:
-                            try:
-                                await target_ws.send_json({"type": "admitted"})
-                            except Exception:
-                                pass
+                        await signal_admitted(meeting.id, target_user_id)
                         await _send_waiting_list(room, meeting, db)
 
                 elif kind == "admit-all" and host_or_cohost:
@@ -591,16 +720,14 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                             MeetingParticipant.status == STATUS_PENDING,
                         )
                     ).all()
+                    target_ids = [tp.user_id for tp in pending]
                     for tp in pending:
                         tp.status = STATUS_ADMITTED
                         tp.last_seen_at = datetime.now(timezone.utc)
-                        target_ws = _user_ws.get((meeting.id, tp.user_id))
-                        if target_ws:
-                            try:
-                                await target_ws.send_json({"type": "admitted"})
-                            except Exception:
-                                pass
                     db.commit()
+                    log.info("[ADMISSION_REQUEST] meeting=%s host=%s admit-all count=%s via=ws", meeting.id, user.id, len(target_ids))
+                    for uid in target_ids:
+                        await signal_admitted(meeting.id, uid)
                     await _send_waiting_list(room, meeting, db)
 
                 elif kind == "deny" and host_or_cohost:
@@ -611,12 +738,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     if tp and tp.status == STATUS_PENDING:
                         tp.status = STATUS_DENIED
                         db.commit()
-                        target_ws = _user_ws.get((meeting.id, target_user_id))
-                        if target_ws:
-                            try:
-                                await target_ws.send_json({"type": "denied"})
-                            except Exception:
-                                pass
+                        await signal_denied(meeting.id, target_user_id)
                         await _send_waiting_list(room, meeting, db)
 
                 elif kind == "kick" and host_or_cohost:

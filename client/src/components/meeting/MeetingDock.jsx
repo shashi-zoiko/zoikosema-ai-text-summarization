@@ -1,50 +1,39 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import {
-  Captions, ChevronUp, Disc, Grid3x3, Hand, Info, LayoutPanelLeft,
-  MessageSquare, Mic, MicOff, MonitorUp, MonitorX, MoreVertical, Palette, PhoneOff,
-  Settings, Smile, Square, Users, Video, VideoOff,
+  ChevronUp, Disc, Grid3x3, Hand, Info, LayoutPanelLeft, Maximize, Minimize,
+  MessageSquare, Mic, MicOff, MonitorUp, MonitorX, MoreVertical, Phone,
+  Settings, Smile, Sparkles, Square, Users, Video, VideoOff,
 } from 'lucide-react'
 import Emoji from '../../features/emoji/Emoji'
 
 /**
- * Meeting bottom dock — elevated light theme, floating glass capsule.
+ * Meeting control dock — a single floating dark capsule centred over the stage.
  *
- * Controls live in one frosted-glass capsule (`.zk-dock`) that hovers over the
- * ambient stage. Buttons are 52×52 circles with MEANINGFUL colour states:
- *   mic        green when live, red when muted
- *   camera     blue when on,    red when off
- *   present    blue gradient + glow while sharing
- *   raise hand cyan when raised
- *   reactions  amber when the picker is open
- *   themes     brand green when the themes & background panel is open
- *   captions / more   neutral chip → Meet-blue when active
- *   leave      red gradient pill, larger than the rest, hover lift
+ * Sections (left → right), split by hairline dividers:
+ *   mic · camera            mic/cam are solid green when live, red-tinted when off
+ *   screen · hand · react   center actions glow green when active
+ *   people · chat           panel toggles
+ *   more · leave            overflow menu (record / layout / settings) + red leave
  *
- * Every control lifts on hover and settles on press (`.zk-press`). Mic/camera
- * carry a slim caret that opens the device picker; a hairline divider sets the
- * Leave button apart. Clock/code (left) and people/chat (right) collapse on
- * small screens so the capsule stays centred.
- *
- * Props are a superset of what either room needs — MeetRoom (mesh) and
- * MeetRoomLivekit feed the same dock. Optional slots (`extraCenterSlot`,
- * `extraRightSlot`) let the LiveKit room hang extras without forking.
+ * Props are fed by MeetRoomLivekit's <LivekitDockAdapter>. Optional slots
+ * (`extraCenterSlot`, `extraRightSlot`) let the room hang extras (whiteboard,
+ * waiting-room) without forking the dock.
  */
 function MeetingDock({
-  clock, code,
   audioOn, toggleAudio, audioDeviceMenu,
   videoOn, toggleVideo, videoDeviceMenu,
   screenOn, screenshareEnabled = true, isHostOrCohost = false,
   startScreenShare, stopScreenShare,
-  captionsOn = false, toggleCaptions,
   isRecording, startRecording, stopRecording,
   handRaised, toggleHand,
   showEmoji, setShowEmoji, sendReaction,
   layout, toggleLayout,
   sidebar, setSidebar,
-  waitingList = [],
-  onOpenThemes, themesOpen = false,
-  onInfo,
   unreadChat = 0,
+  peopleBadge = 0,
+  peopleAccent = 'emerald',
+  openBackgrounds,
+  onInfo,
   extraCenterSlot,
   extraRightSlot,
   leave,
@@ -53,28 +42,19 @@ function MeetingDock({
   const sharingBlocked = !screenOn && !screenshareEnabled && !isHostOrCohost
 
   return (
+    // One centred control group (Google-Meet style): mic/camera, the
+    // collaboration actions, then leave — all together with tight, even
+    // spacing. No overflow clipping anywhere — the reaction picker, device
+    // menus and More menu all open ABOVE the bar as absolute children.
     <footer
-      className="relative z-30 grid h-[96px] shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 bg-transparent px-3 sm:px-5"
+      className="zk-dock-enter relative z-30 flex h-24 shrink-0 items-center justify-center px-4"
       role="toolbar"
       aria-label="Meeting controls"
     >
-      {/* ── Left: clock + code. Colour follows the room theme via the CSS
-          vars the room root sets; falls back to Meet-grey for the light
-          LiveKit room, which doesn't set them. ───────────────────────── */}
-      <div
-        className="hidden items-center gap-2.5 text-[13.5px] md:flex"
-        style={{ color: 'var(--zk-room-fg-dim, #5f6368)' }}
-      >
-        <span className="font-medium tabular-nums">{clock}</span>
-        <span aria-hidden className="opacity-40">|</span>
-        <span className="font-medium" style={{ color: 'var(--zk-room-fg, #444746)' }}>{code}</span>
-      </div>
-
-      {/* ── Center: floating glass capsule ───────────────────────── */}
-      <div className="zk-dock zk-dock-enter flex items-center justify-self-center gap-1 rounded-[26px] p-2">
+      <div className="flex max-w-full flex-wrap items-center justify-center gap-2">
+        {/* mic + camera (green-outlined when live), each with its own caret */}
         <ComboPill
           on={audioOn}
-          tone="mic"
           onToggle={toggleAudio}
           label={audioOn ? 'Turn off microphone' : 'Turn on microphone'}
           kbd="ctrl+d"
@@ -82,10 +62,8 @@ function MeetingDock({
           iconOn={<Mic />}
           iconOff={<MicOff />}
         />
-
         <ComboPill
           on={videoOn}
-          tone="cam"
           onToggle={toggleVideo}
           label={videoOn ? 'Turn off camera' : 'Turn on camera'}
           kbd="ctrl+e"
@@ -94,38 +72,18 @@ function MeetingDock({
           iconOff={<VideoOff />}
         />
 
-        {/* Present now → straight to the browser-native share dialog. While
-            presenting this glows purple; the icon flips to "stop". */}
+        {/* present · hand · react · chat · people · more */}
         <RoundBtn
-          label={
-            sharingBlocked ? 'Screen sharing disabled by host'
-              : screenOn ? 'Stop presenting'
-              : 'Present now'
-          }
+          label={sharingBlocked ? 'Screen sharing disabled by host' : screenOn ? 'Stop presenting' : 'Present now'}
           onClick={screenOn ? stopScreenShare : startScreenShare}
           disabled={sharingBlocked}
           active={screenOn}
-          tone="share"
+          solid={screenOn}
         >
           {screenOn ? <MonitorX /> : <MonitorUp />}
         </RoundBtn>
 
-        {toggleCaptions && (
-          <RoundBtn
-            label={captionsOn ? 'Turn off captions' : 'Turn on captions'}
-            onClick={toggleCaptions}
-            active={captionsOn}
-          >
-            <Captions />
-          </RoundBtn>
-        )}
-
-        <RoundBtn
-          label={handRaised ? 'Lower hand' : 'Raise hand'}
-          onClick={toggleHand}
-          active={handRaised}
-          tone="hand"
-        >
+        <RoundBtn label={handRaised ? 'Lower hand' : 'Raise hand'} onClick={toggleHand} active={handRaised}>
           <Hand />
         </RoundBtn>
 
@@ -133,7 +91,6 @@ function MeetingDock({
           label="Send a reaction"
           onClick={() => setShowEmoji(!showEmoji)}
           active={showEmoji}
-          tone="react"
           popoverOpen={showEmoji}
           popover={
             <ReactionPicker
@@ -145,18 +102,30 @@ function MeetingDock({
           <Smile />
         </RoundBtn>
 
-        {onOpenThemes && (
-          <RoundBtn
-            label={themesOpen ? 'Close themes & background' : 'Themes & background'}
-            onClick={onOpenThemes}
-            active={themesOpen}
-            tone="theme"
-          >
-            <Palette />
-          </RoundBtn>
-        )}
-
         {extraCenterSlot}
+
+        <RoundBtn
+          label={sidebar === 'chat' ? 'Close chat' : 'Chat with everyone'}
+          onClick={() => setSidebar((s) => (s === 'chat' ? null : 'chat'))}
+          active={sidebar === 'chat'}
+          badge={sidebar !== 'chat' ? unreadChat : 0}
+          accent="red"
+          glow={sidebar !== 'chat' && unreadChat > 0}
+        >
+          <MessageSquare />
+        </RoundBtn>
+        <RoundBtn
+          label={sidebar === 'people' ? 'Close people' : 'People'}
+          onClick={() => setSidebar((s) => (s === 'people' ? null : 'people'))}
+          active={sidebar === 'people'}
+          badge={sidebar !== 'people' ? peopleBadge : 0}
+          accent={peopleAccent}
+          glow={sidebar !== 'people' && peopleBadge > 0}
+        >
+          <Users />
+        </RoundBtn>
+
+        {extraRightSlot}
 
         <MoreMenu
           open={showMore}
@@ -169,37 +138,13 @@ function MeetingDock({
           toggleLayout={toggleLayout}
           sidebar={sidebar}
           setSidebar={setSidebar}
+          openBackgrounds={openBackgrounds}
+          onInfo={onInfo}
         />
 
-        {/* Hairline divider, then Leave. */}
-        <span aria-hidden className="mx-1.5 h-9 w-px rounded-full bg-black/10" />
+        {/* leave — a touch of separation from the cluster, like Meet */}
+        <span aria-hidden className="w-1.5" />
         <LeaveBtn onClick={leave} />
-      </div>
-
-      {/* ── Right: info, people, chat ───────────────────────────── */}
-      <div className="hidden items-center justify-self-end gap-1.5 md:flex">
-        {extraRightSlot}
-        {onInfo && (
-          <SideIcon label="Meeting details" onClick={onInfo}>
-            <Info />
-          </SideIcon>
-        )}
-        <SideIcon
-          label={sidebar === 'people' ? 'Close people' : 'People'}
-          onClick={() => setSidebar((s) => (s === 'people' ? null : 'people'))}
-          active={sidebar === 'people'}
-          badge={waitingList.length || 0}
-        >
-          <Users />
-        </SideIcon>
-        <SideIcon
-          label={sidebar === 'chat' ? 'Close chat' : 'Chat with everyone'}
-          onClick={() => setSidebar((s) => (s === 'chat' ? null : 'chat'))}
-          active={sidebar === 'chat'}
-          badge={sidebar !== 'chat' ? unreadChat : 0}
-        >
-          <MessageSquare />
-        </SideIcon>
       </div>
     </footer>
   )
@@ -208,40 +153,42 @@ function MeetingDock({
 export default memo(MeetingDock)
 
 /* ────────────────────────────────────────────────────────────────────────
- * Shared button shell + colour palettes. Every control reads as one material;
- * the palette layers meaning on top. `.zk-press` gives the hover-lift / press.
+ * Shared button shell + dark palettes.
  * ──────────────────────────────────────────────────────────────────────── */
 
 const BTN =
-  'zk-press relative grid h-[52px] w-[52px] place-items-center rounded-full ' +
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-white ' +
-  '[&_svg]:h-[22px] [&_svg]:w-[22px]'
+  'relative grid h-[52px] w-[52px] place-items-center rounded-full transition-all duration-200 ' +
+  'active:scale-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45 ' +
+  '[&_svg]:h-[22px] [&_svg]:w-[22px] [&_svg]:relative [&_svg]:z-10'
 
-// Resting neutral controls carry a subtle circular fill so each button reads
-// as a distinct, tappable chip (Meet-style) instead of a flat dark glyph
-// floating on the capsule — that flatness was what read as "dull / off".
-const BTN_NEUTRAL = 'bg-black/[0.05] text-[#1f1f1f] hover:bg-black/[0.09]'
-const BTN_ACTIVE  = 'bg-[#c2e7ff] text-[#001d35] hover:bg-[#aed6fb] shadow-[0_0_0_1px_rgba(26,115,232,0.18),0_6px_16px_-8px_rgba(26,115,232,0.5)]'
+// Every palette is a soft top-down gradient + inner highlight + outer glow so
+// the dock reads like a premium SaaS control bar (Meet / Around / Slack huddle)
+// rather than flat translucent chips.
+const NEUTRAL =
+  'bg-gradient-to-b from-white/[0.14] to-white/[0.05] text-[#CBD5E1] ring-1 ring-white/10 ' +
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_6px_16px_-8px_rgba(0,0,0,0.6)] ' +
+  'hover:from-white/[0.22] hover:to-white/[0.09] hover:text-white ' +
+  'hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_10px_24px_-8px_rgba(0,0,0,0.65)]'
+const ACTIVE =
+  'bg-gradient-to-b from-[#10B981]/30 to-[#059669]/12 text-[#6EE7B7] ring-1 ring-[#10B981]/50 ' +
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_18px_-2px_rgba(16,185,129,0.5)]'
+const SOLID =
+  'bg-gradient-to-b from-[#34D399] to-[#059669] text-white ' +
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_24px_-2px_rgba(16,185,129,0.75),0_8px_22px_-8px_rgba(16,185,129,0.6)] ' +
+  'hover:from-[#10B981] hover:to-[#047857]'
+const OFF =
+  'bg-gradient-to-b from-[#F87171]/30 to-[#B91C1C]/14 text-[#FCA5A5] ring-1 ring-[#EF4444]/55 ' +
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_0_18px_-2px_rgba(239,68,68,0.5)] ' +
+  'hover:from-[#F87171]/42 hover:to-[#B91C1C]/22 hover:text-[#FECACA]'
+// Mic / camera "live" look — a glowing green-rimmed gradient on a dark interior.
+const LIVE =
+  'bg-gradient-to-b from-[#10B981]/26 to-[#059669]/10 text-[#6EE7B7] ring-1 ring-[#10B981]/60 ' +
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_0_18px_-3px_rgba(16,185,129,0.55)] ' +
+  'hover:from-[#10B981]/36 hover:to-[#059669]/18'
 
-// Mic live → green; off → red tint. Camera on → blue; off → red tint.
-const BTN_MIC = 'bg-emerald-500/[0.16] text-emerald-700 hover:bg-emerald-500/[0.24] shadow-[0_0_0_1px_rgba(16,163,74,0.24),0_6px_18px_-8px_rgba(16,163,74,0.55)]'
-const BTN_CAM = 'bg-blue-600/[0.15] text-blue-700 hover:bg-blue-600/[0.22] shadow-[0_0_0_1px_rgba(37,99,235,0.24),0_6px_18px_-8px_rgba(37,99,235,0.55)]'
-const BTN_OFF = 'bg-[#ea4335]/[0.16] text-[#d93829] hover:bg-[#ea4335]/[0.24] shadow-[0_0_0_1px_rgba(234,67,53,0.26),0_6px_18px_-8px_rgba(234,67,53,0.55)]'
-
-// Tone palettes for the round center buttons when active. Present is a vivid
-// blue (was an off-brand lone violet); hand cyan; reactions amber; themes the
-// brand green.
-const BTN_SHARE = 'bg-gradient-to-b from-[#3b82f6] to-[#1d4ed8] text-white hover:from-[#3b82f6] hover:to-[#1e40af] shadow-[0_0_0_1px_rgba(29,78,216,0.35),0_10px_26px_-8px_rgba(29,78,216,0.7)]'
-const BTN_HAND  = 'bg-cyan-500/[0.18] text-cyan-700 hover:bg-cyan-500/[0.26] shadow-[0_0_0_1px_rgba(8,145,178,0.26),0_6px_18px_-8px_rgba(8,145,178,0.55)]'
-const BTN_REACT = 'bg-amber-500/[0.20] text-amber-700 hover:bg-amber-500/[0.28] shadow-[0_0_0_1px_rgba(217,119,6,0.28),0_6px_18px_-8px_rgba(217,119,6,0.55)]'
-const BTN_THEME = 'bg-[#0F8A5F]/[0.16] text-[#0c744f] hover:bg-[#0F8A5F]/[0.24] shadow-[0_0_0_1px_rgba(15,138,95,0.26),0_6px_18px_-8px_rgba(15,138,95,0.55)]'
-
-/* ────────────────────────────────────────────────────────────────────────
- * Mic / camera combo: a round toggle + a slim caret (device picker).
- * The caret is omitted when no `deviceMenu` is provided.
- * ──────────────────────────────────────────────────────────────────────── */
-
-function ComboPill({ on, tone, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
+/* Mic / camera combo: a round toggle (solid green on, red-tint off) + a slim
+ * caret that opens the device picker. The caret is omitted with no `deviceMenu`. */
+function ComboPill({ on, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
 
@@ -258,7 +205,6 @@ function ComboPill({ on, tone, onToggle, label, deviceMenu, iconOn, iconOff, kbd
   }, [open])
 
   const hasMenu = !!deviceMenu
-  const palette = on ? (tone === 'cam' ? BTN_CAM : BTN_MIC) : BTN_OFF
 
   return (
     <div ref={wrapRef} className="relative flex items-center">
@@ -268,7 +214,7 @@ function ComboPill({ on, tone, onToggle, label, deviceMenu, iconOn, iconOff, kbd
         aria-label={label}
         aria-pressed={!on}
         title={kbd ? `${label} (${kbd})` : label}
-        className={`${BTN} ${palette}`}
+        className={`${BTN} ${on ? LIVE : OFF}`}
       >
         {on ? iconOn : iconOff}
       </button>
@@ -282,9 +228,9 @@ function ComboPill({ on, tone, onToggle, label, deviceMenu, iconOn, iconOff, kbd
             aria-expanded={open}
             title="Device options"
             className={
-              'zk-press ml-0.5 grid h-[52px] w-6 place-items-center rounded-full text-[#5f6368] ' +
-              'hover:bg-black/[0.06] hover:text-[#1f1f1f] [&_svg]:h-4 [&_svg]:w-4 ' +
-              (open ? 'bg-black/[0.06] text-[#1f1f1f]' : '')
+              'ml-0.5 grid h-[52px] w-5 place-items-center rounded-full text-[#94A3B8] transition ' +
+              'hover:bg-white/[0.08] hover:text-white [&_svg]:h-4 [&_svg]:w-4 ' +
+              (open ? 'bg-white/[0.08] text-white' : '')
             }
           >
             <ChevronUp className={open ? 'rotate-180 transition-transform' : 'transition-transform'} />
@@ -292,7 +238,7 @@ function ComboPill({ on, tone, onToggle, label, deviceMenu, iconOn, iconOff, kbd
           {open && (
             <div
               role="menu"
-              className="zk-glass zk-pop-in absolute bottom-[calc(100%+14px)] left-0 z-20 w-[300px] origin-bottom-left overflow-hidden rounded-2xl border border-black/[0.06] py-1 text-[#202124]"
+              className="zk-glass zk-pop-in absolute bottom-[calc(100%+14px)] left-0 z-20 w-[300px] origin-bottom-left overflow-hidden rounded-2xl py-1 text-white"
               onClick={(e) => e.stopPropagation()}
             >
               {typeof deviceMenu === 'function' ? deviceMenu({ close: () => setOpen(false) }) : deviceMenu}
@@ -304,13 +250,17 @@ function ComboPill({ on, tone, onToggle, label, deviceMenu, iconOn, iconOff, kbd
   )
 }
 
-/* ────────────────────────────────────────────────────────────────────────
- * Round center button (present, captions, hand, emoji, more). `tone` picks
- * the active-state palette: share→purple, hand→cyan, react→amber, else Meet
- * blue.
- * ──────────────────────────────────────────────────────────────────────── */
+/* Accent palettes for the floating badge + button glow. The glow colour is fed
+ * to the `zk-unread-glow` keyframe through the `--zk-glow` "R G B" custom prop so
+ * one animation serves every colour (chat → red, people → emerald, hand → amber). */
+const BADGE_ACCENT = {
+  red:     { rgb: '239 68 68',  bg: 'bg-[#EF4444]', ring: 'ring-[#EF4444]/55', shadow: 'shadow-[0_0_20px_rgba(239,68,68,0.45)]' },
+  emerald: { rgb: '16 185 129', bg: 'bg-[#10B981]', ring: 'ring-[#10B981]/55', shadow: 'shadow-[0_0_20px_rgba(16,185,129,0.45)]' },
+  amber:   { rgb: '245 158 11', bg: 'bg-[#F59E0B]', ring: 'ring-[#F59E0B]/55', shadow: 'shadow-[0_0_20px_rgba(245,158,11,0.45)]' },
+}
 
-function RoundBtn({ active, tone, danger, disabled, onClick, label, children, popover, popoverOpen, ...rest }) {
+/* Round center button (present, hand, react, people, chat, more). */
+function RoundBtn({ active, solid, danger, disabled, glow = false, accent = 'red', onClick, label, badge = 0, children, popover, popoverOpen, ...rest }) {
   const wrapRef = useRef(null)
   useEffect(() => {
     if (!popoverOpen) return
@@ -319,71 +269,56 @@ function RoundBtn({ active, tone, danger, disabled, onClick, label, children, po
     return () => window.removeEventListener('keydown', onKey)
   }, [popoverOpen, popover])
 
-  const activePalette = danger ? BTN_OFF
-    : tone === 'share' ? BTN_SHARE
-    : tone === 'hand' ? BTN_HAND
-    : tone === 'react' ? BTN_REACT
-    : tone === 'theme' ? BTN_THEME
-    : BTN_ACTIVE
-  const palette = active ? activePalette : BTN_NEUTRAL
+  const acc = BADGE_ACCENT[accent] || BADGE_ACCENT.red
+  const palette = danger ? OFF : solid ? SOLID : active ? ACTIVE : NEUTRAL
+  // Unread/attention state — soft accent halo + ring so the icon is impossible
+  // to miss without shouting. Suppressed while the button is active (panel open).
+  const showGlow = glow && !active
+  const glowCls = showGlow ? `zk-unread-glow ring-1 ${acc.ring}` : ''
+  // Append the live count to the label so screen readers announce "3 unread".
+  const a11yLabel = badge > 0 ? `${label}, ${badge} unread` : label
 
   return (
-    <div ref={wrapRef} className="relative">
+    // When a badge is present the wrapper is lifted above its neighbours so the
+    // next dock button (later in the DOM) can't paint over the badge's edge —
+    // that overlap was what made the counter look like a clipped half-circle.
+    <div ref={wrapRef} className={'relative' + (badge > 0 ? ' z-20' : '')}>
       <button
         type="button"
         onClick={onClick}
-        aria-label={label}
+        aria-label={a11yLabel}
         aria-pressed={active}
         title={label}
         disabled={disabled}
-        className={`${BTN} ${palette} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:translate-y-0`}
+        style={showGlow ? { '--zk-glow': acc.rgb } : undefined}
+        className={`${BTN} ${palette} ${glowCls} disabled:opacity-40 disabled:cursor-not-allowed`}
         {...rest}
       >
         {children}
       </button>
+      {/* Floating counter — a FULL circle seated on the top-right corner, outside
+          the button (Messenger / iOS style). Rendered as a sibling of the button
+          (not a child) so the dark 2px ring reads as a separate chip and nothing
+          can crop it. Scale-pulses to grab attention. */}
+      {badge > 0 && (
+        <span
+          aria-hidden
+          className={
+            'zk-badge-pop pointer-events-none absolute -right-1.5 -top-1.5 z-30 grid h-6 min-w-6 ' +
+            'place-items-center rounded-full border-2 border-[#0B1220] px-1.5 text-[12px] font-bold ' +
+            `leading-none text-white ${acc.bg} ${acc.shadow}`
+          }
+        >
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
       {popoverOpen && popover}
     </div>
   )
 }
 
-/* ────────────────────────────────────────────────────────────────────────
- * Right-side icon button (info, people, chat) — frosted glass chip.
- * ──────────────────────────────────────────────────────────────────────── */
-
-function SideIcon({ active, onClick, label, badge = 0, children }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      aria-pressed={active}
-      title={label}
-      className={
-        'zk-press relative grid h-[52px] w-[52px] place-items-center rounded-full border border-white/70 ' +
-        'shadow-[0_6px_18px_-10px_rgba(15,23,42,0.45)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 ' +
-        '[&_svg]:h-[22px] [&_svg]:w-[22px] backdrop-blur-xl ' +
-        (active
-          ? 'bg-[#c2e7ff] text-[#001d35] hover:bg-[#aed6fb]'
-          : 'bg-white/80 text-[#444746] hover:bg-white hover:text-[#1f1f1f]')
-      }
-    >
-      {children}
-      {badge > 0 && (
-        <span
-          aria-label={`${badge} unread`}
-          className="pointer-events-none absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#ea4335] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white"
-        >
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-    </button>
-  )
-}
-
-/* ────────────────────────────────────────────────────────────────────────
- * Leave / hangup — red gradient pill, larger, phone tilted 135° like Meet.
- * ──────────────────────────────────────────────────────────────────────── */
-
+/* Leave / hangup — solid red pill with the Google-Meet "call_end" handset
+ * (a plain receiver tilted 135°, not a slashed phone). */
 function LeaveBtn({ onClick }) {
   return (
     <button
@@ -392,28 +327,25 @@ function LeaveBtn({ onClick }) {
       aria-label="Leave call"
       title="Leave call"
       className={
-        'zk-press grid h-[52px] w-[72px] place-items-center rounded-full text-white ' +
-        'bg-gradient-to-b from-[#f0584c] to-[#d93829] hover:from-[#f0584c] hover:to-[#c5301f] ' +
-        'shadow-[0_10px_26px_-8px_rgba(234,67,53,0.8),inset_0_1px_0_rgba(255,255,255,0.25)] ' +
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ea4335]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white [&_svg]:h-[22px] [&_svg]:w-[22px]'
+        'inline-flex h-[52px] items-center gap-2 rounded-xl bg-gradient-to-b from-[#F87171] to-[#DC2626] px-5 text-[15px] font-semibold text-white transition-all duration-200 ' +
+        'hover:from-[#EF4444] hover:to-[#B91C1C] active:scale-[0.96] ' +
+        'shadow-[inset_0_1px_0_rgba(255,255,255,0.3),0_0_26px_-4px_rgba(239,68,68,0.8),0_10px_26px_-8px_rgba(239,68,68,0.7)] ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EF4444]/50 [&_svg]:h-5 [&_svg]:w-5'
       }
     >
-      <PhoneOff className="rotate-[135deg]" />
+      <Phone className="rotate-135" fill="currentColor" stroke="none" />
+      Leave
     </button>
   )
 }
 
-/* ────────────────────────────────────────────────────────────────────────
- * Overflow menu — opens above the dock.
- * ──────────────────────────────────────────────────────────────────────── */
-
-function MoreMenu({
-  open, setOpen,
-  isRecording, startRecording, stopRecording, isHostOrCohost,
-  layout, toggleLayout,
-  sidebar, setSidebar,
-}) {
+/* Overflow menu — Google-Meet-style "More options". Holds every secondary
+ * action (record, layout, full screen, backgrounds & effects, meeting details,
+ * settings) so the dock itself stays to the core controls. Opens above the dock. */
+function MoreMenu({ open, setOpen, isRecording, startRecording, stopRecording, isHostOrCohost, layout, toggleLayout, sidebar, setSidebar, openBackgrounds, onInfo }) {
   const wrapRef = useRef(null)
+  const [isFs, setIsFs] = useState(() => typeof document !== 'undefined' && !!document.fullscreenElement)
+
   useEffect(() => {
     if (!open) return
     const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
@@ -426,50 +358,82 @@ function MoreMenu({
     }
   }, [open, setOpen])
 
+  useEffect(() => {
+    const onFs = () => setIsFs(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFs)
+    return () => document.removeEventListener('fullscreenchange', onFs)
+  }, [])
+
+  const toggleFullscreen = () => {
+    try {
+      if (document.fullscreenElement) document.exitFullscreen?.()
+      else document.documentElement.requestFullscreen?.()
+    } catch { /* fullscreen blocked — ignore */ }
+  }
+
   const canRecord = isHostOrCohost && (startRecording || stopRecording)
 
   return (
     <div className="relative" ref={wrapRef}>
-      <RoundBtn
-        label="More options"
-        onClick={() => setOpen(!open)}
-        active={open}
-      >
+      <RoundBtn label="More options" onClick={() => setOpen(!open)} active={open}>
         <MoreVertical />
       </RoundBtn>
       {open && (
-        <div className="absolute bottom-[calc(100%+14px)] left-1/2 z-20 -translate-x-1/2">
-        <div
-          role="menu"
-          className="zk-glass zk-pop-in w-[240px] origin-bottom overflow-hidden rounded-2xl border border-black/[0.06] py-1"
-        >
-          {canRecord && (
+        <div className="absolute bottom-[calc(100%+14px)] right-0 z-20">
+          <div role="menu" className="zk-glass zk-pop-in w-[268px] origin-bottom-right overflow-hidden rounded-2xl py-1.5">
+            {canRecord && (
+              <>
+                <MenuItem
+                  icon={isRecording ? <Square /> : <Disc />}
+                  label={isRecording ? 'Stop recording' : 'Start recording'}
+                  danger={isRecording}
+                  onClick={() => { (isRecording ? stopRecording : startRecording)?.(); setOpen(false) }}
+                />
+                <Sep />
+              </>
+            )}
+            {toggleLayout && (
+              <MenuItem
+                icon={layout === 'grid' ? <LayoutPanelLeft /> : <Grid3x3 />}
+                label={layout === 'grid' ? 'Speaker view' : 'Tiled view'}
+                onClick={() => { toggleLayout(); setOpen(false) }}
+              />
+            )}
             <MenuItem
-              icon={isRecording ? <Square /> : <Disc />}
-              label={isRecording ? 'Stop recording' : 'Start recording'}
-              danger={isRecording}
-              onClick={() => { (isRecording ? stopRecording : startRecording)?.(); setOpen(false) }}
+              icon={isFs ? <Minimize /> : <Maximize />}
+              label={isFs ? 'Exit full screen' : 'Full screen'}
+              onClick={() => { toggleFullscreen(); setOpen(false) }}
             />
-          )}
-          {toggleLayout && (
+            {openBackgrounds && (
+              <MenuItem
+                icon={<Sparkles />}
+                label="Backgrounds and effects"
+                onClick={() => { openBackgrounds(); setOpen(false) }}
+              />
+            )}
+            <Sep />
+            {onInfo && (
+              <MenuItem
+                icon={<Info />}
+                label="Meeting details"
+                onClick={() => { onInfo(); setOpen(false) }}
+              />
+            )}
             <MenuItem
-              icon={layout === 'grid' ? <LayoutPanelLeft /> : <Grid3x3 />}
-              label={layout === 'grid' ? 'Speaker view' : 'Tiled view'}
-              onClick={() => { toggleLayout(); setOpen(false) }}
+              icon={<Settings />}
+              label="Settings"
+              active={sidebar === 'settings'}
+              onClick={() => { setSidebar?.((s) => (s === 'settings' ? null : 'settings')); setOpen(false) }}
             />
-          )}
-          {(canRecord || toggleLayout) && <div aria-hidden className="my-1 mx-2 h-px bg-black/[0.06]" />}
-          <MenuItem
-            icon={<Settings />}
-            label={sidebar === 'settings' ? 'Close settings' : 'Settings'}
-            active={sidebar === 'settings'}
-            onClick={() => { setSidebar?.((s) => (s === 'settings' ? null : 'settings')); setOpen(false) }}
-          />
-        </div>
+          </div>
         </div>
       )}
     </div>
   )
+}
+
+function Sep() {
+  return <div aria-hidden className="my-1.5 mx-3 h-px bg-[#263244]" />
 }
 
 function MenuItem({ icon, label, active = false, danger = false, onClick }) {
@@ -479,12 +443,12 @@ function MenuItem({ icon, label, active = false, danger = false, onClick }) {
       type="button"
       onClick={onClick}
       className={
-        'flex w-full items-center gap-3 px-3 py-2.5 text-left text-[14px] transition-colors ' +
+        'flex w-full items-center gap-3.5 px-4 py-2.5 text-left text-[14px] transition-colors ' +
         (danger
-          ? 'text-[#d93829] hover:bg-[#ea4335]/10'
+          ? 'text-[#F87171] hover:bg-[#EF4444]/12'
           : active
-            ? 'bg-[#c2e7ff]/45 text-[#0b57d0]'
-            : 'text-[#202124] hover:bg-black/[0.05]')
+            ? 'bg-[#10B981]/15 text-[#34D399]'
+            : 'text-white/90 hover:bg-white/[0.06]')
       }
     >
       <span className="grid h-6 w-6 place-items-center text-current [&_svg]:h-[18px] [&_svg]:w-[18px]">{icon}</span>
@@ -493,10 +457,7 @@ function MenuItem({ icon, label, active = false, danger = false, onClick }) {
   )
 }
 
-/* ────────────────────────────────────────────────────────────────────────
- * Reaction picker popover — glass pill, pop-in, springy emoji.
- * ──────────────────────────────────────────────────────────────────────── */
-
+/* Reaction picker popover — dark glass pill, springy emoji. */
 const EMOJIS = ['👍', '❤️', '😂', '🎉', '👏', '🙏', '🔥', '😮']
 
 function ReactionPicker({ onClose, onPick }) {
@@ -504,20 +465,13 @@ function ReactionPicker({ onClose, onPick }) {
     <>
       <div className="fixed inset-0 z-10" onClick={onClose} />
       <div className="absolute bottom-[calc(100%+16px)] left-1/2 z-20 -translate-x-1/2">
-        {/* Google-Meet-style reaction bar: emoji float directly in one glass
-            pill (no per-emoji chips), with a subtle round highlight + lift on
-            hover. The `!` resets neutralise the app's global <button> chrome
-            (white fill, border, shadow, padding) that otherwise boxes each in. */}
-        <div
-          role="menu"
-          className="zk-glass zk-pop-in flex items-center gap-0.5 rounded-full border border-black/[0.06] px-2 py-1.5"
-        >
+        <div role="menu" className="zk-glass zk-pop-in flex items-center gap-0.5 rounded-full px-2 py-1.5">
           {EMOJIS.map((e) => (
             <button
               key={e}
               onClick={() => onPick(e)}
               aria-label={`React with ${e}`}
-              className="grid h-11 w-11 origin-bottom place-items-center !rounded-full !border-0 !bg-transparent !p-0 !shadow-none transition-transform duration-150 hover:!bg-black/[0.07] hover:-translate-y-1 hover:scale-125"
+              className="grid h-11 w-11 origin-bottom place-items-center !rounded-full !border-0 !bg-transparent !p-0 !shadow-none transition-transform duration-150 hover:!bg-white/[0.08] hover:-translate-y-1 hover:scale-125"
             ><Emoji char={e} size="26px" /></button>
           ))}
         </div>
