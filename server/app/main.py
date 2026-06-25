@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.database import engine, init_db
 from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.core.recording_cleanup import recording_cleanup_loop
+from app.core.guest_cleanup import guest_cleanup_loop
 from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence, webhooks
 from app.websocket import chat as chat_ws, signaling as meeting_ws
 from app.websocket.manager import chat_manager, meet_manager
@@ -43,12 +44,13 @@ async def lifespan(app: FastAPI):
     meet_manager.bind_loop(_loop)
     init_task = asyncio.create_task(_init_db_background())
     cleanup_task = asyncio.create_task(recording_cleanup_loop())
+    guest_task = asyncio.create_task(guest_cleanup_loop())
     try:
         yield
     finally:
-        for t in (init_task, cleanup_task):
+        for t in (init_task, cleanup_task, guest_task):
             t.cancel()
-        for t in (init_task, cleanup_task):
+        for t in (init_task, cleanup_task, guest_task):
             try:
                 await t
             except asyncio.CancelledError:

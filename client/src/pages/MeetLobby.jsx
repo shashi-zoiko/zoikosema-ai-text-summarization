@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Calendar, Camera, CameraOff, Check, ChevronDown, Clock, Copy, Info, Link as LinkIcon,
-  Loader2, Lock, Mic, MicOff, Monitor, ShieldCheck, Video, VideoOff, X,
+  Loader2, Lock, Mic, MicOff, Monitor, ShieldCheck, User as UserIcon, Video, VideoOff, X,
 } from 'lucide-react'
-import { api, getWsBase } from '../api/client'
+import { api, fetchPublicMeeting, getWsBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { cleanDisplayName, validateDisplayName } from '../features/meeting/guestName'
 import useMediaDevices from '../hooks/useMediaDevices'
 import useAudioLevel from '../hooks/useAudioLevel'
 import LobbyLeaves from '../components/LobbyLeaves'
@@ -55,10 +56,14 @@ function timeGreeting() {
   return 'Good evening'
 }
 
+const GUEST_NAME_KEY = 'zoiko_guest_name'
+
 export default function MeetLobby() {
   const { code } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, loading: authLoading, joinAsGuest } = useAuth()
+  // Anonymous (guest) mode: a logged-out visitor on a public meeting link.
+  const isGuest = !authLoading && !user
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -68,6 +73,16 @@ export default function MeetLobby() {
   const [needsPassword, setNeedsPassword] = useState(false)
   const [meetingPwd, setMeetingPwd] = useState('')
   const [err, setErr] = useState('')
+
+  // Guest identity (only used when isGuest). Name is remembered across visits
+  // via localStorage when the user opts in — no account is ever created.
+  const [guestName, setGuestName] = useState(() => {
+    try { return localStorage.getItem(GUEST_NAME_KEY) || '' } catch { return '' }
+  })
+  const [rememberName, setRememberName] = useState(() => {
+    try { return !!localStorage.getItem(GUEST_NAME_KEY) } catch { return false }
+  })
+  const [nameError, setNameError] = useState('')
 
   const [audioOn, setAudioOn] = useState(() => readJoinPrefs(code).audio)
   const [videoOn, setVideoOn] = useState(() => readJoinPrefs(code).video)
@@ -94,14 +109,31 @@ export default function MeetLobby() {
   }, [])
 
   // ── Meeting metadata ────────────────────────────────────────────────
+  // Signed-in users hit the authenticated endpoint; anonymous guests hit the
+  // public one (no auth) which returns only safe fields for the lobby.
   useEffect(() => {
-    api(`/api/meetings/${code}`)
-      .then((m) => {
-        setMeeting(m)
-        if (m.password_protected && m.host_id !== user?.id) setNeedsPassword(true)
-      })
-      .catch((e) => setErr(e.message || 'Meeting not found'))
-  }, [code, user?.id])
+    if (authLoading) return
+    if (user) {
+      api(`/api/meetings/${code}`)
+        .then((m) => {
+          setMeeting(m)
+          if (m.password_protected && m.host_id !== user?.id) setNeedsPassword(true)
+        })
+        .catch((e) => setErr(e.message || 'Meeting not found'))
+    } else {
+      fetchPublicMeeting(code)
+        .then((m) => {
+          if (!m.is_active) { setErr('This meeting has ended.'); return }
+          if (!m.guests_enabled) {
+            setErr('This meeting requires a Zoiko account. Please sign in to join.')
+            return
+          }
+          setMeeting(m)
+          if (m.password_protected) setNeedsPassword(true)
+        })
+        .catch((e) => setErr(e.message || 'Meeting not found'))
+    }
+  }, [code, user, authLoading])
 
   // ── Camera lifecycle ───────────────────────────────────────────────
   // Cancellation-aware. Each acquire run cancels its predecessor so a
@@ -321,8 +353,31 @@ export default function MeetLobby() {
   // ── Join meeting ───────────────────────────────────────────────────
   const join = async () => {
     setErr('')
+    // Guests: validate + mint an anonymous identity before the normal join.
+    if (isGuest) {
+      const nameErr = validateDisplayName(guestName)
+      if (nameErr) { setNameError(nameErr); return }
+      const cleaned = cleanDisplayName(guestName)
+      try {
+        if (rememberName) localStorage.setItem(GUEST_NAME_KEY, cleaned)
+        else localStorage.removeItem(GUEST_NAME_KEY)
+      } catch {}
+    }
     setJoining(true)
     try {
+      // For guests, mint the guest token first (creates the ephemeral identity);
+      // the api client then sends it automatically on the calls below.
+      let authToken
+      if (isGuest) {
+        const guestData = await joinAsGuest(code, {
+          displayName: cleanDisplayName(guestName),
+          password: needsPassword ? meetingPwd : undefined,
+        })
+        authToken = guestData.access_token
+      } else {
+        authToken = localStorage.getItem('zoiko_token')
+      }
+
       const joinBody = { code }
       if (needsPassword) joinBody.password = meetingPwd
       const participant = await api(`/api/meetings/${code}/join`, { method: 'POST', body: joinBody })
@@ -336,7 +391,7 @@ export default function MeetLobby() {
       if (participant.status === 'pending') {
         setWaitingStatus('pending')
         console.info('[WAITING_FOR_ADMISSION]', code)
-        const token = localStorage.getItem('zoiko_token')
+        const token = authToken
         let wsUrl = `${getWsBase()}/ws/meetings/${code}?token=${encodeURIComponent(token)}`
         if (needsPassword && meetingPwd) wsUrl += `&pwd=${encodeURIComponent(meetingPwd)}`
         const ws = new WebSocket(wsUrl)
@@ -388,10 +443,16 @@ export default function MeetLobby() {
     } catch {}
   }
 
-  const initial = (user?.name || '?').trim().charAt(0).toUpperCase() || '?'
+  // Identity for the preview chrome — the signed-in user, or the guest's typed
+  // name (falls back to "You" before they type).
+  const displayName = isGuest ? (cleanDisplayName(guestName) || 'You') : (user?.name || '')
+  const avatarColor = isGuest ? '#b45309' : (user?.avatar_color || '#0F8A5F')
+  const initial = (displayName || '?').trim().charAt(0).toUpperCase() || '?'
   const firstName = (user?.name || '').trim().split(/\s+/)[0]
   const showVideo = permState === PERM.granted && videoOn
-  const joinDisabled = !meeting || (needsPassword && !meetingPwd) || permState === PERM.pending || joining
+  const guestNameInvalid = isGuest && !!validateDisplayName(guestName)
+  const joinDisabled =
+    !meeting || (needsPassword && !meetingPwd) || permState === PERM.pending || joining || guestNameInvalid
 
   // ─────────────────────────────────────────────────────────────────
   // Meeting-unavailable view — metadata fetch failed before anything loaded
@@ -401,15 +462,15 @@ export default function MeetLobby() {
   if (err && !meeting) {
     return (
       <Shell>
-        <div className="zk-dock-enter w-full max-w-md rounded-[24px] border border-[#E4ECE7] bg-white/90 p-8 text-center shadow-[0_10px_40px_rgba(15,138,95,0.08)] backdrop-blur-xl">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-red-50 text-red-500 ring-1 ring-red-100">
+        <div className="zk-glass-card zk-dock-enter w-full max-w-md rounded-[24px] bg-[#111A28]/80 p-8 text-center shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#F87171]/15 text-[#F87171] ring-1 ring-[#F87171]/25">
             <X className="h-7 w-7" />
           </div>
-          <h2 style={{ color: '#0F172A' }} className="mt-5 text-xl font-semibold">Meeting unavailable</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-[#64748B]">{err}</p>
+          <h2 className="mt-5 text-xl font-semibold text-[#F1F5F9]">Meeting unavailable</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-[#94A3B8]">{err}</p>
           <button
             onClick={() => navigate('/')}
-            className="zk-press mt-6 inline-flex h-11 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0F8A5F] to-[#16A34A] px-6 text-[14px] font-semibold text-white shadow-[0_10px_24px_-10px_rgba(15,138,95,0.7)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F8A5F]/45 focus-visible:ring-offset-2"
+            className="zk-press mt-6 inline-flex h-11 items-center justify-center rounded-2xl bg-gradient-to-br from-[#10B981] to-[#059669] px-6 text-[14px] font-semibold text-white shadow-[0_12px_30px_-10px_rgba(16,185,129,0.6)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B1220]"
           >Back to home</button>
         </div>
       </Shell>
@@ -422,22 +483,22 @@ export default function MeetLobby() {
   if (waitingStatus === 'pending') {
     return (
       <Shell>
-        <div className="zk-dock-enter w-full max-w-md rounded-[24px] border border-[#E4ECE7] bg-white/90 p-8 text-center shadow-[0_10px_40px_rgba(15,138,95,0.08)] backdrop-blur-xl">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-[#0F8A5F] to-[#16A34A] text-white shadow-[0_10px_24px_-8px_rgba(15,138,95,0.6)]">
+        <div className="zk-glass-card zk-dock-enter w-full max-w-md rounded-[24px] bg-[#111A28]/80 p-8 text-center shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_12px_30px_-8px_rgba(16,185,129,0.55)]">
             <Loader2 className="h-7 w-7 animate-spin" />
           </div>
-          <h2 style={{ color: '#0F172A' }} className="mt-5 text-xl font-semibold">Asking to be let in</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-[#64748B]">
+          <h2 className="mt-5 text-xl font-semibold text-[#F1F5F9]">Asking to be let in</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-[#94A3B8]">
             You'll join automatically once the host lets you in. This usually takes a few seconds.
           </p>
-          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[#E4ECE7] bg-[#EAF8F2] px-3 py-1.5 text-[12px]">
-            <ShieldCheck className="h-3.5 w-3.5 text-[#0F8A5F]" />
-            <span className="text-[#64748B]">Code</span>
-            <span className="font-mono font-semibold text-[#0F172A]">{code}</span>
+          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[#10B981]/25 bg-[#10B981]/10 px-3 py-1.5 text-[12px]">
+            <ShieldCheck className="h-3.5 w-3.5 text-[#34D399]" />
+            <span className="text-[#94A3B8]">Code</span>
+            <span className="font-mono font-semibold text-[#F1F5F9]">{code}</span>
           </div>
           <button
             onClick={cancelWaiting}
-            className="zk-press mt-6 rounded-full border border-[#E4ECE7] bg-white px-5 py-2 text-sm font-medium text-[#0F172A] transition hover:bg-[#F7FAF8]"
+            className="zk-press mt-6 rounded-full bg-white/[0.05] px-5 py-2 text-sm font-medium text-[#E2E8F0] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)] transition hover:bg-white/[0.1] hover:shadow-[inset_0_0_0_1px_rgba(16,185,129,0.4)]"
           >Cancel</button>
         </div>
       </Shell>
@@ -454,7 +515,7 @@ export default function MeetLobby() {
       <div className="zk-dock-enter mx-auto grid w-full max-w-[1240px] gap-6 lg:gap-10 lg:grid-cols-[minmax(0,1.86fr)_minmax(0,1fr)] lg:items-stretch">
         {/* ── Left: device preview (65%) ──────────────────────────── */}
         <section className="flex flex-col gap-5">
-          <div className="relative isolate aspect-video w-full overflow-hidden rounded-[24px] border border-[#E4ECE7] bg-[#EEF4F1] shadow-[0_10px_40px_rgba(15,138,95,0.08)] ring-1 ring-[#0F8A5F]/[0.03]">
+          <div className="zk-glass-card relative isolate aspect-video w-full overflow-hidden rounded-[24px] bg-[#0A0F18] shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)]">
             {/* Video — ALWAYS mounted so the ref is stable. Visibility is
                 controlled with classes, not conditional rendering. */}
             <video
@@ -468,29 +529,32 @@ export default function MeetLobby() {
               }
             />
 
+            {/* Cinematic bottom vignette so overlay chrome always reads */}
+            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/55 to-transparent" />
+
             {/* Fallback layer */}
             {!showVideo && (
-              <div role="status" aria-live="polite" className="absolute inset-0 grid place-items-center bg-gradient-to-b from-[#F2FBF6] to-[#E7F4EE]">
+              <div role="status" aria-live="polite" className="absolute inset-0 grid place-items-center bg-[radial-gradient(120%_120%_at_50%_0%,#13203099,transparent_70%),linear-gradient(180deg,#0E1521,#080C13)]">
                 {permState === PERM.granted && !videoOn && (
-                  <div className="flex flex-col items-center gap-4 text-[#0F172A]">
+                  <div className="flex flex-col items-center gap-4 text-[#F1F5F9]">
                     <div
-                      className="grid h-28 w-28 place-items-center rounded-full text-4xl font-semibold text-white shadow-[0_12px_30px_-10px_rgba(15,138,95,0.55)] ring-4 ring-white/70"
-                      style={{ backgroundColor: user?.avatar_color || '#0F8A5F' }}
+                      className="grid h-28 w-28 place-items-center rounded-full text-4xl font-semibold text-white shadow-[0_18px_50px_-12px_rgba(0,0,0,0.7)] ring-4 ring-white/10"
+                      style={{ backgroundColor: avatarColor }}
                     >{initial}</div>
-                    <div className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1.5 text-[13px] font-medium text-[#64748B] shadow-sm ring-1 ring-[#E4ECE7]">
+                    <div className="inline-flex items-center gap-2 rounded-full bg-white/[0.06] px-3 py-1.5 text-[13px] font-medium text-[#94A3B8] ring-1 ring-white/10 backdrop-blur-md">
                       <CameraOff className="h-4 w-4" /> Camera is off
                     </div>
                   </div>
                 )}
                 {permState === PERM.pending && (
-                  <div className="flex flex-col items-center gap-3 text-[#0F8A5F]">
+                  <div className="flex flex-col items-center gap-3 text-[#34D399]">
                     <Loader2 className="h-7 w-7 animate-spin" />
-                    <span className="text-[13px] font-medium text-[#64748B]">Starting camera…</span>
+                    <span className="text-[13px] font-medium text-[#94A3B8]">Starting camera…</span>
                   </div>
                 )}
                 {permState === PERM.denied && (
                   <PermError
-                    icon={<CameraOff className="h-7 w-7 text-[#ef4444]" />}
+                    icon={<CameraOff className="h-7 w-7 text-[#F87171]" />}
                     title="Camera and mic are blocked"
                     detail={permDetail}
                     onRetry={acquire}
@@ -498,7 +562,7 @@ export default function MeetLobby() {
                 )}
                 {permState === PERM.unavailable && (
                   <PermError
-                    icon={<Monitor className="h-7 w-7 text-[#64748B]" />}
+                    icon={<Monitor className="h-7 w-7 text-[#94A3B8]" />}
                     title="Can't reach your camera"
                     detail={permDetail}
                     onRetry={acquire}
@@ -508,23 +572,23 @@ export default function MeetLobby() {
             )}
 
             {/* Name pill (bottom-left) */}
-            {user && (
-              <div className="pointer-events-none absolute bottom-4 left-4 flex items-center gap-2 rounded-xl bg-[#0F172A]/55 px-3 py-1.5 text-[12.5px] font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
-                {user.name}
+            {(user || isGuest) && (
+              <div className="pointer-events-none absolute bottom-4 left-4 flex items-center gap-2 rounded-xl bg-black/45 px-3 py-1.5 text-[12.5px] font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
+                {displayName}{isGuest && <span className="text-white/55">(Guest)</span>}
               </div>
             )}
 
             {/* Audio meter (top-right) — decorative, hidden from AT */}
             {permState === PERM.granted && (
-              <div aria-hidden="true" className="pointer-events-none absolute top-4 right-4 flex h-8 items-center gap-1.5 rounded-xl bg-[#0F172A]/55 px-2.5 ring-1 ring-white/10 backdrop-blur-md">
-                {audioOn ? <Mic className="h-3.5 w-3.5 text-[#34d399]" /> : <MicOff className="h-3.5 w-3.5 text-red-400" />}
+              <div aria-hidden="true" className="pointer-events-none absolute top-4 right-4 flex h-8 items-center gap-1.5 rounded-xl bg-black/45 px-2.5 ring-1 ring-white/10 backdrop-blur-md">
+                {audioOn ? <Mic className="h-3.5 w-3.5 text-[#34D399]" /> : <MicOff className="h-3.5 w-3.5 text-[#F87171]" />}
                 <AudioMeter level={audioOn ? audioLevel : 0} />
               </div>
             )}
 
             {/* Mic + Camera toggle pill (center bottom) */}
             <div className="absolute inset-x-0 bottom-5 flex justify-center">
-              <div className="flex items-center gap-3 rounded-full border border-[#E4ECE7] bg-white/95 px-3 py-3 shadow-[0_8px_30px_rgba(0,0,0,0.08)] backdrop-blur-md">
+              <div className="flex items-center gap-2.5 rounded-full bg-black/55 p-2 shadow-[0_12px_40px_-8px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
                 <ToggleButton
                   on={audioOn}
                   onClick={toggleAudio}
@@ -568,48 +632,94 @@ export default function MeetLobby() {
           </div>
 
           {/* Keyboard hint — desktop only (touch devices have no modifier keys) */}
-          <p className="hidden items-center justify-center gap-1.5 text-[12px] text-[#64748B] sm:flex">
-            <Kbd>Ctrl</Kbd><span className="text-[#94a3b8]">/</span><Kbd>⌘</Kbd>
+          <p className="hidden items-center justify-center gap-1.5 text-[12px] text-[#7A8AA0] sm:flex">
+            <Kbd>Ctrl</Kbd><span className="text-[#4B586B]">/</span><Kbd>⌘</Kbd>
             <span className="ml-0.5">+</span><Kbd>D</Kbd>
-            <span className="mx-1 text-[#cbd5e1]">·</span> mic
-            <span className="mx-2 text-[#cbd5e1]">|</span>
-            <Kbd>Ctrl</Kbd><span className="text-[#94a3b8]">/</span><Kbd>⌘</Kbd>
+            <span className="mx-1 text-[#39465A]">·</span> mic
+            <span className="mx-2 text-[#39465A]">|</span>
+            <Kbd>Ctrl</Kbd><span className="text-[#4B586B]">/</span><Kbd>⌘</Kbd>
             <span className="ml-0.5">+</span><Kbd>E</Kbd>
-            <span className="mx-1 text-[#cbd5e1]">·</span> camera
+            <span className="mx-1 text-[#39465A]">·</span> camera
           </p>
         </section>
 
         {/* ── Right: meeting info panel (35%) ─────────────────────── */}
-        <aside className="flex flex-col justify-center rounded-[24px] border border-[#E4ECE7] bg-white/85 p-6 shadow-[0_10px_40px_rgba(15,138,95,0.08)] backdrop-blur-xl sm:p-8">
-          <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[#0F8A5F]">
-            {firstName ? `${timeGreeting()}, ${firstName}` : 'Ready to join'}
+        <aside className="zk-glass-card flex flex-col justify-center rounded-[24px] bg-[#111A28]/75 p-6 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)] backdrop-blur-2xl sm:p-8">
+          <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[#34D399]">
+            {isGuest ? 'Joining as guest' : (firstName ? `${timeGreeting()}, ${firstName}` : 'Ready to join')}
           </span>
           {meeting ? (
-            <h1 style={{ color: '#0F172A' }} className="mt-2 text-[32px] font-bold leading-[1.1] tracking-tight sm:text-[40px]">
+            <h1
+              style={{ color: '#F8FAFC', WebkitTextFillColor: '#F8FAFC' }}
+              className="mt-2 text-[32px] font-bold leading-[1.1] tracking-tight sm:text-[40px]"
+            >
               {meeting.title || 'Meeting'}
             </h1>
           ) : (
             <div className="skeleton mt-3 h-9 w-3/4 rounded-lg sm:h-11" aria-hidden="true" />
           )}
           {meeting?.description && (
-            <p className="mt-3 text-[15px] leading-relaxed text-[#64748B]">{meeting.description}</p>
+            <p className="mt-3 text-[15px] leading-relaxed text-[#94A3B8]">{meeting.description}</p>
           )}
           {user && (
-            <p className="mt-3 text-[14px] text-[#64748B]">
-              Joining as <span className="font-semibold text-[#0F172A]">{user.name}</span>
+            <p className="mt-3 text-[14px] text-[#94A3B8]">
+              Joining as <span className="font-semibold text-[#E2E8F0]">{user.name}</span>
+            </p>
+          )}
+          {isGuest && meeting?.host_name && (
+            <p className="mt-3 text-[14px] text-[#94A3B8]">
+              Hosted by <span className="font-semibold text-[#E2E8F0]">{meeting.host_name}</span>
             </p>
           )}
 
+          {/* Guest display-name entry (anonymous join) */}
+          {isGuest && (
+            <div className="mt-5">
+              <label htmlFor="guest-name" className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8696A7]">
+                Your name
+              </label>
+              <div className="zk-field mt-2 flex items-center gap-2 rounded-2xl px-3 py-2.5">
+                <UserIcon className="h-4 w-4 shrink-0 text-[#8696A7]" />
+                <input
+                  id="guest-name"
+                  type="text"
+                  inputMode="text"
+                  maxLength={60}
+                  placeholder="Enter your name"
+                  value={guestName}
+                  onChange={(e) => { setGuestName(e.target.value); if (nameError) setNameError('') }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !joinDisabled) join() }}
+                  autoComplete="name"
+                  aria-invalid={!!nameError}
+                  aria-describedby={nameError ? 'guest-name-error' : undefined}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[#F1F5F9] outline-none placeholder:text-[#5B6878]"
+                />
+              </div>
+              {nameError && (
+                <p id="guest-name-error" role="alert" className="mt-1.5 text-[12px] font-medium text-[#F87171]">{nameError}</p>
+              )}
+              <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-[#94A3B8]">
+                <input
+                  type="checkbox"
+                  checked={rememberName}
+                  onChange={(e) => setRememberName(e.target.checked)}
+                  className="h-4 w-4 rounded border-white/20 bg-transparent text-[#10B981] focus:ring-[#10B981]/40"
+                />
+                Remember my name on this device
+              </label>
+            </div>
+          )}
+
           {meeting?.scheduled_at && (
-            <div className="mt-5 inline-flex w-fit items-center gap-2 rounded-full border border-[#E4ECE7] bg-[#EAF8F2] px-3 py-1.5 text-[12.5px] text-[#0F172A]">
-              <Calendar className="h-3.5 w-3.5 text-[#0F8A5F]" />
+            <div className="mt-5 inline-flex w-fit items-center gap-2 rounded-full border border-[#10B981]/25 bg-[#10B981]/10 px-3 py-1.5 text-[12.5px] text-[#E2E8F0]">
+              <Calendar className="h-3.5 w-3.5 text-[#34D399]" />
               {new Date(meeting.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
               {meeting.timezone_name ? ` · ${meeting.timezone_name}` : ''}
             </div>
           )}
 
-          {meeting?.waiting_room_enabled && meeting?.host_id !== user?.id && (
-            <div className="mt-5 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-left text-[12.5px] text-amber-800">
+          {meeting?.waiting_room_enabled && (isGuest || meeting?.host_id !== user?.id) && (
+            <div className="mt-5 flex items-start gap-2.5 rounded-2xl border border-[#F59E0B]/25 bg-[#F59E0B]/10 p-3 text-left text-[12.5px] text-[#FCD34D]">
               <Info className="mt-0.5 h-4 w-4 shrink-0" />
               <span>This meeting uses a waiting room — the host will let you in.</span>
             </div>
@@ -617,22 +727,22 @@ export default function MeetLobby() {
 
           {needsPassword && (
             <div className="mt-5">
-              <div className="flex items-center gap-2 rounded-2xl border border-[#E4ECE7] bg-white px-3 py-2.5 transition focus-within:border-[#0F8A5F] focus-within:ring-2 focus-within:ring-[#0F8A5F]/15">
-                <Lock className="h-4 w-4 shrink-0 text-[#64748B]" />
+              <div className="zk-field flex items-center gap-2 rounded-2xl px-3 py-2.5">
+                <Lock className="h-4 w-4 shrink-0 text-[#8696A7]" />
                 <input
                   type="password"
                   placeholder="Enter meeting password"
                   value={meetingPwd}
                   onChange={(e) => setMeetingPwd(e.target.value)}
                   autoComplete="off"
-                  className="min-w-0 flex-1 bg-transparent text-sm text-[#0F172A] outline-none placeholder:text-[#94a3b8]"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[#F1F5F9] outline-none placeholder:text-[#5B6878]"
                 />
               </div>
             </div>
           )}
 
           {err && (
-            <div role="alert" className="mt-5 flex items-start gap-2.5 rounded-2xl border border-red-200 bg-red-50 p-3 text-left text-[12.5px] text-red-700">
+            <div role="alert" className="mt-5 flex items-start gap-2.5 rounded-2xl border border-[#F87171]/25 bg-[#F87171]/10 p-3 text-left text-[12.5px] text-[#FCA5A5]">
               <X className="mt-0.5 h-4 w-4 shrink-0" />
               <span className="font-medium">{err}</span>
             </div>
@@ -644,7 +754,7 @@ export default function MeetLobby() {
               onClick={join}
               disabled={joinDisabled}
               aria-busy={joining}
-              className="zk-press inline-flex h-14 items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-[#0F8A5F] to-[#16A34A] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(15,138,95,0.7),inset_0_1px_0_rgba(255,255,255,0.25)] transition hover:from-[#0C744F] hover:to-[#0F8A5F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F8A5F]/45 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+              className="zk-press zk-sheen inline-flex h-14 items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-[#4F46E5] via-[#6D28D9] to-[#9333EA] px-6 text-[15px] font-semibold text-white shadow-[0_16px_36px_-12px_rgba(124,58,237,0.7),inset_0_1px_0_rgba(255,255,255,0.22)] transition hover:from-[#6366F1] hover:via-[#7C3AED] hover:to-[#A855F7] hover:shadow-[0_20px_48px_-12px_rgba(124,58,237,0.85)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B1220] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
               {joining
                 ? <><Loader2 className="h-[18px] w-[18px] animate-spin" /> Joining…</>
@@ -652,16 +762,16 @@ export default function MeetLobby() {
             </button>
             <button
               onClick={() => navigate('/')}
-              className="zk-press inline-flex h-14 items-center justify-center rounded-2xl border border-[#E4ECE7] bg-white px-6 text-[15px] font-semibold text-[#0F172A] transition hover:bg-[#F7FAF8] hover:border-[#cfe0d8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F8A5F]/25"
+              className="zk-press inline-flex h-14 items-center justify-center rounded-2xl bg-white/[0.05] px-6 text-[15px] font-semibold text-[#CBD5E1] shadow-[0_2px_12px_-6px_rgba(0,0,0,0.6)] transition hover:bg-white/[0.09] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/15"
             >Cancel</button>
           </div>
 
           {/* Share link */}
           <div className="mt-6">
-            <div className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#64748B]">Meeting link</div>
-            <div className="mt-2 flex items-center gap-2 rounded-2xl border border-[#E4ECE7] bg-[#F7FAF8] py-1.5 pl-3 pr-1.5">
-              <LinkIcon className="h-4 w-4 shrink-0 text-[#0F8A5F]" />
-              <code className="min-w-0 flex-1 truncate text-left font-mono text-[12.5px] text-[#64748B]">
+            <div className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8696A7]">Meeting link</div>
+            <div className="zk-field mt-2 flex items-center gap-2 rounded-2xl py-1.5 pl-3 pr-1.5">
+              <LinkIcon className="h-4 w-4 shrink-0 text-[#34D399]" />
+              <code className="min-w-0 flex-1 truncate text-left font-mono text-[12.5px] text-[#94A3B8]">
                 {meetingLink}
               </code>
               <button
@@ -670,8 +780,8 @@ export default function MeetLobby() {
                 className={
                   'zk-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-3 text-[12.5px] font-semibold transition ' +
                   (copied
-                    ? 'bg-[#16A34A] text-white shadow-[0_6px_16px_-6px_rgba(22,163,74,0.7)]'
-                    : 'border border-[#E4ECE7] bg-white text-[#0F172A] hover:border-[#0F8A5F] hover:text-[#0F8A5F]')
+                    ? 'bg-[#10B981] text-white shadow-[0_6px_16px_-6px_rgba(16,185,129,0.7)]'
+                    : 'bg-white/[0.07] text-[#E2E8F0] hover:bg-white/[0.12] hover:text-white')
                 }
               >
                 {copied ? <><Check className="h-3.5 w-3.5" /> Copied</> : <><Copy className="h-3.5 w-3.5" /> Copy</>}
@@ -683,8 +793,8 @@ export default function MeetLobby() {
           </div>
 
           {/* Trust signal */}
-          <div className="mt-5 flex items-center gap-2 text-[12px] text-[#64748B]">
-            <ShieldCheck className="h-4 w-4 shrink-0 text-[#0F8A5F]" />
+          <div className="mt-5 flex items-center gap-2 text-[12px] text-[#7A8AA0]">
+            <ShieldCheck className="h-4 w-4 shrink-0 text-[#34D399]" />
             <span>Secured by Zoiko · your camera and mic stay private until you join.</span>
           </div>
         </aside>
@@ -700,20 +810,23 @@ export default function MeetLobby() {
 function Shell({ children }) {
   return (
     <div
-      className="relative flex min-h-screen flex-col overflow-hidden text-[#0F172A]"
+      className="zk-lobby-root relative flex min-h-dvh flex-col overflow-x-hidden text-[#E2E8F0]"
       style={{
         background:
-          'radial-gradient(1100px 600px at 85% -10%, rgba(15,138,95,0.10), transparent 60%),' +
-          'radial-gradient(900px 520px at -5% 110%, rgba(22,163,74,0.08), transparent 58%),' +
-          'linear-gradient(135deg, #F7FAF8 0%, #F2FBF6 50%, #EDF9F3 100%)',
+          'radial-gradient(1200px 640px at 85% -12%, rgba(16,185,129,0.16), transparent 60%),' +
+          'radial-gradient(960px 560px at -8% 112%, rgba(5,150,105,0.13), transparent 58%),' +
+          'linear-gradient(135deg, #070B12 0%, #0B1220 52%, #0A1018 100%)',
       }}
     >
       <LobbyLeaves />
-      <header className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-[#E4ECE7] bg-white/70 px-6 backdrop-blur-xl">
+      <header
+        className="zk-fade-divider relative z-10 flex h-14 shrink-0 items-center justify-between bg-white/[0.02] px-4 backdrop-blur-xl sm:px-6"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
         <div className="flex items-center gap-2">
           <Logo size={30} withWordmark />
         </div>
-        <div className="inline-flex items-center gap-1.5 text-[12.5px] text-[#64748B]">
+        <div className="inline-flex items-center gap-1.5 text-[12.5px] text-[#8696A7]">
           <Clock className="h-3.5 w-3.5" />
           {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
@@ -727,15 +840,25 @@ function Shell({ children }) {
 
 function Kbd({ children }) {
   return (
-    <kbd className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-md border border-[#E4ECE7] bg-white px-1.5 font-sans text-[11px] font-semibold text-[#475569] shadow-[0_1px_0_#E4ECE7]">
+    <kbd className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-md bg-white/[0.05] px-1.5 font-sans text-[11px] font-semibold text-[#B7C2D0] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),inset_0_-1px_0_rgba(0,0,0,0.3)]">
       {children}
     </kbd>
   )
 }
 
+// Production-grade media toggles. On = a refined near-black control with a white
+// glyph and a faint emerald edge (matches the in-room dock). Off = a solid
+// danger fill so a muted mic / stopped camera reads instantly, Google-Meet style.
+// Motion lives in the `.zk-media-btn` utility (spring scale + expanding glow
+// ring) so the press feels instant and fluid, uiverse-style — the per-state
+// glow colour is handed in via the --zk-btn-glow custom property.
 function ToggleButton({ on, onClick, disabled, label, iconOn, iconOff }) {
-  const onPalette = 'bg-[#EAF8F2] text-[#0F8A5F] hover:bg-[#dbf2e7] shadow-[0_0_0_1px_rgba(15,138,95,0.22),0_6px_18px_-8px_rgba(15,138,95,0.5)]'
-  const offPalette = 'bg-[#fdecec] text-[#dc2626] hover:bg-[#fbdddd] shadow-[0_0_0_1px_rgba(220,38,38,0.22),0_6px_18px_-8px_rgba(220,38,38,0.5)]'
+  const onPalette =
+    'bg-[#161D29] text-white ring-1 ring-inset ring-white/12 hover:bg-[#1C2533] ' +
+    'shadow-[0_8px_22px_-10px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.07)]'
+  const offPalette =
+    'bg-[#EF4444] text-white ring-1 ring-inset ring-white/15 hover:bg-[#F05252] ' +
+    'shadow-[0_10px_26px_-10px_rgba(239,68,68,0.7),inset_0_1px_0_rgba(255,255,255,0.2)]'
   return (
     <button
       onClick={onClick}
@@ -743,9 +866,10 @@ function ToggleButton({ on, onClick, disabled, label, iconOn, iconOff }) {
       aria-label={label}
       title={label}
       aria-pressed={!on}
+      style={{ '--zk-btn-glow': on ? 'rgba(16,185,129,0.55)' : 'rgba(239,68,68,0.6)' }}
       className={
-        'zk-press grid h-[52px] w-[52px] place-items-center rounded-full disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F8A5F]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-white ' +
+        'zk-media-btn grid h-[54px] w-[54px] place-items-center rounded-full disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-[22px] [&_svg]:w-[22px] [&_svg]:transition-transform [&_svg]:duration-200 active:[&_svg]:scale-90 ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0A0F18] ' +
         (on ? onPalette : offPalette)
       }
     >{on ? iconOn : iconOff}</button>
@@ -765,7 +889,7 @@ function AudioMeter({ level }) {
             style={{ height: `${h}px`, opacity: active ? 1 : 0.3 }}
             className={
               'w-0.5 rounded-full transition-opacity ' +
-              (i >= 4 && active ? 'bg-red-400' : 'bg-white')
+              (i >= 4 && active ? 'bg-[#F87171]' : 'bg-[#34D399]')
             }
           />
         )
@@ -776,15 +900,15 @@ function AudioMeter({ level }) {
 
 function PermError({ icon, title, detail, onRetry }) {
   return (
-    <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center text-[#0F172A]">
-      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-white/80 shadow-sm ring-1 ring-[#E4ECE7]">{icon}</div>
+    <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center text-[#F1F5F9]">
+      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-white/[0.06] ring-1 ring-white/10">{icon}</div>
       <div>
         <div className="text-[14.5px] font-semibold">{title}</div>
-        <div className="mt-1 text-[12.5px] leading-relaxed text-[#64748B]">{detail}</div>
+        <div className="mt-1 text-[12.5px] leading-relaxed text-[#94A3B8]">{detail}</div>
       </div>
       <button
         onClick={onRetry}
-        className="zk-press rounded-full border border-[#E4ECE7] bg-white px-4 py-2 text-[12.5px] font-semibold text-[#0F8A5F] shadow-sm transition hover:bg-[#EAF8F2]"
+        className="zk-press rounded-full bg-white/[0.05] px-4 py-2 text-[12.5px] font-semibold text-[#34D399] shadow-[inset_0_0_0_1px_rgba(16,185,129,0.3)] transition hover:bg-white/[0.1] hover:shadow-[inset_0_0_0_1px_rgba(16,185,129,0.55)]"
       >Retry</button>
     </div>
   )
@@ -796,19 +920,18 @@ function DevicePicker({ label, icon, devices, value, onChange, disabled, fallbac
   return (
     <label
       className={
-        'relative flex h-14 cursor-pointer items-center gap-2.5 rounded-2xl border bg-white px-4 transition ' +
-        'border-[#E4ECE7] hover:border-[#0F8A5F] focus-within:border-[#0F8A5F] focus-within:ring-2 focus-within:ring-[#0F8A5F]/15 ' +
+        'zk-field group relative flex h-14 cursor-pointer items-center gap-2.5 rounded-2xl px-4 ' +
         (disabled ? 'pointer-events-none cursor-not-allowed opacity-50' : '')
       }
     >
-      <span className="grid h-8 w-8 place-items-center rounded-full bg-[#EAF8F2] text-[#0F8A5F]">
+      <span className="grid h-8 w-8 place-items-center rounded-full bg-[#10B981]/15 text-[#34D399] transition-colors duration-200 group-hover:bg-[#10B981]/25">
         {icon}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[#64748B]">{label}</div>
-        <div className="truncate text-[13px] font-medium text-[#0F172A]">{display}</div>
+        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[#8696A7]">{label}</div>
+        <div className="truncate text-[13px] font-medium text-[#E2E8F0]">{display}</div>
       </div>
-      <ChevronDown className="h-4 w-4 shrink-0 text-[#64748B]" />
+      <ChevronDown className="zk-chevron h-4 w-4 shrink-0 text-[#8696A7] group-hover:text-[#34D399]" />
       <select
         disabled={disabled}
         value={value || ''}

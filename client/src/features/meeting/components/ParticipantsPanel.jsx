@@ -4,6 +4,7 @@ import { Track } from 'livekit-client'
 import { Crown, Hand, MicOff, Pin, PinOff, ShieldCheck, UserMinus, UserPlus, VideoOff } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
 import DrawerShell from './DrawerShell.jsx'
+import GuestBadge, { isGuestParticipant } from './GuestBadge.jsx'
 
 function identityToUserId(identity) {
   if (!identity || !identity.startsWith('u:')) return null
@@ -78,6 +79,7 @@ const ParticipantRow = memo(function ParticipantRow({
 
   const name = participant.name || participant.identity || 'Guest'
   const initial = name.slice(0, 1).toUpperCase()
+  const isGuest = isGuestParticipant(participant)
   const avatarColor = pickColor(participant.identity || name)
   const canKick = isHostOrCohost && !isSelf && !isRowHost
   const canPromote = isHost && !isSelf && !isRowHost
@@ -92,6 +94,7 @@ const ParticipantRow = memo(function ParticipantRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-white">
           <span className="truncate">{name}{isSelf && ' (you)'}</span>
+          {isGuest && <GuestBadge />}
           {isRowHost && <Crown className="h-3 w-3 shrink-0 text-[#FBBF24]" title="Host" />}
           {isRowCohost && <ShieldCheck className="h-3 w-3 shrink-0 text-[#22D3EE]" title="Co-host" />}
           {raised && <Hand className="h-3 w-3 shrink-0 text-[#FBBF24]" title="Hand raised" />}

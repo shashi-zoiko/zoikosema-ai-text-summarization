@@ -18,6 +18,7 @@ class MeetingUpdate(BaseModel):
     locked: bool | None = None
     chat_enabled: bool | None = None
     screenshare_enabled: bool | None = None
+    guests_enabled: bool | None = None
 
 
 class MeetingOut(BaseModel):
@@ -34,6 +35,7 @@ class MeetingOut(BaseModel):
     locked: bool = False
     chat_enabled: bool = True
     screenshare_enabled: bool = True
+    guests_enabled: bool = True
     password_protected: bool = False
     media_provider: str = "mesh"   # "mesh" | "livekit"
     created_at: datetime

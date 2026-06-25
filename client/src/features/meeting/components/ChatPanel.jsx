@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { MessagesSquare, Send } from 'lucide-react'
 import DrawerShell from './DrawerShell.jsx'
+import GuestBadge from './GuestBadge.jsx'
 
 /**
  * In-call chat — dark enterprise drawer with a modern messaging layout:
@@ -152,6 +153,7 @@ function ChatMessage({ m, prev, first, isSelf }) {
             <span className="truncate text-[12px] font-semibold" style={{ color }}>
               {name}
             </span>
+            {m.is_guest && <GuestBadge className="self-center" />}
             {time && <span className="shrink-0 text-[11px] text-[#64748B]">{time}</span>}
           </div>
         )}

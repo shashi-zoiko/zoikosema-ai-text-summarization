@@ -41,7 +41,7 @@ export default function Login() {
   }
 
   return (
-    <div className="relative isolate flex min-h-screen items-center justify-center overflow-hidden bg-[var(--c-bg)] px-4 py-10 text-[var(--c-fg)]">
+    <div className="relative isolate flex min-h-dvh items-center justify-center overflow-x-hidden bg-[var(--c-bg)] px-4 py-10 text-[var(--c-fg)]">
       {/* Soft ambient backdrop */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
         <div

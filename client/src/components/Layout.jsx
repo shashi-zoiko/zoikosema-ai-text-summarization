@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  BarChart3, ChevronDown, ChevronsUpDown, Home, LogOut, MessageSquareText,
-  Settings, ShieldCheck, Users2, Video,
+  BarChart3, ChevronDown, ChevronsUpDown, Home, LogOut, Menu, MessageSquareText,
+  Settings, ShieldCheck, Users2, Video, X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { cn } from '../lib/cn'
@@ -112,15 +112,38 @@ function MenuItem({ icon, children, danger, onClick }) {
 export default function Layout() {
   const { user } = useAuth()
   const location = useLocation()
+  // Off-canvas nav drawer for < lg. Persistent rail on lg+ (drawer state ignored
+  // there because the sidebar is always translated into view by the lg: classes).
+  const [navOpen, setNavOpen] = useState(false)
+
+  // Close the drawer on navigation and on Escape so it never strands open.
+  useEffect(() => { setNavOpen(false) }, [location.pathname])
+  useEffect(() => {
+    if (!navOpen) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navOpen])
 
   return (
-    <div className="flex min-h-screen bg-[var(--c-bg)] text-[var(--c-fg)]">
+    <div className="flex min-h-dvh bg-[var(--c-bg)] text-[var(--c-fg)]">
+      {/* Scrim behind the mobile drawer */}
+      {navOpen && (
+        <div
+          onClick={() => setNavOpen(false)}
+          aria-hidden
+          className="fixed inset-0 z-40 bg-black/55 backdrop-blur-sm lg:hidden"
+        />
+      )}
       {/* ===================== Sidebar ===================== */}
       <aside
         className={cn(
-          'sticky top-0 z-30 flex h-screen w-[260px] shrink-0 flex-col border-r',
-          'border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-surface)_72%,transparent)]',
-          'backdrop-blur-xl'
+          'fixed inset-y-0 left-0 z-50 flex w-[280px] max-w-[85vw] shrink-0 flex-col border-r',
+          'border-[var(--c-line)] bg-[var(--c-bg-1)] backdrop-blur-xl',
+          'transition-transform duration-300 ease-out',
+          'lg:sticky lg:top-0 lg:z-30 lg:h-screen lg:w-[260px] lg:max-w-none lg:translate-x-0',
+          'lg:bg-[color-mix(in_srgb,var(--c-surface)_72%,transparent)]',
+          navOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full lg:translate-x-0'
         )}
         aria-label="Primary"
       >
@@ -132,6 +155,14 @@ export default function Layout() {
           >
             <Logo size={36} withWordmark />
           </NavLink>
+          <button
+            type="button"
+            onClick={() => setNavOpen(false)}
+            aria-label="Close menu"
+            className="grid h-9 w-9 place-items-center rounded-lg text-[var(--c-fg-muted)] transition hover:bg-[var(--c-bg-3)] hover:text-[var(--c-fg)] lg:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
         <div className="px-3">
@@ -153,7 +184,7 @@ export default function Layout() {
           </motion.div>
         </div>
 
-        <nav className="mt-4 flex-1 space-y-0.5 px-3" aria-label="Primary navigation">
+        <nav className="mt-4 min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3" aria-label="Primary navigation">
           <NavSection label="Workspace">
             {NAV.map((item) => (
               <SideLink key={item.to} {...item} />
@@ -191,6 +222,14 @@ export default function Layout() {
             'border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-bg)_70%,transparent)] backdrop-blur-xl'
           )}
         >
+          <button
+            type="button"
+            onClick={() => setNavOpen(true)}
+            aria-label="Open menu"
+            className="-ml-1 grid h-10 w-10 shrink-0 place-items-center rounded-lg text-[var(--c-fg-dim)] transition hover:bg-[var(--c-bg-3)] hover:text-[var(--c-fg)] lg:hidden"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
           <Breadcrumbs path={location.pathname} />
           <div className="ml-auto flex items-center gap-2">
             <ThemeToggle />

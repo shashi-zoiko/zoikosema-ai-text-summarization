@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTracks } from '@livekit/components-react'
 import { Track, VideoQuality } from 'livekit-client'
 import { ParticipantTile } from './ParticipantTile.jsx'
@@ -38,7 +38,44 @@ export default function Stage({ layout = 'grid' }) {
     { onlySubscribed: false },
   )
 
-  const screen = tracks.find((t) => t.source === Track.Source.ScreenShare)
+  // ── Single, latest-wins presentation ───────────────────────────────────────
+  // LiveKit lets several participants publish a ScreenShare track at once, but a
+  // Meet-style stage shows exactly ONE — the most recently started share. We
+  // stamp each share with a monotonic sequence the first time we see it (kept in
+  // a ref, written only inside the effect, pruned when the share ends) and
+  // promote the highest sequence. So when User B starts sharing while User A is
+  // presenting, B's share becomes the hero and A's is dropped — no ghost, no
+  // duplicate. Until the effect runs we fall back to the first share, so a fresh
+  // presentation never flickers as "no one presenting".
+  const shareTracks = useMemo(
+    () => tracks.filter((t) => t.source === Track.Source.ScreenShare),
+    [tracks],
+  )
+  const shareId = (t) => t.publication?.trackSid || t.participant.identity
+  const shareSeq = useRef(new Map())
+  const shareCounter = useRef(0)
+  const [presenterId, setPresenterId] = useState(null)
+  useEffect(() => {
+    const seq = shareSeq.current
+    const present = new Set()
+    for (const t of shareTracks) {
+      const id = shareId(t)
+      present.add(id)
+      if (!seq.has(id)) seq.set(id, ++shareCounter.current)
+    }
+    for (const id of [...seq.keys()]) if (!present.has(id)) seq.delete(id)
+    let best = null
+    let bestSeq = -1
+    for (const t of shareTracks) {
+      const s = seq.get(shareId(t)) ?? 0
+      if (s > bestSeq) { bestSeq = s; best = shareId(t) }
+    }
+    setPresenterId((prev) => (prev === best ? prev : best))
+  }, [shareTracks])
+  const screen = useMemo(
+    () => shareTracks.find((t) => shareId(t) === presenterId) || shareTracks[0] || null,
+    [shareTracks, presenterId],
+  )
 
   // Stable accent per participant, keyed off the sorted camera order below.
 
@@ -124,10 +161,14 @@ export default function Stage({ layout = 'grid' }) {
           (a.participant.identity === pinnedIdentity ? 1 : 0),
       )
     }
+    const presenterIdentity = screen?.participant?.identity
     const tiles = list.map((t) => ({
       key: tileKey(t),
       track: t,
       accent: accentByIdentity.get(t.participant.identity),
+      // Tag the presenter's own camera tile so the strip shows a "Presenting"
+      // chip next to it (their video stays in the strip; the screen is the hero).
+      isPresenting: !!presenterIdentity && t.participant.identity === presenterIdentity,
     }))
     if (screen) {
       tiles.unshift({
@@ -144,9 +185,14 @@ export default function Stage({ layout = 'grid' }) {
       items={items}
       heroKey={hero ? tileKey(hero) : null}
       heroFit={screen ? 'contain' : 'cover'}
-      filmstrip={screen ? 'bottom' : 'right'}
       renderTile={(item, { isHero, fit }) => (
-        <ParticipantTile trackRef={item.track} accent={item.accent} isHero={isHero} fit={fit} />
+        <ParticipantTile
+          trackRef={item.track}
+          accent={item.accent}
+          isHero={isHero}
+          fit={fit}
+          isPresenting={item.isPresenting}
+        />
       )}
     />
   )

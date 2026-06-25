@@ -159,6 +159,17 @@ body,
   height: 100%;
   background: var(--c-bg);
   color: var(--c-fg);
+  /* Never let any page scroll the viewport sideways — a single overflowing
+     child should clip/scroll itself, not push the whole app off-canvas. */
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+html {
+  /* Keep text from auto-inflating on rotate (iOS) and make taps feel instant
+     (no 300ms double-tap-zoom delay) across the whole touch UI. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -172,6 +183,7 @@ body {
   text-rendering: optimizeLegibility;
   font-feature-settings: "cv11", "ss01", "ss03";
   letter-spacing: -0.005em;
+  touch-action: manipulation;
 }
 
 h1, h2, h3, h4 {
@@ -187,6 +199,12 @@ h3 { line-height: 1.30; font-weight: 600; letter-spacing: -0.018em; }
 h4 { line-height: 1.40; font-weight: 600; }
 
 ::selection { background: var(--c-accent-soft); color: var(--c-fg); }
+
+/* The pre-join lobby is a standalone fixed-dark surface, so the light-theme
+   selection colour (dark text on a pale wash) renders as a jarring white box
+   on its light headings. Scope an emerald-tinted selection that reads as
+   intentional on dark. */
+.zk-lobby-root ::selection { background: rgba(16, 185, 129, 0.32); color: #fff; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb {
@@ -496,6 +514,13 @@ h4 { line-height: 1.40; font-weight: 600; }
     will-change: transform;
   }
 
+  /* Presentation participant rail — slim, unobtrusive scrollbar so a long roster
+     scrolls without a chunky native bar eating the narrow rail width. */
+  .zk-rail { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
+  .zk-rail::-webkit-scrollbar { width: 6px; height: 6px; }
+  .zk-rail::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 9999px; }
+  .zk-rail::-webkit-scrollbar-track { background: transparent; }
+
   /* Resting tile elevation — soft, layered, premium. */
   .zk-tile {
     box-shadow: 0 10px 30px -16px rgba(0,0,0,0.55), 0 2px 6px -3px rgba(0,0,0,0.35);
@@ -511,6 +536,124 @@ h4 { line-height: 1.40; font-weight: 600; }
   }
   .zk-press:hover { transform: translateY(-2px); }
   .zk-press:active { transform: translateY(0) scale(0.93); transition-duration: 90ms; }
+
+  /* ───────────────────────────────────────────────────────────────
+     Lobby media toggles (mic / camera) — fluid, springy, uiverse-style.
+     A pseudo-element glow ring expands on hover; the button itself snaps
+     with a spring so it feels instant and alive, not the sluggish lift the
+     generic .zk-press gives round controls. GPU-only (transform/opacity).
+     ─────────────────────────────────────────────────────────────── */
+  .zk-media-btn {
+    position: relative;
+    transition: transform 220ms var(--ease-spring), background-color 180ms var(--ease),
+                box-shadow 240ms var(--ease), color 180ms var(--ease);
+    will-change: transform;
+  }
+  .zk-media-btn::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: inherit;
+    background: radial-gradient(circle, var(--zk-btn-glow, rgba(16,185,129,0.55)), transparent 70%);
+    opacity: 0;
+    transform: scale(0.7);
+    transition: opacity 260ms var(--ease), transform 320ms var(--ease-spring);
+    pointer-events: none;
+    z-index: -1;
+  }
+  .zk-media-btn:hover { transform: scale(1.09); }
+  .zk-media-btn:hover::before { opacity: 0.9; transform: scale(1.18); }
+  .zk-media-btn:active { transform: scale(0.9); transition-duration: 110ms; }
+  .zk-media-btn:disabled { transform: none; }
+  .zk-media-btn:disabled::before { opacity: 0; }
+
+  /* Sheen sweep — a soft light streak glides across a filled button on hover.
+     Adds life to primary CTAs without a jarring colour change. The element it
+     sits on must be position:relative + overflow:hidden. */
+  .zk-sheen { position: relative; overflow: hidden; }
+  .zk-sheen::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -60%;
+    width: 45%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.28), transparent);
+    transform: skewX(-18deg);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .zk-sheen:hover::after {
+    animation: zk-sheen-sweep 720ms var(--ease-out);
+  }
+  @keyframes zk-sheen-sweep {
+    0%   { left: -60%; opacity: 0; }
+    18%  { opacity: 1; }
+    100% { left: 130%; opacity: 0; }
+  }
+
+  /* Soft field edge — interactive inputs / dropdowns / secondary buttons get
+     their boundary from light (an inset hairline + top highlight) rather than a
+     hard drawn border, so nothing reads as an "ugly line". Hover & focus bloom
+     emerald with a gentle spring lift, so the controls feel alive and animated. */
+  .zk-field {
+    background: rgba(255, 255, 255, 0.035);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+                inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    transition: box-shadow 220ms var(--ease), background-color 220ms var(--ease),
+                transform 240ms var(--ease-spring);
+  }
+  .zk-field:hover {
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.08),
+                0 10px 28px -16px rgba(16, 185, 129, 0.6);
+  }
+  .zk-field:focus-within {
+    background: rgba(255, 255, 255, 0.07);
+    box-shadow: inset 0 0 0 1.5px rgba(16, 185, 129, 0.72),
+                0 0 0 4px rgba(16, 185, 129, 0.13);
+  }
+  /* Chevron that bobs down on hover to telegraph "this opens". */
+  .zk-chevron { transition: transform 260ms var(--ease-spring); }
+  .zk-field:hover .zk-chevron { transform: translateY(3px); }
+
+  /* Faded divider — a hairline that's solid in the middle and melts to nothing
+     at both ends, so the header reads as a natural seam, not a drawn box line. */
+  .zk-fade-divider { position: relative; }
+  .zk-fade-divider::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1) 18%,
+      rgba(16,185,129,0.18) 50%, rgba(255,255,255,0.1) 82%, transparent);
+    pointer-events: none;
+  }
+
+  /* Premium gradient glass edge — replaces the flat, uniformly-visible
+     hairline border with a 1px ring that's bright at the top-left and melts
+     into nothing toward the bottom, so it reads as a lit pane of glass. */
+  .zk-glass-card {
+    position: relative;
+  }
+  .zk-glass-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(150deg,
+      rgba(255,255,255,0.16) 0%,
+      rgba(255,255,255,0.05) 26%,
+      rgba(255,255,255,0.01) 52%,
+      rgba(16,185,129,0.05) 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    pointer-events: none;
+  }
 
   /* Lobby ambient leaf sway — composes with the wrapper's own positioning
      transform via an inner group, so the keyframe only nudges rotation.
@@ -528,6 +671,14 @@ h4 { line-height: 1.40; font-weight: 600; }
     100% { opacity: 1; transform: translateY(0)   scale(1);    }
   }
   .zk-pop-in { animation: zk-pop-in 180ms cubic-bezier(0.16,1,0.3,1) both; }
+
+  /* Mic / camera icon swap — a quick fade + scale-in so toggling state morphs
+     the glyph instead of an abrupt flip. Replayed via a changing React key. */
+  @keyframes zk-icon-swap {
+    0%   { opacity: 0; transform: scale(0.6); }
+    100% { opacity: 1; transform: scale(1);   }
+  }
+  .zk-icon-swap { animation: zk-icon-swap 140ms cubic-bezier(0.16,1,0.3,1); }
 
   /* Toast slide-in. Position-agnostic — centering is on the wrapper. */
   @keyframes zk-toast-in {
@@ -573,6 +724,7 @@ h4 { line-height: 1.40; font-weight: 600; }
     .zk-pointer-pulse,
     .zk-dock-enter,
     .zk-pop-in,
+    .zk-icon-swap,
     .zk-toast-in,
     .zk-notif-in,
     .zk-badge-pop,
