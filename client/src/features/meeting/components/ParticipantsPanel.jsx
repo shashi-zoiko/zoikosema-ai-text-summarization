@@ -1,8 +1,9 @@
 import { memo, useMemo } from 'react'
 import { useParticipants } from '@livekit/components-react'
 import { Track } from 'livekit-client'
-import { Crown, Hand, MicOff, Pin, PinOff, ShieldCheck, UserMinus, UserPlus, VideoOff, X } from 'lucide-react'
+import { Crown, Hand, MicOff, Pin, PinOff, ShieldCheck, UserMinus, UserPlus, VideoOff } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
+import DrawerShell from './DrawerShell.jsx'
 
 function identityToUserId(identity) {
   if (!identity || !identity.startsWith('u:')) return null
@@ -13,22 +14,15 @@ function identityToUserId(identity) {
 const ROLE_LABEL = {
   host: 'Meeting host',
   co_host: 'Co-host',
-  participant: '',
+  participant: 'Participant',
 }
 
 /**
- * Meet-style people panel. Rows are tap-friendly; pin/promote/kick controls
- * fade in on hover so the rest line stays calm. Order is host → co-host →
- * everyone else, with raised hands bubbling within their tier.
+ * Teams-style people drawer (dark). Rows are tap-friendly; pin/promote/kick
+ * controls fade in on hover. Order: host → co-host → everyone else, with raised
+ * hands bubbling within their tier.
  */
-export default function ParticipantsPanel({
-  selfUserId,
-  isHost,
-  isHostOrCohost,
-  onClose,
-  onKick,
-  onPromote,
-}) {
+export default function ParticipantsPanel({ selfUserId, isHost, isHostOrCohost, onClose, onKick, onPromote }) {
   const all = useParticipants()
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
   const togglePinned = useRoomStore((s) => s.togglePinned)
@@ -47,21 +41,8 @@ export default function ParticipantsPanel({
   }, [all, roles, raisedHands])
 
   return (
-    <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-[#202124] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.25)] ring-1 ring-black/[0.06]">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-4">
-        <h2 className="text-[15px] font-medium">
-          People <span className="text-[#5f6368]">· {sorted.length}</span>
-        </h2>
-        <button
-          onClick={onClose}
-          aria-label="Close people panel"
-          className="grid h-8 w-8 place-items-center rounded-full text-[#5f6368] transition hover:bg-black/[0.06] hover:text-[#202124]"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </header>
-
-      <ul className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+    <DrawerShell title="People" count={sorted.length} onClose={onClose} bodyClassName="px-2 py-2">
+      <ul>
         {sorted.map((p) => (
           <ParticipantRow
             key={p.identity}
@@ -78,7 +59,7 @@ export default function ParticipantsPanel({
           />
         ))}
       </ul>
-    </aside>
+    </DrawerShell>
   )
 }
 
@@ -102,27 +83,25 @@ const ParticipantRow = memo(function ParticipantRow({
   const canPromote = isHost && !isSelf && !isRowHost
 
   return (
-    <li className="group flex items-center gap-3 rounded-xl px-2 py-2 transition hover:bg-black/[0.04]">
+    <li className="group flex items-center gap-3 rounded-xl px-2 py-2 transition hover:bg-white/[0.04]">
       <div
         className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[13px] font-semibold text-white"
         style={{ backgroundColor: avatarColor }}
       >{initial}</div>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-[#202124]">
+        <div className="flex items-center gap-1.5 truncate text-[13px] font-medium text-white">
           <span className="truncate">{name}{isSelf && ' (you)'}</span>
-          {isRowHost && <Crown className="h-3 w-3 shrink-0 text-amber-500" title="Host" />}
-          {isRowCohost && <ShieldCheck className="h-3 w-3 shrink-0 text-cyan-600" title="Co-host" />}
-          {raised && <Hand className="h-3 w-3 shrink-0 text-amber-500" title="Hand raised" />}
+          {isRowHost && <Crown className="h-3 w-3 shrink-0 text-[#FBBF24]" title="Host" />}
+          {isRowCohost && <ShieldCheck className="h-3 w-3 shrink-0 text-[#22D3EE]" title="Co-host" />}
+          {raised && <Hand className="h-3 w-3 shrink-0 text-[#FBBF24]" title="Hand raised" />}
         </div>
-        {ROLE_LABEL[role] && (
-          <div className="text-[11px] text-[#5f6368]">{ROLE_LABEL[role]}</div>
-        )}
+        <div className="text-[11px] text-[#94A3B8]">{ROLE_LABEL[role]}</div>
       </div>
 
-      <div className="flex items-center gap-1 text-[#5f6368]">
-        {micMuted && <MicOff className="h-3.5 w-3.5 text-[#9aa0a6]" />}
-        {camOff && <VideoOff className="h-3.5 w-3.5 text-[#9aa0a6]" />}
+      <div className="flex items-center gap-1 text-[#64748B]">
+        {micMuted && <MicOff className="h-3.5 w-3.5" />}
+        {camOff && <VideoOff className="h-3.5 w-3.5" />}
       </div>
 
       <div className="ml-1 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
@@ -130,19 +109,12 @@ const ParticipantRow = memo(function ParticipantRow({
           {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
         </RowBtn>
         {canPromote && (
-          <RowBtn
-            onClick={() => onPromote(uid)}
-            title={isRowCohost ? 'Demote' : 'Make co-host'}
-          >
+          <RowBtn onClick={() => onPromote(uid)} title={isRowCohost ? 'Demote' : 'Make co-host'}>
             <UserPlus className="h-3.5 w-3.5" />
           </RowBtn>
         )}
         {canKick && (
-          <RowBtn
-            onClick={() => onKick(uid, participant.name)}
-            title="Remove from meeting"
-            destructive
-          >
+          <RowBtn onClick={() => onKick(uid, participant.name)} title="Remove from meeting" destructive>
             <UserMinus className="h-3.5 w-3.5" />
           </RowBtn>
         )}
@@ -158,10 +130,10 @@ function RowBtn({ onClick, title, destructive, children }) {
       title={title}
       aria-label={title}
       className={
-        'grid h-7 w-7 place-items-center rounded-full transition ' +
+        'grid h-7 w-7 place-items-center rounded-full border-0 bg-transparent p-0 shadow-none transition ' +
         (destructive
-          ? 'text-[#ea4335] hover:bg-[#ea4335]/12'
-          : 'text-[#5f6368] hover:bg-black/[0.06] hover:text-[#202124]')
+          ? 'text-[#F87171] hover:bg-[#EF4444]/15'
+          : 'text-[#94A3B8] hover:bg-white/[0.08] hover:text-white')
       }
     >
       {children}
@@ -169,7 +141,7 @@ function RowBtn({ onClick, title, destructive, children }) {
   )
 }
 
-const COLORS = ['#5b8def', '#a16cf4', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#f472b6']
+const COLORS = ['#7C3AED', '#2563EB', '#10B981', '#F59E0B', '#EC4899', '#06B6D4', '#3B82F6', '#8B5CF6']
 function pickColor(seed) {
   if (!seed) return COLORS[0]
   let h = 0

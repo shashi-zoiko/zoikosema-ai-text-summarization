@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import {
   VideoTrack,
   useIsSpeaking,
@@ -6,10 +6,32 @@ import {
   useTrackMutedIndicator,
 } from '@livekit/components-react'
 import { ConnectionQuality, Track } from 'livekit-client'
-import { Hand, MicOff } from 'lucide-react'
+import { AlertTriangle, Eye, Hand, MicOff, MonitorUp, Square } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
-import { useRoomTheme } from '../RoomThemeContext.jsx'
 import { PinButton, PinnedNameIcon } from '../../../components/meeting/PinControls.jsx'
+
+// Enterprise dark palette (mirrors index.css meeting tokens).
+const CARD = '#151D2B'
+
+// Tint a hex accent to an rgba string for glows / soft rings.
+function withAlpha(hex, a) {
+  const h = (hex || '#10B981').replace('#', '')
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h
+  const n = parseInt(full, 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
+}
+
+// Google-Meet-style colourful tile canvas: a dark card washed with the
+// participant's accent in two opposite corners so each person's tile reads as a
+// distinct, saturated colour (not the same flat grey). The centre stays dark so
+// the avatar / name overlay keep their contrast.
+function tileBackground(accent) {
+  return (
+    `radial-gradient(135% 115% at 12% 0%, ${withAlpha(accent, 0.45)} 0%, transparent 58%),` +
+    `radial-gradient(135% 115% at 100% 100%, ${withAlpha(accent, 0.30)} 0%, transparent 55%),` +
+    `linear-gradient(150deg, ${withAlpha(accent, 0.12)} 0%, ${CARD} 60%)`
+  )
+}
 
 function identityToUserId(identity) {
   if (!identity || !identity.startsWith('u:')) return null
@@ -31,8 +53,7 @@ function useConnectionQuality(participant) {
   return quality
 }
 
-function ParticipantTileImpl({ trackRef, isHero }) {
-  const theme = useRoomTheme()
+function ParticipantTileImpl({ trackRef, isHero, fit = 'cover', accent }) {
   const { name, identity } = useParticipantInfo({ participant: trackRef.participant })
   const isSpeaking = useIsSpeaking(trackRef.participant)
   const quality = useConnectionQuality(trackRef.participant)
@@ -58,120 +79,294 @@ function ParticipantTileImpl({ trackRef, isHero }) {
   })
 
   const isPinned = pinnedIdentity === identity
+  const isSelf = !!trackRef.participant?.isLocal
   const onPinToggle = useCallback(
     (e) => { e.stopPropagation(); togglePinned(identity) },
     [identity, togglePinned],
   )
 
+  // The presenter must NOT see their own screen-share rendered back into the
+  // stage: if they shared the tab/window that contains this meeting, painting
+  // the capture here feeds it straight back into the capture → infinite "hall of
+  // mirrors". Remote participants still get the live frame; the presenter gets a
+  // calm placeholder, exactly like Google Meet ("You're presenting").
+  const isOwnScreenShare =
+    trackRef.source === Track.Source.ScreenShare && trackRef.participant?.isLocal
+
   const hasVideo = !!trackRef.publication && !videoMuted
   const displayName = name || identity || 'Guest'
   // Deterministic colour per identity so the same user always gets the same
-  // tile background — Meet does the same trick.
+  // avatar — Meet does the same trick.
   const avatarColor = pickColor(identity || displayName)
+  // Per-participant accent assigned by Stage from a fixed palette. Falls back to
+  // the deterministic avatar colour when a tile is rendered outside Stage.
+  const tileAccent = accent || avatarColor
 
   // Mask the gap between "track subscribed" and "first frame decoded". That
   // gap is keyframe latency — short on a healthy link, but long when the
-  // publisher's encoder is starved (e.g. heavy local effects) or the network
-  // is poor. Without this the remote tile showed a BLACK rectangle until the
-  // first keyframe landed; now we keep the avatar up until the <video> paints,
-  // exactly like Meet/Zoom.
+  // publisher's encoder is starved or the network is poor. Without this the
+  // remote tile showed a BLACK rectangle until the first keyframe landed; now
+  // we keep the avatar up until the <video> paints, exactly like Meet/Zoom.
   const [videoReady, setVideoReady] = useState(false)
   const trackSid = trackRef.publication?.trackSid
   useEffect(() => {
     setVideoReady(false)
     if (!hasVideo) return undefined
-    // Safety net: reveal the video even if the load event never fires, so a
-    // working stream can never get stuck hidden behind the placeholder.
     const t = setTimeout(() => setVideoReady(true), 6000)
     return () => clearTimeout(t)
   }, [trackSid, hasVideo])
   const onVideoLive = useCallback(() => setVideoReady(true), [])
 
+  // Local presenter self-view: hidden by default to break the "hall of mirrors"
+  // loop. `showMirror` opts into the live self-preview for testing.
+  const [showMirror, setShowMirror] = useState(false)
+  const stopOwnShare = useCallback(() => {
+    trackRef.participant?.setScreenShareEnabled?.(false)?.catch?.(() => {})
+  }, [trackRef.participant])
+
+  // ── Local presenter self-view ───────────────────────────────────────────────
+  if (isOwnScreenShare) {
+    if (showMirror) {
+      return (
+        <div className="group relative isolate h-full w-full overflow-hidden rounded-[20px] bg-black ring-1 ring-[#263244]">
+          {hasVideo && (
+            <VideoTrack trackRef={trackRef} className="absolute inset-0 h-full w-full bg-black object-contain" />
+          )}
+          <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[#F59E0B] px-3 py-1 text-[12px] font-semibold text-[#0B1220] shadow-md">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Mirror preview — this is your own screen
+          </div>
+          <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 p-3">
+            <button
+              type="button"
+              onClick={() => setShowMirror(false)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-3.5 text-[13px] font-medium text-white ring-1 ring-white/15 backdrop-blur-md transition hover:bg-white/20"
+            >
+              <Eye className="h-4 w-4" />
+              Hide preview
+            </button>
+            <button
+              type="button"
+              onClick={stopOwnShare}
+              className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[#EF4444] px-3.5 text-[13px] font-semibold text-white shadow-lg transition hover:bg-[#DC2626]"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+              Stop sharing
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <div
+        className="group relative isolate grid h-full w-full place-items-center overflow-hidden rounded-[20px] ring-1 ring-[#263244]"
+        style={{ background: CARD }}
+        role="img"
+        aria-label="You are presenting your screen to everyone"
+      >
+        <div className="flex max-w-md flex-col items-center gap-4 px-6 text-center">
+          <div className="grid h-16 w-16 place-items-center rounded-full bg-[#10B981] text-[#0B1220] shadow-lg">
+            <MonitorUp className="h-7 w-7" />
+          </div>
+          <div>
+            <div className="text-lg font-semibold text-white">You're presenting</div>
+            <p className="mt-1 text-sm text-[#94A3B8]">
+              Everyone else can see your screen. Your own view is hidden here to
+              prevent a mirror loop.
+            </p>
+          </div>
+
+          <div className="flex items-start gap-2.5 rounded-xl bg-[#F59E0B]/10 px-3.5 py-2.5 text-left ring-1 ring-[#F59E0B]/25">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#FBBF24]" />
+            <p className="text-[12.5px] leading-snug text-[#FBBF24]">
+              If you're sharing the window that contains this meeting, previewing
+              it may create a repeated mirror effect.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowMirror(true)}
+              className="inline-flex h-10 items-center gap-1.5 rounded-full bg-white/10 px-4 text-[13px] font-medium text-white ring-1 ring-white/15 transition hover:bg-white/20"
+            >
+              <Eye className="h-4 w-4" />
+              Continue to preview
+            </button>
+            <button
+              type="button"
+              onClick={stopOwnShare}
+              className="inline-flex h-10 items-center gap-1.5 rounded-full bg-[#EF4444] px-4 text-[13px] font-semibold text-white shadow-lg transition hover:bg-[#DC2626]"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+              Stop sharing
+            </button>
+          </div>
+        </div>
+
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
+          <div className="flex items-center gap-1.5 rounded-lg bg-black/50 px-2.5 py-1 text-[12.5px] font-medium text-white ring-1 ring-white/10 backdrop-blur-md">
+            <MonitorUp className="h-3.5 w-3.5" />
+            <span className="truncate">Your screen</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const speaking = isSpeaking && !micMuted
+  // Live status shown under the name: Muted (red) · Speaking (accent) · Active.
+  const statusText = micMuted ? 'Muted' : speaking ? 'Speaking' : 'Active'
+  const statusColor = micMuted ? '#F87171' : speaking ? tileAccent : '#34D399'
+
   return (
     <div
-      onDoubleClick={onPinToggle}
-      title="Double-click to pin"
       className={
-        'group relative isolate aspect-video overflow-hidden rounded-2xl transition-shadow ' +
-        (isSpeaking ? 'ring-2' : 'ring-1 ring-white/10')
+        'group relative isolate h-full w-full overflow-hidden rounded-[28px] ' +
+        'transition-[transform,box-shadow] duration-[250ms] ease-out ' +
+        (speaking ? 'zk-tile-speak scale-[1.015]' : 'zk-tile-rest')
       }
-      style={isSpeaking ? { boxShadow: `0 0 0 2px ${theme.accent}` } : undefined}
+      style={{
+        // Colourful per-participant canvas (Google-Meet style), plus accent
+        // custom props that drive the rest / speaking glow keyframes in CSS so
+        // every tile carries a dense accent border and the active speaker pulses
+        // brightly in their own colour — the Teams / Discord "who's talking" cue.
+        background: tileBackground(tileAccent),
+        '--tile-accent': tileAccent,
+        '--tile-soft': withAlpha(tileAccent, 0.55),
+        '--tile-faint': withAlpha(tileAccent, 0.18),
+        '--tile-glow': withAlpha(tileAccent, 0.5),
+        '--tile-glow-soft': withAlpha(tileAccent, 0.32),
+      }}
     >
-      {/* Render the video as soon as the track exists so it can start decoding,
-          but keep the avatar overlaid on top until the first frame paints
-          (videoReady) so a subscribe/keyframe delay shows the avatar, not black. */}
       {hasVideo && (
         <VideoTrack
           trackRef={trackRef}
           onLoadedData={onVideoLive}
           onPlaying={onVideoLive}
-          className="absolute inset-0 h-full w-full object-cover"
+          className={
+            'absolute inset-0 h-full w-full ' +
+            (fit === 'contain' ? 'bg-black object-contain' : 'object-cover')
+          }
         />
       )}
+
       {(!hasVideo || !videoReady) && (
-        <div
-          className="absolute inset-0 grid place-items-center"
-          style={{ background: theme.tileBg }}
-        >
-          <div
-            className={
-              'grid place-items-center rounded-full font-semibold text-white ' +
-              (isHero ? 'h-36 w-36 text-5xl' : 'h-24 w-24 text-3xl')
-            }
-            style={{
-              backgroundColor: avatarColor,
-              boxShadow: `0 0 0 1px rgba(255,255,255,0.18), 0 0 0 5px color-mix(in srgb, ${theme.accent} 22%, transparent), 0 18px 44px -18px rgba(0,0,0,0.65)`,
-            }}
-          >
-            {displayName.slice(0, 1).toUpperCase()}
+        <div className="absolute inset-0 grid place-items-center" style={{ background: tileBackground(tileAccent) }}>
+          <div className="flex flex-col items-center gap-3.5">
+            <div
+              className={
+                'grid place-items-center rounded-full font-semibold text-white ' +
+                (isHero ? 'h-32 w-32 text-5xl' : 'h-24 w-24 text-3xl')
+              }
+              style={{
+                background: `linear-gradient(145deg, ${withAlpha(tileAccent, 1)} 0%, ${withAlpha(tileAccent, 0.7)} 100%)`,
+                boxShadow: speaking
+                  ? `0 0 0 3px ${tileAccent}, 0 0 0 10px ${withAlpha(tileAccent, 0.18)}, 0 0 28px 2px ${withAlpha(tileAccent, 0.5)}`
+                  : `inset 0 1px 0 rgba(255,255,255,0.25), 0 0 0 4px ${withAlpha(tileAccent, 0.12)}, 0 8px 24px -8px ${withAlpha(tileAccent, 0.5)}`,
+              }}
+            >
+              {displayName.slice(0, 1).toUpperCase()}
+            </div>
+            {speaking ? (
+              <VoiceBars participant={trackRef.participant} accent={tileAccent} />
+            ) : (
+              <span className="text-[12.5px] font-medium text-[#94A3B8]">Camera off</span>
+            )}
           </div>
         </div>
       )}
 
-      {/* Hand raised — top-left, warm gradient chip (matches mesh PeerTile) */}
+      {/* Hand raised — top-left chip */}
       {raised && (
-        <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-gradient-to-b from-amber-300 to-amber-400 text-amber-950 shadow-[0_4px_12px_-3px_rgba(217,119,6,0.6),inset_0_1px_0_rgba(255,255,255,0.5)] ring-1 ring-white/40" title="Hand raised">
+        <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-[#F59E0B] text-[#0B1220] shadow-lg ring-1 ring-white/20" title="Hand raised">
           <Hand className="h-4 w-4" />
         </div>
       )}
 
-      {/* Mic-off badge — top-right, glass chip */}
+      {/* Mic-off badge — top-right */}
       {micMuted && (
-        <div className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/45 text-white shadow-sm ring-1 ring-white/15 backdrop-blur-md" title="Muted">
-          <MicOff className="h-4 w-4 text-[#ff6b5e]" />
+        <div className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/55 text-[#F87171] ring-1 ring-white/10 backdrop-blur-md" title="Muted">
+          <MicOff className="h-4 w-4" />
         </div>
       )}
 
-      {/* Pin button — hover-revealed on desktop, always visible on touch,
-          slides left to clear the mic-off badge when present. */}
-      <PinButton
-        pinned={isPinned}
-        onClick={onPinToggle}
-        shifted={micMuted}
-        groupName=""
-      />
+      <PinButton pinned={isPinned} onClick={onPinToggle} shifted={micMuted} groupName="" />
 
       <QualityBars quality={quality} />
 
-      {/* Bottom scrim — keeps the name pill legible over bright video. */}
+      {/* Bottom scrim for legibility over bright video. */}
       {hasVideo && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/35 to-transparent" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/65 to-transparent" />
       )}
 
-      {/* Bottom name pill — glass chip (matches mesh PeerTile) */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
-        <div className="flex items-center gap-1.5 rounded-lg bg-black/45 px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
-          {isPinned && <PinnedNameIcon />}
-          <span className="truncate">{displayName}</span>
+      {/* Bottom-left identity block — name line + live status line. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3.5">
+        <div className="flex max-w-[calc(100%-2rem)] flex-col gap-1 rounded-xl bg-black/45 px-2.5 py-1.5 ring-1 ring-white/10 backdrop-blur-md">
+          <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-white">
+            {isPinned && <PinnedNameIcon />}
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tileAccent }} />
+            <span className="truncate">{displayName}{isSelf && ' (You)'}</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-[11px] font-medium leading-none">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: statusColor }} />
+            <span style={{ color: statusColor }}>{statusText}</span>
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-// Cheap deterministic colour hash. Same algorithm we use in the chat avatar
-// helper so a participant looks the same across rooms.
-const COLORS = ['#5b8def', '#a16cf4', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#f472b6']
+/**
+ * Live voice visualizer — five bars driven by the participant's real LiveKit
+ * audio level (0‒1), polled on rAF and written straight to the DOM so the whole
+ * tile never re-renders. Mounts only while the participant is speaking.
+ */
+const BAR_FACTORS = [0.55, 0.85, 1, 0.85, 0.55]
+function VoiceBars({ participant, accent }) {
+  const barsRef = useRef([])
+  useEffect(() => {
+    if (!participant) return undefined
+    let raf = 0
+    const tick = () => {
+      const level = Math.min(1, (participant.audioLevel || 0) * 2.4)
+      for (let i = 0; i < barsRef.current.length; i++) {
+        const el = barsRef.current[i]
+        if (el) el.style.transform = `scaleY(${(0.22 + level * BAR_FACTORS[i] * 0.78).toFixed(3)})`
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [participant])
+
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <div className="flex h-5 items-end gap-[3px]">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <span
+            key={i}
+            ref={(el) => { barsRef.current[i] = el }}
+            className="block w-1 rounded-full"
+            style={{
+              height: '100%',
+              background: accent,
+              transformOrigin: 'bottom',
+              transform: 'scaleY(0.22)',
+              transition: 'transform 90ms linear',
+            }}
+          />
+        ))}
+      </div>
+      <span className="text-[12.5px] font-medium" style={{ color: accent }}>Speaking…</span>
+    </div>
+  )
+}
+
+// Professional avatar palette — purple / blue / green / orange / pink / cyan.
+const COLORS = ['#7C3AED', '#2563EB', '#10B981', '#F59E0B', '#EC4899', '#06B6D4', '#3B82F6', '#8B5CF6']
 function pickColor(seed) {
   if (!seed) return COLORS[0]
   let h = 0
@@ -183,34 +378,29 @@ export const ParticipantTile = memo(
   ParticipantTileImpl,
   (a, b) =>
     a.trackRef.publication?.trackSid === b.trackRef.publication?.trackSid &&
-    a.isHero === b.isHero,
+    a.trackRef.participant === b.trackRef.participant &&
+    a.isHero === b.isHero &&
+    a.fit === b.fit &&
+    a.accent === b.accent,
 )
 
 function QualityBars({ quality }) {
-  // EXCELLENT=2, GOOD=1, POOR=0, LOST=-1, UNKNOWN=undefined. We render three
-  // bars and fill 1-3 based on quality. Lost = red, others = ascending green.
-  if (quality === undefined || quality === ConnectionQuality.Excellent) {
-    // Hide chrome when quality is good — fewer pixels for the common case.
-    return null
-  }
+  // EXCELLENT=2, GOOD=1, POOR=0, LOST=-1, UNKNOWN=undefined. Hide chrome when
+  // quality is good — fewer pixels for the common case.
+  if (quality === undefined || quality === ConnectionQuality.Excellent) return null
   const tone =
     quality === ConnectionQuality.Lost
-      ? 'bg-red-500'
+      ? 'bg-[#EF4444]'
       : quality === ConnectionQuality.Poor
-        ? 'bg-amber-500'
-        : 'bg-emerald-500'
-  const fillBars =
-    quality === ConnectionQuality.Lost ? 1
-      : quality === ConnectionQuality.Poor ? 1
-        : 2 // Good
+        ? 'bg-[#F59E0B]'
+        : 'bg-[#10B981]'
+  const fillBars = quality === ConnectionQuality.Lost ? 1 : quality === ConnectionQuality.Poor ? 1 : 2
   return (
-    <div className="absolute bottom-2 right-2 flex items-end gap-0.5 bg-black/60 rounded px-1 py-0.5" title={`Network: ${quality}`}>
+    <div className="absolute bottom-2 right-2 flex items-end gap-0.5 rounded bg-black/60 px-1 py-0.5" title={`Network: ${quality}`}>
       {[1, 2, 3].map((i) => (
         <span
           key={i}
-          className={
-            `block w-1 rounded-sm ${i <= fillBars ? tone : 'bg-zinc-600'}`
-          }
+          className={`block w-1 rounded-sm ${i <= fillBars ? tone : 'bg-[#334155]'}`}
           style={{ height: `${i * 4 + 2}px` }}
         />
       ))}

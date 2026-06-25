@@ -397,40 +397,42 @@ h4 { line-height: 1.40; font-weight: 600; }
      the components; what lives here is the depth/motion Tailwind can't.
      ═══════════════════════════════════════════════════════════════════ */
 
-  /* Meeting button colour semantics — exposed as vars so dock + tiles +
-     panels all pull from one palette (mic green, cam blue, share purple,
-     hand cyan, reactions amber, danger red). */
+  /* ═══════════════════════════════════════════════════════════════════
+     MEETING — Enterprise dark palette (single fixed theme, no green wash,
+     no wallpapers, no decorative gradients). Surfaces:
+       canvas  #0B1220   secondary #111827   card #151D2B
+       hover   #1E293B   border    #263244
+       primary #10B981 / hover #059669   danger #EF4444 / #DC2626
+       text    #FFFFFF / secondary #94A3B8
+     ═══════════════════════════════════════════════════════════════════ */
   :root {
-    --zk-mic:    #16a34a;  /* unmuted   */
-    --zk-cam:    #2563eb;  /* camera on */
-    --zk-share:  #7c3aed;  /* presenting */
-    --zk-hand:   #0891b2;  /* raise hand */
-    --zk-react:  #d97706;  /* reactions */
-    --zk-danger: #ea4335;  /* muted / leave / off */
-    --zk-active: #1a73e8;  /* selected / speaking */
+    --zk-canvas:    #0B1220;
+    --zk-surface:   #111827;
+    --zk-card:      #151D2B;
+    --zk-hover:     #1E293B;
+    --zk-border:    #263244;
+    --zk-primary:   #10B981;
+    --zk-primary-h: #059669;
+    --zk-danger:    #EF4444;
+    --zk-danger-h:  #DC2626;
+    --zk-text:      #FFFFFF;
+    --zk-text-dim:  #94A3B8;
+    --zk-active:    #10B981;  /* selected / speaking */
   }
 
-  /* Ambient room backdrop — soft, slowly-drifting colour wash behind the
-     stage. Replaces the flat #f1f3f4 with layered depth without stealing
-     attention from video tiles. */
-  .zk-room-bg {
-    background:
-      radial-gradient(1200px 680px at 82% -12%, rgba(124, 58, 237, 0.10), transparent 60%),
-      radial-gradient(1000px 620px at -8% 112%, rgba(37, 99, 235, 0.10), transparent 58%),
-      radial-gradient(900px 520px at 50% 120%, rgba(22, 163, 74, 0.06), transparent 60%),
-      linear-gradient(180deg, #eef1f6 0%, #e9edf3 100%);
-  }
+  /* Flat enterprise canvas behind the stage — no gradients, no green. */
+  .zk-room-bg { background: var(--zk-canvas); }
 
-  /* Frosted-glass control dock — layered depth, hairline highlight. */
+  /* Floating control dock — solid dark capsule, hairline border, soft lift. */
   .zk-dock {
-    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(255,255,255,0.80));
-    backdrop-filter: blur(24px) saturate(185%);
-    -webkit-backdrop-filter: blur(24px) saturate(185%);
-    border: 1px solid rgba(255,255,255,0.7);
+    background: color-mix(in srgb, var(--zk-surface) 92%, transparent);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--zk-border);
     box-shadow:
-      0 22px 52px -18px rgba(15,23,42,0.34),
-      0 6px 16px -6px rgba(15,23,42,0.14),
-      inset 0 1px 0 rgba(255,255,255,0.9);
+      0 20px 50px -18px rgba(0,0,0,0.70),
+      0 4px 14px -6px rgba(0,0,0,0.50),
+      inset 0 1px 0 rgba(255,255,255,0.04);
   }
   .zk-dock-enter { animation: zk-dock-enter 360ms cubic-bezier(0.16,1,0.3,1) both; }
   @keyframes zk-dock-enter {
@@ -438,30 +440,69 @@ h4 { line-height: 1.40; font-weight: 600; }
     100% { opacity: 1; transform: translateY(0)    scale(1);     }
   }
 
-  /* Glass side panel / popover surface (chat, people, settings, menus). */
+  /* Dark drawer / popover surface (chat, people, settings, menus). */
   .zk-glass {
-    background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,255,255,0.90));
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    background: var(--zk-surface);
+    border: 1px solid var(--zk-border);
     box-shadow:
-      0 24px 60px -22px rgba(15,23,42,0.32),
-      inset 0 1px 0 rgba(255,255,255,0.85);
+      0 24px 60px -22px rgba(0,0,0,0.75),
+      inset 0 1px 0 rgba(255,255,255,0.03);
   }
 
-  /* Active-speaker tile glow — a calm breathing ring, never a hard border. */
+  /* Active-speaker tile glow — calm breathing green ring (the brand accent). */
   @keyframes zk-speak-glow {
-    0%, 100% { box-shadow: 0 0 0 2.5px var(--zk-active), 0 0 0 7px rgba(26,115,232,0.16), 0 14px 34px -14px rgba(26,115,232,0.55); }
-    50%      { box-shadow: 0 0 0 2.5px var(--zk-active), 0 0 0 11px rgba(26,115,232,0.07), 0 18px 40px -14px rgba(26,115,232,0.6); }
+    0%, 100% { box-shadow: 0 0 0 2px var(--zk-active), 0 0 0 6px rgba(16,185,129,0.18), 0 14px 34px -14px rgba(16,185,129,0.40); }
+    50%      { box-shadow: 0 0 0 2px var(--zk-active), 0 0 0 9px rgba(16,185,129,0.08), 0 18px 40px -14px rgba(16,185,129,0.46); }
   }
   .zk-tile-speaking { animation: zk-speak-glow 2.6s ease-in-out infinite; }
 
+  /* Per-participant tile chrome. Both states read the tile's own accent from
+     --tile-accent / --tile-soft / --tile-glow custom props (set inline on each
+     tile) so every person glows in their assigned colour — Meet/Discord style.
+     Resting tiles get a dense, vivid accent border; the active speaker pulses
+     a bright ring + outer halo so "who's talking" is unmistakable. */
+  .zk-tile-rest {
+    box-shadow:
+      0 0 0 1.5px var(--tile-soft, rgba(16,185,129,0.5)),
+      0 0 22px -4px var(--tile-glow-soft, rgba(16,185,129,0.32)),
+      0 12px 34px -16px rgba(0,0,0,0.55);
+  }
+  @keyframes zk-tile-speak {
+    0%, 100% {
+      box-shadow:
+        0 0 0 2.5px var(--tile-accent, #10B981),
+        0 0 0 6px var(--tile-faint, rgba(16,185,129,0.18)),
+        0 0 26px 1px var(--tile-glow, rgba(16,185,129,0.5)),
+        0 22px 55px -18px var(--tile-glow, rgba(16,185,129,0.5));
+    }
+    50% {
+      box-shadow:
+        0 0 0 3px var(--tile-accent, #10B981),
+        0 0 0 10px var(--tile-faint, rgba(16,185,129,0.18)),
+        0 0 42px 6px var(--tile-glow, rgba(16,185,129,0.5)),
+        0 22px 55px -18px var(--tile-glow, rgba(16,185,129,0.5));
+    }
+  }
+  .zk-tile-speak { animation: zk-tile-speak 1.8s ease-in-out infinite; }
+
+  /* Speaking equalizer — five bars bouncing off staggered delays. */
+  @keyframes zk-eq {
+    0%, 100% { transform: scaleY(0.30); }
+    50%      { transform: scaleY(1);    }
+  }
+  .zk-eq-bar {
+    transform-origin: bottom;
+    animation: zk-eq 0.9s ease-in-out infinite;
+    will-change: transform;
+  }
+
   /* Resting tile elevation — soft, layered, premium. */
   .zk-tile {
-    box-shadow: 0 10px 30px -16px rgba(15,23,42,0.45), 0 2px 6px -3px rgba(15,23,42,0.18);
+    box-shadow: 0 10px 30px -16px rgba(0,0,0,0.55), 0 2px 6px -3px rgba(0,0,0,0.35);
     transition: box-shadow 220ms ease, transform 220ms ease;
   }
   .zk-tile-spotlight {
-    box-shadow: 0 24px 60px -24px rgba(15,23,42,0.55), 0 4px 12px -4px rgba(15,23,42,0.2);
+    box-shadow: 0 24px 60px -24px rgba(0,0,0,0.65), 0 4px 12px -4px rgba(0,0,0,0.4);
   }
 
   /* Pressable control — hover lift + press settle, GPU-cheap. */
@@ -495,6 +536,36 @@ h4 { line-height: 1.40; font-weight: 600; }
   }
   .zk-toast-in { animation: zk-toast-in 240ms cubic-bezier(0.16,1,0.3,1) both; }
 
+  /* Notification center — slide in from the right (Meet/Slack style), fade out
+     on dismiss. */
+  @keyframes zk-notif-in {
+    0%   { opacity: 0; transform: translateX(24px) scale(0.98); }
+    100% { opacity: 1; transform: translateX(0)    scale(1);    }
+  }
+  @keyframes zk-notif-out {
+    0%   { opacity: 1; transform: translateX(0)    scale(1);    }
+    100% { opacity: 0; transform: translateX(16px) scale(0.98); }
+  }
+  .zk-notif-in  { animation: zk-notif-in 300ms cubic-bezier(0.16,1,0.3,1) both; }
+  .zk-notif-out { animation: zk-notif-out 220ms ease-in both; }
+
+  /* Unread/attention badge — the floating counter pulses by scaling, Teams /
+     Meet style. It sits OUTSIDE the button (top-right) and must grab the eye. */
+  @keyframes zk-badge-pop {
+    0%,100% { transform: scale(1);    }
+    50%     { transform: scale(1.15); }
+  }
+  .zk-badge-pop { animation: zk-badge-pop 1.5s ease-in-out infinite; }
+
+  /* Dock button "has unread/attention" glow — soft halo + slow pulse. The colour
+     is driven by --zk-glow (an "R G B" triple) so chat (red), people (emerald)
+     and raised-hand (amber) buttons share one keyframe. */
+  @keyframes zk-unread-glow {
+    0%,100% { box-shadow: 0 0 0 0  rgb(var(--zk-glow, 239 68 68) / 0);    }
+    50%     { box-shadow: 0 0 16px 2px rgb(var(--zk-glow, 239 68 68) / 0.45); }
+  }
+  .zk-unread-glow { animation: zk-unread-glow 2s ease-in-out infinite; }
+
   @media (prefers-reduced-motion: reduce) {
     .zk-reaction-rise { animation-duration: 0.6s; }
     .zk-stage-fade,
@@ -503,7 +574,12 @@ h4 { line-height: 1.40; font-weight: 600; }
     .zk-dock-enter,
     .zk-pop-in,
     .zk-toast-in,
+    .zk-notif-in,
+    .zk-badge-pop,
+    .zk-unread-glow,
+    .zk-tile-speak,
     .zk-tile-speaking { animation-duration: 0ms; }
+    .zk-notif-out { animation-duration: 0ms; }
     .zk-stage-hero,
     .zk-tile,
     .zk-press { transition: none; }
@@ -749,4 +825,13 @@ textarea { resize: vertical; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Manual "Reduce motion" toggle (Meeting → Settings → Accessibility). */
+[data-reduce-motion="1"] *,
+[data-reduce-motion="1"] *::before,
+[data-reduce-motion="1"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
 }

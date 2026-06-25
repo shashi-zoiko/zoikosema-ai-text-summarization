@@ -5,8 +5,8 @@ import {
   RoomAudioRenderer,
   useConnectionState,
 } from '@livekit/components-react'
-import { ConnectionState, DisconnectReason, Track, VideoPresets } from 'livekit-client'
-import { PencilLine, UserPlus, X } from 'lucide-react'
+import { ConnectionState, DisconnectReason, ScreenSharePresets, Track, VideoPresets } from 'livekit-client'
+import { PencilLine, UserPlus } from 'lucide-react'
 import '@livekit/components-styles'
 
 import { fetchMediaToken } from './api/media.js'
@@ -15,27 +15,31 @@ import { api } from '../../api/client.js'
 import { useAuth } from '../../context/AuthContext.jsx'
 
 import Stage from './components/Stage.jsx'
+import PresenterBanner from './components/PresenterBanner.jsx'
+import PresenterPiP from './components/PresenterPiP.jsx'
 import MeetingDock from '../../components/meeting/MeetingDock.jsx'
+import MeetingHeader from './components/MeetingHeader.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
 import WaitingRoomPanel from './components/WaitingRoomPanel.jsx'
-import HostMenu from './components/HostMenu.jsx'
-import DevicePicker from './components/DevicePicker.jsx'
 import ReactionOverlay from './components/ReactionOverlay.jsx'
 import ParticipantsPanel from './components/ParticipantsPanel.jsx'
+import SettingsDrawer from './components/SettingsDrawer.jsx'
+import MeetingInfoDrawer from './components/MeetingInfoDrawer.jsx'
 import CaptionsOverlay from './components/CaptionsOverlay.jsx'
-import ThemePicker from './ThemePicker.jsx'
-import { RoomThemeProvider } from './RoomThemeContext.jsx'
-import { getTheme, DEFAULT_THEME_ID } from './roomThemes.js'
 import { backgroundEffectsSupported } from './backgroundEngine.js'
 import { getPreset, NONE_EFFECT } from './backgroundPresets.js'
 import { LkBackgroundProcessor } from './lkBackgroundProcessor.js'
 import Whiteboard from '../../components/Whiteboard.jsx'   // reused from legacy
 import useMeetingControlWs from './hooks/useMeetingControlWs.js'
 import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
-import useMutedWhileSpeaking from './hooks/useMutedWhileSpeaking.js'
 import { useLocalParticipant, useMediaDeviceSelect, useRoomContext } from '@livekit/components-react'
 import { useCaptions } from './components/CaptionsOverlay.jsx'
 import { useRoomStore } from './state/roomStore.js'
+import { NotificationProvider, useNotifications } from './notify/NotificationProvider.jsx'
+
+// Flat enterprise canvas — one fixed dark theme, no meeting-wide theme picker,
+// no ambient green wash. The surface tokens live in index.css (.zk-room-bg etc.).
+const CANVAS = '#0B1220'
 
 const ROOM_OPTIONS = {
   adaptiveStream: true,
@@ -43,6 +47,13 @@ const ROOM_OPTIONS = {
   publishDefaults: {
     simulcast: true,
     videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
+    // Screen-share publish defaults — keep shared content sharp. Camera tracks
+    // top out at 720p (above) because faces don't need more, but a shared screen
+    // is full of fine text/UI, so it gets its own high-bitrate ladder and is
+    // told to drop frame-rate before resolution (text legibility > motion).
+    screenShareEncoding: ScreenSharePresets.h1080fps30.encoding,
+    screenShareSimulcastLayers: [ScreenSharePresets.h720fps15, ScreenSharePresets.h1080fps30],
+    degradationPreference: 'maintain-resolution',
     dtx: true,
     red: true,
   },
@@ -51,10 +62,44 @@ const ROOM_OPTIONS = {
   },
 }
 
+// Screen-capture request — ask the browser for a high-res, high-fps surface and
+// hint the encoder that the content is detailed text/UI (not motion video) so it
+// favours sharpness over smoothness. `surfaceSwitching`/`selfBrowserSurface` let
+// the presenter swap the shared tab without re-opening the picker.
+const SCREEN_CAPTURE_OPTIONS = {
+  audio: true,
+  contentHint: 'detail',
+  resolution: VideoPresets.h1440.resolution, // 2560×1440 target
+  selfBrowserSurface: 'include',
+  surfaceSwitching: 'include',
+  systemAudio: 'include',
+}
+
+// Per-publish overrides applied when screen-share starts (mirrors the room
+// defaults but pins them at the call site so they win regardless of defaults).
+const SCREEN_PUBLISH_OPTIONS = {
+  simulcast: true,
+  videoEncoding: ScreenSharePresets.h1080fps30.encoding,
+  screenShareEncoding: ScreenSharePresets.h1080fps30.encoding,
+  screenShareSimulcastLayers: [ScreenSharePresets.h720fps15, ScreenSharePresets.h1080fps30],
+  degradationPreference: 'maintain-resolution',
+}
+
 export default function MeetRoomLivekit() {
+  // The notification engine wraps the whole room so toasts/lobby cards/sounds
+  // are available to the room body AND to LiveKit-context children (join/leave).
+  return (
+    <NotificationProvider>
+      <MeetRoom />
+    </NotificationProvider>
+  )
+}
+
+function MeetRoom() {
   const { code } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { notify, notifyChat, syncLobby, registerLobbyActions } = useNotifications()
 
   // Mic/camera choice the user made in the lobby (persisted there before
   // navigating). The room must honour it — hardcoding `audio video` on
@@ -83,10 +128,9 @@ export default function MeetRoomLivekit() {
   const [recording, setRecording] = useState({ recording: false, recording_id: null })
 
   // Local UI state
-  const [sidebar, setSidebar] = useState(null) // 'chat' | 'waiting' | 'people' | 'theme' | null
-  // Meeting-wide visual theme (host-controlled, synced over the control WS) and
-  // the local grid/speaker layout preference (per-viewer, not synced).
-  const [themeId, setThemeId] = useState(DEFAULT_THEME_ID)
+  const [sidebar, setSidebar] = useState(null) // 'chat' | 'waiting' | 'people' | 'info' | 'settings' | null
+  const [settingsTab, setSettingsTab] = useState('audio') // active tab when sidebar==='settings'
+  // Per-viewer grid/speaker preference (local only, never synced).
   const [layout, setLayout] = useState('grid') // 'grid' | 'speaker'
 
   // Virtual background — LOCAL per-participant camera effect (blur / image),
@@ -100,25 +144,21 @@ export default function MeetRoomLivekit() {
   const [cameraOn, setCameraOn] = useState(false)
   const [chatMessages, setChatMessages] = useState([])
   const [unreadChat, setUnreadChat] = useState(0)
-  const [unreadWaiting, setUnreadWaiting] = useState(0)
   const [showEmoji, setShowEmoji] = useState(false)
-  const [showDevices, setShowDevices] = useState(false)
   const [showWhiteboard, setShowWhiteboard] = useState(false)
   const [wbStrokes, setWbStrokes] = useState([])  // remote strokes from WS
   const { byPeer: liveCaptions, push: pushCaption } = useCaptions()
-  const [toasts, setToasts] = useState([]) // [{ id, kind, text }]
-  const toastIdRef = useRef(0)
-  const pushToast = useCallback((t) => {
-    if (!t || !t.text) return
-    const id = ++toastIdRef.current
-    setToasts((prev) => [...prev.slice(-3), { id, ...t }])
-    setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 3500)
-  }, [])
-  // legacy single-toast API used by recording/permission-denied paths
-  const setToast = pushToast
+  const joinedAtRef = useRef(null) // wall-clock ms when media token landed → header timer
+  // Bridge the legacy { kind, text } toast API onto the notification engine so
+  // recording / permission-denied / error paths keep working unchanged.
+  const setToast = useCallback(({ kind, text, title } = {}) => {
+    const type = kind === 'error' ? 'error' : kind === 'success' ? 'success' : 'info'
+    notify(type, { title, text })
+  }, [notify])
   const msgKeyRef = useRef(0)
 
   const reactions = useRoomStore((s) => s.reactions)
+  const raisedHandsCount = useRoomStore((s) => s.raisedHands.size)
   const pushReaction = useRoomStore((s) => s.pushReaction)
   const setHand = useRoomStore((s) => s.setHand)
   const setRole = useRoomStore((s) => s.setRole)
@@ -144,7 +184,6 @@ export default function MeetRoomLivekit() {
           chat_enabled: !!data.meeting?.chat_enabled,
           screenshare_enabled: !!data.meeting?.screenshare_enabled,
         })
-        if (data.meeting?.theme) setThemeId(data.meeting.theme)
         // Seed the role map: self + every peer already in the room.
         const entries = []
         if (data.self?.user_id) entries.push([data.self.user_id, data.role || 'participant'])
@@ -157,22 +196,58 @@ export default function MeetRoomLivekit() {
         if (p?.user_id) setRole(p.user_id, p.role || 'participant')
       } else if (t === 'role-changed') {
         if (typeof data.user_id === 'number') setRole(data.user_id, data.role)
+        if (data.user_id === user?.id) {
+          setMyRole(data.role)
+          notify('host-transfer', {
+            title: data.role === 'co_host' ? 'You are now a co-host' : 'Co-host role removed',
+            text: data.role === 'co_host'
+              ? 'You can admit guests and manage the meeting.'
+              : 'Your co-host privileges were removed.',
+          })
+        }
       } else if (t === 'chat') {
         const msg = { ...data, _key: ++msgKeyRef.current }
         setChatMessages((prev) => [...prev, msg])
-        if (sidebar !== 'chat') setUnreadChat((n) => n + 1)
+        // Sound + badge + toast only for OTHERS' messages (the server echoes the
+        // sender's own message back to them). When the chat panel is already
+        // open we stay silent unless it's a direct @mention — the user is
+        // already reading, so a sound/toast per message would just be noise.
+        if (data.user_id !== user?.id) {
+          const chatClosed = sidebar !== 'chat'
+          const mention = mentionsMe(data.body, user?.name)
+          if (chatClosed) setUnreadChat((n) => n + 1)
+          // Teams-style floating card (bottom-right) with avatar + preview. Fired
+          // when the chat drawer is closed, or on an @mention even if it's open.
+          if (chatClosed || mention) {
+            notifyChat({
+              name: data.name || 'Someone',
+              color: data.color,
+              body: data.body,
+              mention,
+            })
+          }
+        }
       } else if (t === 'reaction') {
         pushReaction({ peer_id: data.peer_id, user_id: data.user_id, name: data.name, emoji: data.emoji })
       } else if (t === 'raise-hand') {
         if (typeof data.user_id === 'number') setHand(data.user_id, !!data.raised)
+        if (data.raised && data.user_id !== user?.id) {
+          notify('hand', { emoji: '✋', title: 'Hand raised', text: `${data.name || 'Someone'} raised their hand` })
+        }
       } else if (t === 'waiting-room') {
         const list = Array.isArray(data.waiting) ? data.waiting : []
-        setWaiting((prev) => {
-          if (list.length > prev.length && sidebar !== 'waiting') {
-            setUnreadWaiting((n) => n + (list.length - prev.length))
-          }
-          return list
-        })
+        setWaiting(list)
+        syncLobby(list) // drives the persistent lobby request cards + lobby sound
+      } else if (t === 'recording') {
+        setRecording({ recording: !!data.recording, recording_id: data.recording_id ?? null })
+        // The host who toggled already saw a confirmation toast; notify the rest.
+        if (data.by !== user?.id) {
+          notify('recording', {
+            accent: data.recording ? 'red' : 'slate',
+            title: data.recording ? 'Recording started' : 'Recording stopped',
+            text: data.recording ? 'This meeting is now being recorded.' : undefined,
+          })
+        }
       } else if (t === 'meeting-permissions') {
         setMeeting((m) => ({
           ...m,
@@ -185,24 +260,19 @@ export default function MeetRoomLivekit() {
         userLeftRef.current = true
         setToast({ kind: 'info', text: 'Meeting ended by host' })
         setTimeout(() => navigate('/meet', { replace: true }), 1500)
-      } else if (t === 'role-changed' && data.user_id === user?.id) {
-        setMyRole(data.role)
       } else if (t === 'permission-denied') {
         setToast({ kind: 'error', text: data.reason || 'Action not allowed' })
       } else if (t === 'caption') {
         pushCaption(data.peer_id, { name: data.name, color: data.color, text: data.text })
-      } else if (t === 'theme-changed') {
-        if (data.theme) setThemeId(data.theme)
       } else if (t === 'wb-stroke') {
         if (data.stroke) setWbStrokes((prev) => [...prev, data.stroke])
       } else if (t === 'wb-clear') {
         setWbStrokes([])
       }
     })
-  }, [ctrlSubscribe, sidebar, navigate, user?.id, pushReaction, setHand])
+  }, [ctrlSubscribe, sidebar, navigate, user?.id, user?.name, pushReaction, setHand, setRole, seedRoles, notify, notifyChat, syncLobby])
 
   useEffect(() => { if (sidebar === 'chat') setUnreadChat(0) }, [sidebar])
-  useEffect(() => { if (sidebar === 'waiting') setUnreadWaiting(0) }, [sidebar])
 
   // ── Media-token mint flow ────────────────────────────────────────────────
   useEffect(() => {
@@ -214,6 +284,7 @@ export default function MeetRoomLivekit() {
         if (cancelled) return
         setToken(t.access_token)
         setWsUrl(t.ws_url)
+        joinedAtRef.current = Date.now()
         setPhase('connecting')
         // Probe recording state (host UI uses this on mount)
         try { setRecording(await getRecordingState(code)) } catch { /* ignore */ }
@@ -249,11 +320,11 @@ export default function MeetRoomLivekit() {
       return next
     })
   }, [ctrlSend])
-  // Admit / deny go over REST, not the control WS. ctrlSend silently drops the
-  // message whenever the socket is mid-reconnect, which made "Admit" appear to
-  // do nothing. REST always lands; the waiting user's server-side hold loop
-  // polls status (~3s) and auto-navigates once admitted, and re-broadcasts the
-  // updated waiting list to hosts. We also drop the row locally for instant UI.
+  // Admit / deny go over REST (reliable: the request always lands and returns a
+  // status the button can reflect). The endpoint now PUSHES an 'admitted' event
+  // to the waiting socket and wakes its hold loop instantly, so the user joins
+  // in < 1s with no polling. We also drop the row locally for instant host UI;
+  // the authoritative list re-syncs via the 'waiting-room' WS broadcast.
   const admitUser = useCallback(async (uid) => {
     try {
       await api(`/api/meetings/${code}/admit`, { method: 'POST', body: { user_id: uid } })
@@ -270,27 +341,37 @@ export default function MeetRoomLivekit() {
       setToast({ kind: 'error', text: e?.message || 'Could not deny participant' })
     }
   }, [code])
+  // Admit everyone in ONE batch request — no per-user N+1 round-trips. The
+  // server admits all pending rows in a single transaction and pushes each
+  // waiting user instantly.
   const admitAll = useCallback(async () => {
-    const pending = waiting.slice()
     setWaiting([])
-    for (const w of pending) {
-      try {
-        await api(`/api/meetings/${code}/admit`, { method: 'POST', body: { user_id: w.user_id } })
-      } catch { /* ignore individual failures; list re-syncs from WS */ }
+    try {
+      await api(`/api/meetings/${code}/admit-all`, { method: 'POST' })
+    } catch (e) {
+      setToast({ kind: 'error', text: e?.message || 'Could not admit everyone' })
+      // list re-syncs from the next 'waiting-room' WS broadcast
     }
-  }, [code, waiting])
+  }, [code])
+  // Let the lobby notification cards drive admit/deny and "open waiting room".
+  useEffect(() => {
+    registerLobbyActions({
+      onAdmit: admitUser,
+      onDeny: denyUser,
+      onOpen: () => setSidebar((s) => (s === 'waiting' ? s : 'waiting')),
+      // "Mark as read" on a chat card clears the unread badge without opening
+      // chat; tapping a card's preview opens the chat drawer (which also clears).
+      onChatRead: () => setUnreadChat(0),
+      onOpenChat: () => setSidebar('chat'),
+    })
+  }, [registerLobbyActions, admitUser, denyUser])
+
   const kickUser = useCallback((uid, name) => {
     if (!confirm(`Remove ${name || 'this participant'} from the meeting?`)) return
     ctrlSend({ type: 'kick', user_id: uid })
   }, [ctrlSend])
   const promoteUser = useCallback((uid) => ctrlSend({ type: 'promote', user_id: uid }), [ctrlSend])
   const setLock = useCallback((locked) => ctrlSend({ type: 'lock', locked }), [ctrlSend])
-  // Theme is meeting-wide: optimistically apply locally, then broadcast so every
-  // participant re-skins (server persists it + relays 'theme-changed').
-  const changeTheme = useCallback((id) => {
-    setThemeId(id)
-    ctrlSend({ type: 'set-theme', theme: id })
-  }, [ctrlSend])
   const toggleLayout = useCallback(() => {
     setLayout((l) => (l === 'grid' ? 'speaker' : 'grid'))
   }, [])
@@ -391,7 +472,7 @@ export default function MeetRoomLivekit() {
       <Splash text={error || 'Failed to join'}>
         <button
           onClick={() => navigate('/meet')}
-          className="mt-4 px-4 py-2 rounded bg-zinc-700 hover:bg-zinc-600 text-white"
+          className="mt-5 rounded-xl border border-[#263244] bg-[#1E293B] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#263244]"
         >
           Back to meetings
         </button>
@@ -399,18 +480,11 @@ export default function MeetRoomLivekit() {
     )
   }
 
-  const theme = getTheme(themeId)
   return (
-    <RoomThemeProvider theme={theme}>
-    {/* Pin the LIGHT token set on the whole room subtree. The dock and every
-        glass popover are a fixed light "Meet" aesthetic (.zk-dock / .zk-glass
-        are hardcoded white). Without this, the global base `button` rule
-        (index.css) paints any bare menu button with the app's dark --c-bg-1
-        when the app is in dark mode → dark boxes with dark text in the More
-        menu, device pickers, Host menu, etc. Scoping light tokens here makes
-        the room render identically regardless of the app's light/dark setting.
-        `display: contents` adds no box, so layout is untouched. */}
-    <div data-theme="light" className="contents">
+    // Dark token scope for the whole room subtree — bare elements (scrollbars,
+    // any un-classed control) resolve to the dark design tokens, and the global
+    // base `button` rule paints from the dark palette instead of light.
+    <div data-theme="midnight" className="contents">
     <LiveKitRoom
       token={token}
       serverUrl={wsUrl}
@@ -420,31 +494,29 @@ export default function MeetRoomLivekit() {
       video={joinPrefs.video !== false}
       onDisconnected={handleDisconnected}
       onError={(e) => setError(e?.message || String(e))}
-      className="zk-room-bg h-screen w-screen flex flex-col overflow-hidden transition-[background] duration-500"
-      style={{
-        background: theme.roomBg,
-        color: theme.fg,
-        '--zk-active': theme.accent,
-        '--zk-tile-accent': theme.accent,
-        '--zk-room-fg': theme.fg,
-        '--zk-room-fg-dim': theme.fgDim,
-      }}
+      className="zk-room-bg flex h-screen w-screen flex-col overflow-hidden text-white"
+      style={{ background: CANVAS }}
     >
-      <Header
+      <MeetingHeader
         code={code}
         ctrlConnected={ctrlConnected}
         recording={recording.recording}
+        locked={meeting.locked}
+        joinedAt={joinedAtRef.current}
         isHostOrCohost={isHostOrCohost}
         meeting={meeting}
         onLock={setLock}
         onChatEnabled={setChatEnabled}
         onScreenEnabled={setScreenEnabled}
         onEnd={endMeeting}
+        onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
       />
 
-      <div className="flex-1 flex min-h-0 relative">
-        <div className="flex-1 flex flex-col min-w-0 relative">
+      <div className="relative flex min-h-0 flex-1">
+        <div className="relative flex min-w-0 flex-1 flex-col">
           <Stage layout={layout} />
+          <PresenterBanner />
+          <PresenterPiP />
           <ReactionOverlay events={reactions} />
           <CaptionsOverlay captions={liveCaptions} />
           {showWhiteboard && (
@@ -462,6 +534,7 @@ export default function MeetRoomLivekit() {
             messages={chatMessages}
             onSend={sendChat}
             onClose={() => setSidebar(null)}
+            selfUserId={user?.id}
             disabled={!meeting.chat_enabled && !isHostOrCohost}
           />
         )}
@@ -484,31 +557,26 @@ export default function MeetRoomLivekit() {
             onPromote={promoteUser}
           />
         )}
-        {sidebar === 'theme' && (
-          <aside className="m-2 flex h-[calc(100%-1rem)] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-[#202124] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.25)] ring-1 ring-black/[0.06]">
-            <header className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-4">
-              <h2 className="text-[15px] font-medium">Themes &amp; background</h2>
-              <button
-                onClick={() => setSidebar(null)}
-                aria-label="Close themes"
-                className="grid h-8 w-8 place-items-center rounded-full text-[#5f6368] transition hover:bg-black/[0.06] hover:text-[#202124]"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </header>
-            <ThemePicker
-              bgEffectId={bgEffectId}
-              onSelectBg={changeBgEffect}
-              bgLoading={bgLoading}
-              bgSupported={bgSupported}
-              uploads={bgUploads}
-              onUpload={addUpload}
-              cameraOn={cameraOn}
-              themeId={themeId}
-              onSelectTheme={changeTheme}
-              canEditTheme={isHostOrCohost}
-            />
-          </aside>
+        {sidebar === 'info' && (
+          <MeetingInfoDrawer
+            code={code}
+            joinedAt={joinedAtRef.current}
+            onClose={() => setSidebar(null)}
+          />
+        )}
+        {sidebar === 'settings' && (
+          <SettingsDrawer
+            onClose={() => setSidebar(null)}
+            tab={settingsTab}
+            onTab={setSettingsTab}
+            bgEffectId={bgEffectId}
+            onSelectBg={changeBgEffect}
+            bgLoading={bgLoading}
+            bgSupported={bgSupported}
+            uploads={bgUploads}
+            onUpload={addUpload}
+            cameraOn={cameraOn}
+          />
         )}
       </div>
 
@@ -524,7 +592,7 @@ export default function MeetRoomLivekit() {
         setSidebar={setSidebar}
         waitingList={isHostOrCohost ? waiting : []}
         unreadChat={unreadChat}
-        unreadWaiting={unreadWaiting}
+        raisedHands={raisedHandsCount}
         handRaised={handRaised}
         toggleHand={toggleHand}
         showEmoji={showEmoji}
@@ -534,24 +602,21 @@ export default function MeetRoomLivekit() {
         toggleRecording={toggleRecord}
         showWhiteboard={showWhiteboard}
         toggleWhiteboard={() => setShowWhiteboard((v) => !v)}
-        openDevices={() => setShowDevices(true)}
+        openInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
+        openBackgrounds={() => { setSettingsTab('backgrounds'); setSidebar('settings') }}
         leave={userLeave}
       />
 
-      {showDevices && <DevicePicker onClose={() => setShowDevices(false)} />}
-
-      <RoomEffects pushToast={pushToast} />
+      <RoomEffects />
       <VirtualBackgroundController effect={bgEffect} setLoading={setBgLoading} onCameraState={setCameraOn} />
       <ReconnectToast />
-      <ToastStack toasts={toasts} />
       {error && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-red-600/90 text-white px-3 py-2 rounded text-sm">
+        <div className="fixed bottom-28 left-1/2 -translate-x-1/2 rounded-xl bg-[#EF4444] px-3.5 py-2 text-sm font-medium text-white shadow-lg">
           {error}
         </div>
       )}
     </LiveKitRoom>
     </div>
-    </RoomThemeProvider>
   )
 }
 
@@ -575,7 +640,7 @@ function LivekitDockAdapter({
   setSidebar,
   waitingList,
   unreadChat,
-  unreadWaiting,
+  raisedHands,
   handRaised,
   toggleHand,
   showEmoji,
@@ -585,18 +650,13 @@ function LivekitDockAdapter({
   toggleRecording,
   showWhiteboard,
   toggleWhiteboard,
-  openDevices,
+  openInfo,
+  openBackgrounds,
   leave,
 }) {
   const { localParticipant } = useLocalParticipant()
   const audioInputs = useMediaDeviceSelect({ kind: 'audioinput' })
   const videoInputs = useMediaDeviceSelect({ kind: 'videoinput' })
-  const [clock, setClock] = useState(() => fmtClock(new Date()))
-
-  useEffect(() => {
-    const t = setInterval(() => setClock(fmtClock(new Date())), 30_000)
-    return () => clearInterval(t)
-  }, [])
 
   const micOn = !!localParticipant?.isMicrophoneEnabled
   const camOn = !!localParticipant?.isCameraEnabled
@@ -610,26 +670,38 @@ function LivekitDockAdapter({
     () => localParticipant?.setCameraEnabled(!camOn).catch(() => {}),
     [localParticipant, camOn],
   )
-  const startShare = useCallback(
-    () => localParticipant?.setScreenShareEnabled(true).catch(() => {}),
-    [localParticipant],
-  )
+  const startShare = useCallback(async () => {
+    if (!localParticipant) return
+    try {
+      await localParticipant.setScreenShareEnabled(
+        true,
+        SCREEN_CAPTURE_OPTIONS,
+        SCREEN_PUBLISH_OPTIONS,
+      )
+      // Reassert the detail hint on the raw MediaStreamTrack — some browsers
+      // reset it after getDisplayMedia, which would let the encoder treat the
+      // share like motion video and blur the text.
+      const pub = localParticipant.getTrackPublication?.(Track.Source.ScreenShare)
+      const mst = pub?.track?.mediaStreamTrack
+      if (mst && 'contentHint' in mst) mst.contentHint = 'detail'
+    } catch {
+      /* user dismissed the picker, or no permission — nothing to do */
+    }
+  }, [localParticipant])
   const stopShare = useCallback(
     () => localParticipant?.setScreenShareEnabled(false).catch(() => {}),
     [localParticipant],
   )
 
-  // The dock manages its own host-or-cohost gating for "Start recording".
-  // It also surfaces a waiting-room badge by counting pending users; the
-  // host's waiting-room sidebar opens via the unread-badged "people" icon.
   return (
     <MeetingDock
-      clock={clock}
       code={code}
       audioOn={micOn}
       toggleAudio={toggleMic}
       audioDeviceMenu={
-        audioInputs.devices?.length > 1
+        // Own caret on the mic button — shown whenever a mic is available so the
+        // chevron is always present alongside the camera's.
+        audioInputs.devices?.length > 0
           ? ({ close }) => (
               <LkDockDeviceMenu
                 title="Microphone"
@@ -646,7 +718,8 @@ function LivekitDockAdapter({
       videoOn={camOn}
       toggleVideo={toggleCam}
       videoDeviceMenu={
-        videoInputs.devices?.length > 1
+        // Own caret on the camera button — mirrors the mic caret.
+        videoInputs.devices?.length > 0
           ? ({ close }) => (
               <LkDockDeviceMenu
                 title="Camera"
@@ -675,13 +748,15 @@ function LivekitDockAdapter({
       sendReaction={sendReaction}
       layout={layout}
       toggleLayout={toggleLayout}
-      onOpenThemes={() => setSidebar((s) => (s === 'theme' ? null : 'theme'))}
-      themesOpen={sidebar === 'theme'}
       sidebar={sidebar}
       setSidebar={setSidebar}
-      waitingList={[]}
       unreadChat={unreadChat}
-      onInfo={openDevices}
+      peopleBadge={(waitingList?.length || 0) + raisedHands}
+      // Waiting-room requests are the more urgent reason to open People, so they
+      // win the accent (emerald); otherwise raised hands tint it amber.
+      peopleAccent={(waitingList?.length || 0) > 0 ? 'emerald' : raisedHands > 0 ? 'amber' : 'red'}
+      onInfo={openInfo}
+      openBackgrounds={openBackgrounds}
       extraCenterSlot={
         <RoundDockExtra
           active={showWhiteboard}
@@ -693,16 +768,16 @@ function LivekitDockAdapter({
       }
       extraRightSlot={
         // Distinct, persistent waiting-room button — shown whenever anyone is
-        // actually waiting (not gated on the unread counter, which reset to 0
-        // the instant the panel opened and made the only access point vanish).
-        // UserPlus (not Users) so it doesn't read as a duplicate of the People
-        // icon next to it.
+        // actually waiting. UserPlus (not Users) so it doesn't read as a
+        // duplicate of the People icon next to it.
         isHostOrCohost && waitingList.length > 0 ? (
           <RoundDockExtra
             active={sidebar === 'waiting'}
             onClick={() => setSidebar((s) => (s === 'waiting' ? null : 'waiting'))}
             label="Waiting room"
             badge={waitingList.length}
+            glow={sidebar !== 'waiting'}
+            side
           >
             <UserPlus className="h-5 w-5" />
           </RoundDockExtra>
@@ -713,9 +788,9 @@ function LivekitDockAdapter({
   )
 }
 
-function RoundDockExtra({ active, onClick, label, badge, children }) {
-  // Light styling matched to MeetingDock's capsule buttons so LiveKit-only
-  // extras (whiteboard, waiting room) read as part of the same material.
+function RoundDockExtra({ active, onClick, label, badge, side, glow = false, children }) {
+  // Dark dock extras (whiteboard, waiting room) matched to MeetingDock's chips.
+  const glowCls = glow && !active ? ' zk-unread-glow ring-1 ring-[#EF4444]/50' : ''
   return (
     <button
       type="button"
@@ -725,15 +800,15 @@ function RoundDockExtra({ active, onClick, label, badge, children }) {
       title={label}
       className={
         'relative grid h-[52px] w-[52px] place-items-center rounded-full transition active:scale-[0.94] ' +
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/45 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
         (active
-          ? 'bg-[#c2e7ff] text-[#001d35] hover:bg-[#aed6fb]'
-          : 'text-[#444746] hover:bg-black/[0.06] hover:text-[#1f1f1f]')
+          ? 'bg-[#10B981]/20 text-[#34D399] ring-1 ring-[#10B981]/40'
+          : 'text-[#94A3B8] hover:bg-white/[0.06] hover:text-white' + (side ? ' border border-[#263244]' : '') + glowCls)
       }
     >
       {children}
       {badge > 0 && (
-        <span className="pointer-events-none absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#ea4335] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white">
+        <span className="zk-badge-pulse pointer-events-none absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-[#EF4444] px-1 text-[11px] font-semibold leading-none text-white ring-2 ring-[#111827]">
           {badge > 99 ? '99+' : badge}
         </span>
       )}
@@ -741,19 +816,13 @@ function RoundDockExtra({ active, onClick, label, badge, children }) {
   )
 }
 
-function fmtClock(d) {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
 /**
  * Device picker that hangs off the mic / camera caret in the dock.
- * Mirrors the mesh room's DockDeviceMenu visually so the affordance is
- * identical across both rooms; only the device-list source differs.
  */
 function LkDockDeviceMenu({ title, devices, current, onPick }) {
   return (
     <div className="py-1.5">
-      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[#5f6368]">
+      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">
         {title}
       </div>
       <ul className="max-h-[260px] overflow-y-auto">
@@ -766,8 +835,8 @@ function LkDockDeviceMenu({ title, devices, current, onPick }) {
                 className={
                   'flex w-full items-start gap-2.5 px-3 py-2 text-left text-[13px] transition ' +
                   (active
-                    ? 'bg-[#c2e7ff]/50 text-[#0b57d0]'
-                    : 'text-[#202124] hover:bg-black/[0.05]')
+                    ? 'bg-[#10B981]/15 text-[#34D399]'
+                    : 'text-white/90 hover:bg-white/[0.06]')
                 }
               >
                 <span className="mt-1 grid h-2 w-2 shrink-0 place-items-center">
@@ -785,79 +854,14 @@ function LkDockDeviceMenu({ title, devices, current, onPick }) {
   )
 }
 
-function Header({ code, ctrlConnected, recording, isHostOrCohost, meeting, onLock, onChatEnabled, onScreenEnabled, onEnd }) {
-  const state = useConnectionState()
-  const [copied, setCopied] = useState(false)
-
-  const reconnecting = state === ConnectionState.Reconnecting
-  const connecting = state === ConnectionState.Connecting
-
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(`${window.location.origin}/meet/${code}`)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
-    } catch {}
-  }
-
-  // Transparent top bar that floats over the stage — matches the mesh
-  // room's header and Meet's chromeless look.
-  return (
-    <div className="flex h-14 shrink-0 items-center justify-between px-4">
-      <div className="flex items-center gap-2.5 text-sm">
-        {recording && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#ea4335]/15 px-2.5 py-1 text-[11px] font-semibold text-[#ea4335]">
-            <span className="relative grid h-1.5 w-1.5 place-items-center">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-75" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
-            </span>
-            REC
-          </span>
-        )}
-        {meeting?.locked && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-400" title="Meeting is locked">
-            🔒 Locked
-          </span>
-        )}
-        {(reconnecting || (!ctrlConnected && !connecting)) && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-400">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-            Reconnecting…
-          </span>
-        )}
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-[13px] tracking-wide text-[color:var(--zk-room-fg-dim,#444746)]">{code}</span>
-        <button
-          onClick={copyLink}
-          title="Copy invite link"
-          aria-label="Copy invite link"
-          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3 text-[12px] font-medium text-[#444746] shadow-sm transition hover:bg-[#f1f3f4]"
-        >
-          {copied ? '✓ Copied' : 'Copy link'}
-        </button>
-        {isHostOrCohost && (
-          <HostMenu
-            meeting={meeting}
-            onToggleLock={onLock}
-            onToggleChat={onChatEnabled}
-            onToggleScreenshare={onScreenEnabled}
-            onEndMeeting={onEnd}
-          />
-        )}
-      </div>
-    </div>
-  )
-}
-
 /**
  * Room-context-only side effects. Must live inside <LiveKitRoom> because it
- * uses room/local-participant hooks. Renders only transient toasts.
+ * uses room/local-participant hooks. Renders nothing.
  */
-function RoomEffects({ pushToast }) {
+function RoomEffects() {
   const { localParticipant } = useLocalParticipant()
   const room = useRoomContext()
+  const { notify } = useNotifications()
 
   // Apply persisted device prefs once the room is connected
   useEffect(() => {
@@ -878,22 +882,32 @@ function RoomEffects({ pushToast }) {
     return () => { cancelled = true }
   }, [room])
 
-  // Participant join/leave toasts
+  // Participant join/leave toasts — gated on the Settings → Notifications
+  // preference (defaults on).
+  const joinAlerts = () => {
+    try { return localStorage.getItem('zoiko_meet_join_alerts') !== '0' } catch { return true }
+  }
   useRoomEvents({
     [RoomEvent.ParticipantConnected]: (p) => {
-      pushToast({ kind: 'info', text: `${p.name || p.identity} joined` })
+      if (joinAlerts()) notify('join', { title: 'Joined', text: `${p.name || p.identity} joined the meeting` })
     },
     [RoomEvent.ParticipantDisconnected]: (p) => {
-      pushToast({ kind: 'info', text: `${p.name || p.identity} left` })
+      if (joinAlerts()) notify('leave', { title: 'Left', text: `${p.name || p.identity} left the meeting` })
+    },
+    // Screen-share is LiveKit-driven (no control-WS event). TrackPublished /
+    // TrackUnpublished fire only for REMOTE participants, so the presenter
+    // never gets notified about their own share.
+    [RoomEvent.TrackPublished]: (pub, p) => {
+      if (pub?.source === Track.Source.ScreenShare) {
+        notify('screenshare', { title: 'Screen share', text: `${p?.name || p?.identity || 'Someone'} started presenting` })
+      }
+    },
+    [RoomEvent.TrackUnpublished]: (pub, p) => {
+      if (pub?.source === Track.Source.ScreenShare) {
+        notify('screenshare', { title: 'Screen share', text: `${p?.name || p?.identity || 'Someone'} stopped presenting` })
+      }
     },
   })
-
-  // Muted-but-speaking nudge — disabled for now: holding the mic via
-  // getUserMedia while LiveKit also has the device caused intermittent
-  // CLIENT_REQUEST_LEAVE disconnects on Windows + Docker Desktop. Re-enable
-  // once we have a way to tap into LK's local audio track without owning
-  // the device ourselves.
-  const showMutedToast = false  // useMutedWhileSpeaking()
 
   // Keyboard shortcuts: Ctrl/Cmd + D = toggle mic, Ctrl/Cmd + E = toggle camera
   useEffect(() => {
@@ -913,19 +927,13 @@ function RoomEffects({ pushToast }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [localParticipant])
 
-  if (!showMutedToast) return null
-  return (
-    <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-zinc-800 text-zinc-100 px-3 py-2 rounded shadow text-sm z-30 flex items-center gap-2">
-      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-      You're muted — press <kbd className="px-1.5 py-0.5 text-xs rounded bg-zinc-700">Ctrl+D</kbd> to unmute
-    </div>
-  )
+  return null
 }
 
 /**
  * Applies the chosen virtual-background effect to the LOCAL camera track via a
  * LiveKit track processor, and reports camera on/off up to the parent so the
- * Themes panel can show the "turn your camera on" hint. Renders nothing.
+ * Backgrounds tab can show the "turn your camera on" hint. Renders nothing.
  * Must live inside <LiveKitRoom> for the LK hooks.
  */
 function VirtualBackgroundController({ effect, setLoading, onCameraState }) {
@@ -981,40 +989,32 @@ function ReconnectToast() {
   const state = useConnectionState()
   if (state !== ConnectionState.Reconnecting) return null
   return (
-    <div className="fixed top-16 left-1/2 -translate-x-1/2 bg-amber-600/95 text-white px-4 py-2 rounded shadow text-sm flex items-center gap-2 z-30">
-      <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
+    <div className="fixed top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-xl bg-[#F59E0B] px-4 py-2 text-sm font-medium text-[#0B1220] shadow-lg">
+      <span className="h-2 w-2 animate-pulse rounded-full bg-[#0B1220]/70" />
       Reconnecting to the meeting…
     </div>
   )
 }
 
-function ToastStack({ toasts }) {
-  if (!toasts?.length) return null
-  return (
-    <div className="fixed top-16 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-30">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={
-            'px-4 py-2 rounded shadow text-sm ' +
-            (t.kind === 'error' ? 'bg-red-600/95 text-white' : 'bg-white text-[#202124] ring-1 ring-black/[0.06]')
-          }
-        >
-          {t.text}
-        </div>
-      ))}
-    </div>
-  )
+/** True if a chat body @-mentions the given display name (or @everyone/@here). */
+function mentionsMe(body, name) {
+  if (!body) return false
+  const lower = body.toLowerCase()
+  if (lower.includes('@everyone') || lower.includes('@here')) return true
+  if (!name) return false
+  const first = name.trim().split(/\s+/)[0]?.toLowerCase()
+  if (!first) return false
+  return lower.includes(`@${first}`) || lower.includes(`@${name.trim().toLowerCase()}`)
 }
 
 function Splash({ text, children }) {
   return (
-    <div className="h-screen w-screen grid place-items-center bg-[#f1f3f4] text-[#202124]">
-      <div className="text-center">
-        <div className="text-base">{text}</div>
+    <div className="grid h-screen w-screen place-items-center bg-[#0B1220] text-white">
+      <div className="flex flex-col items-center text-center">
+        <span className="spinner mb-4" />
+        <div className="text-[15px] text-[#94A3B8]">{text}</div>
         {children}
       </div>
     </div>
   )
 }
-

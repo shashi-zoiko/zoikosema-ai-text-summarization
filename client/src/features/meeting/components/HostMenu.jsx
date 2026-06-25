@@ -16,13 +16,13 @@ export default function HostMenu({ meeting, onToggleLock, onToggleChat, onToggle
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="px-3 py-2 rounded-full border border-black/[0.08] bg-white shadow-sm hover:bg-[#f1f3f4] text-xs font-medium text-[#444746] flex items-center gap-1"
+        className="flex h-9 items-center gap-1 rounded-full border border-[#263244] bg-[#111827] px-3 text-xs font-medium text-[#94A3B8] transition hover:bg-[#1E293B] hover:text-white"
       >
         Host
         <ChevronDown size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 mt-2 w-60 rounded-xl bg-white border border-black/[0.06] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.35)] z-30 overflow-hidden">
+        <div className="zk-glass zk-pop-in absolute right-0 z-30 mt-2 w-60 origin-top-right overflow-hidden rounded-xl">
           <Item
             icon={meeting.locked ? <Unlock size={14} /> : <Lock size={14} />}
             label={meeting.locked ? 'Unlock meeting' : 'Lock meeting'}
@@ -38,7 +38,7 @@ export default function HostMenu({ meeting, onToggleLock, onToggleChat, onToggle
             label={meeting.screenshare_enabled ? 'Disable screen share' : 'Enable screen share'}
             onClick={() => { onToggleScreenshare(!meeting.screenshare_enabled); setOpen(false) }}
           />
-          <div className="border-t border-black/[0.06]" />
+          <div className="mx-2 my-1 h-px bg-[#263244]" />
           <Item
             icon={<PhoneOff size={14} />}
             label="End meeting for all"
@@ -56,11 +56,11 @@ function Item({ icon, label, onClick, destructive }) {
     <button
       onClick={onClick}
       className={
-        'w-full px-3 py-2 text-left text-sm flex items-center gap-2 ' +
-        (destructive ? 'text-[#d93829] hover:bg-[#ea4335]/10' : 'text-[#202124] hover:bg-black/[0.05]')
+        'flex w-full items-center gap-2.5 border-0 bg-transparent px-3 py-2.5 text-left text-sm shadow-none transition-colors ' +
+        (destructive ? 'text-[#F87171] hover:bg-[#EF4444]/12' : 'text-white/90 hover:bg-white/[0.06]')
       }
     >
-      <span className="text-[#5f6368]">{icon}</span>
+      <span className={destructive ? 'text-[#F87171]' : 'text-[#94A3B8]'}>{icon}</span>
       {label}
     </button>
   )

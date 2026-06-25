@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.connect.media_service import service as media
+from app.websocket import signaling as ws_signaling
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.deps import get_current_user
@@ -390,6 +391,11 @@ async def recording_start(
     db.add(rec)
     db.commit()
     db.refresh(rec)
+    # Tell everyone in the room recording is live so non-host clients show the
+    # REC indicator + a notification (the host's own UI updates locally).
+    await ws_signaling.broadcast_event(
+        code, {"type": "recording", "recording": True, "recording_id": rec.id, "by": user.id}
+    )
     return RecordingStateOut(recording=True, recording_id=rec.id, egress_id=rec.egress_id)
 
 
@@ -416,6 +422,9 @@ async def recording_stop(
     # Status is flipped to READY by the egress_ended webhook once the file is
     # finalized on disk. We don't touch it here — the egress process is still
     # writing the moov atom.
+    await ws_signaling.broadcast_event(
+        code, {"type": "recording", "recording": False, "recording_id": None, "by": user.id}
+    )
     return RecordingStateOut(recording=True, recording_id=rec.id, egress_id=rec.egress_id)
 
 
@@ -558,7 +567,7 @@ def get_participants(
 # ── Host actions: admit / deny / kick / promote ────────────────────────────
 
 @router.post("/{code}/admit", response_model=ParticipantOut)
-def admit_participant(
+async def admit_participant(
     code: str,
     data: ParticipantActionIn,
     db: Session = Depends(get_db),
@@ -566,26 +575,80 @@ def admit_participant(
 ):
     meeting = _get_meeting_or_404(code, db)
     _require_host_or_cohost(meeting, user, db)
+    log.info("[ADMISSION_REQUEST] meeting=%s host=%s target=%s via=rest", meeting.id, user.id, data.user_id)
 
-    participant = db.scalar(
-        select(MeetingParticipant).where(
+    # Latest row for this user (no UNIQUE(meeting_id,user_id) — see join_meeting).
+    participant = db.scalars(
+        select(MeetingParticipant)
+        .where(
             MeetingParticipant.meeting_id == meeting.id,
             MeetingParticipant.user_id == data.user_id,
-            MeetingParticipant.status == STATUS_PENDING,
         )
-    )
+        .order_by(desc(MeetingParticipant.id))
+    ).first()
     if not participant:
+        raise HTTPException(status_code=404, detail="No pending participant found")
+
+    # Idempotent: a double-click / retry against an already-admitted user must
+    # not 404. Re-emit the realtime signal in case the first push was lost, and
+    # return success so the host UI stays consistent.
+    if participant.status == STATUS_ADMITTED:
+        await ws_signaling.signal_admitted(meeting.id, data.user_id)
+        return participant
+    if participant.status != STATUS_PENDING:
         raise HTTPException(status_code=404, detail="No pending participant found")
 
     participant.status = STATUS_ADMITTED
     participant.last_seen_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(participant)
+    log.info("[ADMIT_SUCCESS] meeting=%s target=%s", meeting.id, data.user_id)
+
+    # Push instantly to the waiting socket + wake its hold loop, then refresh
+    # the host roster. This is what makes admission < 1 s end-to-end with no
+    # polling.
+    await ws_signaling.signal_admitted(meeting.id, data.user_id)
+    await ws_signaling.broadcast_waiting_list(code, meeting.id)
     return participant
 
 
+class AdmitAllOut(BaseModel):
+    admitted: list[int]
+
+
+@router.post("/{code}/admit-all", response_model=AdmitAllOut)
+async def admit_all(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Batch-admit every pending participant in one request. Fixes the old
+    Admit-Everyone N+1 (N sequential REST round-trips)."""
+    meeting = _get_meeting_or_404(code, db)
+    _require_host_or_cohost(meeting, user, db)
+
+    pending = db.scalars(
+        select(MeetingParticipant).where(
+            MeetingParticipant.meeting_id == meeting.id,
+            MeetingParticipant.status == STATUS_PENDING,
+        )
+    ).all()
+    now = datetime.now(timezone.utc)
+    admitted_ids = [p.user_id for p in pending]
+    for p in pending:
+        p.status = STATUS_ADMITTED
+        p.last_seen_at = now
+    db.commit()
+    log.info("[ADMIT_SUCCESS] meeting=%s host=%s admit-all count=%s", meeting.id, user.id, len(admitted_ids))
+
+    for uid in admitted_ids:
+        await ws_signaling.signal_admitted(meeting.id, uid)
+    await ws_signaling.broadcast_waiting_list(code, meeting.id)
+    return AdmitAllOut(admitted=admitted_ids)
+
+
 @router.post("/{code}/deny", response_model=ParticipantOut)
-def deny_participant(
+async def deny_participant(
     code: str,
     data: ParticipantActionIn,
     db: Session = Depends(get_db),
@@ -594,19 +657,23 @@ def deny_participant(
     meeting = _get_meeting_or_404(code, db)
     _require_host_or_cohost(meeting, user, db)
 
-    participant = db.scalar(
-        select(MeetingParticipant).where(
+    participant = db.scalars(
+        select(MeetingParticipant)
+        .where(
             MeetingParticipant.meeting_id == meeting.id,
             MeetingParticipant.user_id == data.user_id,
-            MeetingParticipant.status == STATUS_PENDING,
         )
-    )
-    if not participant:
+        .order_by(desc(MeetingParticipant.id))
+    ).first()
+    if not participant or participant.status != STATUS_PENDING:
         raise HTTPException(status_code=404, detail="No pending participant found")
 
     participant.status = STATUS_DENIED
     db.commit()
     db.refresh(participant)
+
+    await ws_signaling.signal_denied(meeting.id, data.user_id)
+    await ws_signaling.broadcast_waiting_list(code, meeting.id)
     return participant
 
 

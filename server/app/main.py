@@ -17,7 +17,7 @@ from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.core.recording_cleanup import recording_cleanup_loop
 from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence, webhooks
 from app.websocket import chat as chat_ws, signaling as meeting_ws
-from app.websocket.manager import chat_manager
+from app.websocket.manager import chat_manager, meet_manager
 from app.connect import router as connect_router
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,9 @@ async def _init_db_background() -> None:
 async def lifespan(app: FastAPI):
     # Capture the serving loop so synchronous REST handlers can fan messages out
     # to WebSocket rooms (e.g. REST-sent chat messages reaching live peers).
-    chat_manager.bind_loop(asyncio.get_running_loop())
+    _loop = asyncio.get_running_loop()
+    chat_manager.bind_loop(_loop)
+    meet_manager.bind_loop(_loop)
     init_task = asyncio.create_task(_init_db_background())
     cleanup_task = asyncio.create_task(recording_cleanup_loop())
     try:
