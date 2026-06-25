@@ -151,6 +151,21 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("meetings", "media_provider", "VARCHAR(16) DEFAULT 'mesh' NOT NULL"),
     # LiveKit Egress handle on recordings
     ("meeting_recordings", "egress_id", "VARCHAR(64)"),
+    # Guest (anonymous) join support. is_guest flags ephemeral accounts created
+    # by the public /guest-token endpoint; guest_expires_at bounds their TTL so
+    # the cleanup loop can purge crashed sessions. guests_enabled is the host's
+    # per-meeting kill-switch (default TRUE so existing links accept guests).
+    ("users", "is_guest", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    ("users", "guest_expires_at", "TIMESTAMP WITH TIME ZONE"),
+    ("meetings", "guests_enabled", "BOOLEAN DEFAULT TRUE NOT NULL"),
+]
+
+# (table, column) pairs whose NOT NULL constraint must be dropped so guest rows
+# (email/password-less) can be inserted into pre-existing tables. Idempotent —
+# checked against information_schema before issuing the ALTER.
+_DROP_NOT_NULL: list[tuple[str, str]] = [
+    ("users", "email"),
+    ("users", "password_hash"),
 ]
 
 
@@ -165,6 +180,18 @@ def _apply_additive_migrations() -> None:
             if column in cols:
                 continue
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {pg_ddl}"))
+        # Relax NOT NULL on columns that guest rows leave empty. Only meaningful
+        # on Postgres; SQLite (test/in-memory) ignores DROP NOT NULL but also
+        # never enforced it via this path, so guard on the dialect.
+        if engine.dialect.name == "postgresql":
+            for table, column in _DROP_NOT_NULL:
+                if table not in existing_tables:
+                    continue
+                nullable = {c["name"]: c["nullable"] for c in insp.get_columns(table)}
+                if column in nullable and not nullable[column]:
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL")
+                    )
         # Indexes ship after columns because some of them reference columns we
         # may have just added (e.g. messages.deleted_at). All DDL uses
         # `CREATE INDEX IF NOT EXISTS` so re-runs are no-ops.

@@ -17,15 +17,77 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 export const TILE_ASPECT = 16 / 9
 
 /**
- * @returns {{cols:number, rows:number, tileW:number, tileH:number}}
+ * Pick the grid options for the GALLERY layout from the participant count and
+ * the container orientation. Two distinct strategies, exactly like Google Meet:
+ *
+ *   • Landscape / desktop → aspect-PRESERVING best-fit. Tiles keep a 16:9 frame
+ *     and are letter-boxed inside the box; premium, lots of breathing room.
+ *   • Portrait phone      → FILL best-fit. Tiles tile the screen edge-to-edge
+ *     (video object-cover crops to taste), with a hard column cap so faces stay
+ *     large instead of collapsing into tiny 16:9 slivers. Big rooms switch to a
+ *     vertically-scrolling grid rather than shrinking past a legible minimum.
  */
-export function computeGridLayout(count, width, height, gap = 12, aspect = TILE_ASPECT) {
+export function galleryGridOpts(count, portrait) {
+  if (portrait) {
+    // 1–2 people → one big tile per row; then 2 columns; only very large rooms
+    // go to 3 columns (with scroll). Keeps every face comfortably large.
+    const maxCols = count <= 2 ? 1 : count <= 12 ? 2 : 3
+    return { fill: true, maxCols, minTileH: 150 }
+  }
+  // Landscape phones, tablets and desktops keep the cinematic 16:9 gallery; only
+  // a very large roster falls back to a capped, scrolling grid.
+  return { aspect: TILE_ASPECT, maxCols: count <= 20 ? Infinity : 6, minTileH: 110 }
+}
+
+/**
+ * @param {object} [opts]
+ * @param {number} [opts.aspect]    Fixed tile aspect for the aspect-preserving mode.
+ * @param {number} [opts.maxCols]   Hard column cap.
+ * @param {number} [opts.minTileH]  Below this tile height, switch to a scrolling grid.
+ * @param {boolean}[opts.fill]      Fill cells edge-to-edge (cover) instead of letter-boxing.
+ * @returns {{cols:number, rows:number, tileW:number, tileH:number, scroll:boolean}}
+ */
+export function computeGridLayout(count, width, height, gap = 12, opts = {}) {
+  const { aspect = TILE_ASPECT, maxCols = Infinity, minTileH = 0, fill = false } = opts
   if (count <= 0 || width <= 0 || height <= 0) {
-    return { cols: 1, rows: 1, tileW: 0, tileH: 0 }
+    return { cols: 1, rows: 1, tileW: 0, tileH: 0, scroll: false }
+  }
+  const colCap = Math.min(count, Math.max(1, Math.floor(maxCols)))
+
+  // ── FILL mode (portrait phones) ────────────────────────────────────────────
+  // Tiles take the whole cell; we just pick the column count whose cells are the
+  // largest while not getting freakishly wide/tall, then let object-cover crop.
+  if (fill) {
+    let best = null
+    for (let cols = 1; cols <= colCap; cols++) {
+      const rows = Math.ceil(count / cols)
+      const cellW = (width - gap * (cols - 1)) / cols
+      const cellH = (height - gap * (rows - 1)) / rows
+      if (cellW <= 0 || cellH <= 0) continue
+      const ar = cellW / cellH
+      const arPenalty = ar > 2.4 || ar < 0.42 ? 0.55 : 1 // discourage extreme shapes
+      const score = cellW * cellH * arPenalty
+      if (!best || score > best.score + 0.5) best = { cols, rows, cellW, cellH, score }
+    }
+    if (!best) return { cols: 1, rows: count, tileW: width, tileH: height, scroll: false }
+    if (minTileH > 0 && best.cellH < minTileH) {
+      const cols = colCap
+      const cellW = Math.floor((width - gap * (cols - 1)) / cols)
+      const tileH = Math.max(Math.round(minTileH), Math.round(cellW)) // square-ish, legible
+      return { cols, rows: Math.ceil(count / cols), tileW: cellW, tileH, scroll: true }
+    }
+    return {
+      cols: best.cols,
+      rows: best.rows,
+      tileW: Math.floor(best.cellW),
+      tileH: Math.floor(best.cellH),
+      scroll: false,
+    }
   }
 
+  // ── ASPECT-PRESERVING best-fit (landscape / desktop) ─────────────────────────
   let best = { cols: 1, rows: count, tileW: 0, tileH: 0, area: 0 }
-  for (let cols = 1; cols <= count; cols++) {
+  for (let cols = 1; cols <= colCap; cols++) {
     const rows = Math.ceil(count / cols)
     const cellW = (width - gap * (cols - 1)) / cols
     const cellH = (height - gap * (rows - 1)) / rows
@@ -50,6 +112,18 @@ export function computeGridLayout(count, width, height, gap = 12, aspect = TILE_
       best = { cols, rows, tileW, tileH, area }
     }
   }
+
+  // Too small to be legible → fall back to a fixed-size, vertically-scrolling
+  // grid at the column cap instead of shrinking tiles into unreadable specks.
+  if (minTileH > 0 && best.tileH < minTileH && best.tileH > 0) {
+    const cols = colCap
+    const tileW = Math.floor((width - gap * (cols - 1)) / cols)
+    const tileH = Math.round(tileW / aspect)
+    if (tileH >= minTileH * 0.8) {
+      return { cols, rows: Math.ceil(count / cols), tileW, tileH, scroll: true }
+    }
+  }
+
   // Floor to whole pixels so a sub-pixel rounding error can never push the row
   // a hair over the container width and make flex-wrap drop to fewer columns.
   return {
@@ -57,6 +131,7 @@ export function computeGridLayout(count, width, height, gap = 12, aspect = TILE_
     rows: best.rows,
     tileW: Math.floor(best.tileW),
     tileH: Math.floor(best.tileH),
+    scroll: false,
   }
 }
 
@@ -104,12 +179,15 @@ export function useElementSize() {
 
 /**
  * Convenience wrapper: measures `ref` and returns the grid solution for `count`.
+ * Without explicit `opts` it auto-selects the orientation-aware gallery strategy
+ * (portrait fill vs landscape 16:9 best-fit). Pass `opts` to force a strategy.
  */
-export function useGridLayout(count, gap = 12) {
+export function useGridLayout(count, gap = 12, opts) {
   const [ref, size] = useElementSize()
-  const layout = useMemo(
-    () => computeGridLayout(count, size.width, size.height, gap),
-    [count, size.width, size.height, gap],
-  )
+  const layout = useMemo(() => {
+    const portrait = size.height > 0 && size.height >= size.width
+    const resolved = opts ?? galleryGridOpts(count, portrait)
+    return computeGridLayout(count, size.width, size.height, gap, resolved)
+  }, [count, size.width, size.height, gap, opts])
   return [ref, layout, size]
 }

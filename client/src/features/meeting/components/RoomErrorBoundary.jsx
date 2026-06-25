@@ -22,7 +22,7 @@ export default class RoomErrorBoundary extends Component {
   render() {
     if (!this.state.error) return this.props.children
     return (
-      <div className="h-screen w-screen grid place-items-center bg-zinc-950 text-zinc-200 p-6">
+      <div className="h-dvh w-screen grid place-items-center bg-zinc-950 text-zinc-200 p-6">
         <div className="text-center max-w-md">
           <div className="text-lg font-semibold mb-2">Something broke in the call view</div>
           <div className="text-xs text-zinc-400 mb-4 font-mono">

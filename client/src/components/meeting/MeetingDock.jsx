@@ -47,11 +47,12 @@ function MeetingDock({
     // spacing. No overflow clipping anywhere — the reaction picker, device
     // menus and More menu all open ABOVE the bar as absolute children.
     <footer
-      className="zk-dock-enter relative z-30 flex h-24 shrink-0 items-center justify-center px-4"
+      className="zk-dock-enter relative z-30 flex shrink-0 items-center justify-center px-2 py-2.5 sm:px-4 sm:py-4"
+      style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.625rem)' }}
       role="toolbar"
       aria-label="Meeting controls"
     >
-      <div className="flex max-w-full flex-wrap items-center justify-center gap-2">
+      <div className="flex max-w-full flex-wrap items-center justify-center gap-1.5 sm:gap-2">
         {/* mic + camera (green-outlined when live), each with its own caret */}
         <ComboPill
           on={audioOn}
@@ -102,18 +103,6 @@ function MeetingDock({
           <Smile />
         </RoundBtn>
 
-        {extraCenterSlot}
-
-        <RoundBtn
-          label={sidebar === 'chat' ? 'Close chat' : 'Chat with everyone'}
-          onClick={() => setSidebar((s) => (s === 'chat' ? null : 'chat'))}
-          active={sidebar === 'chat'}
-          badge={sidebar !== 'chat' ? unreadChat : 0}
-          accent="red"
-          glow={sidebar !== 'chat' && unreadChat > 0}
-        >
-          <MessageSquare />
-        </RoundBtn>
         <RoundBtn
           label={sidebar === 'people' ? 'Close people' : 'People'}
           onClick={() => setSidebar((s) => (s === 'people' ? null : 'people'))}
@@ -126,6 +115,23 @@ function MeetingDock({
         </RoundBtn>
 
         {extraRightSlot}
+
+        {/* Whiteboard + chat — pinned to the bottom-right corner on desktop
+            (Google-Meet layout); on smaller screens they stay inline in the
+            wrapping cluster so they can never overlap the centered controls. */}
+        <div className="flex items-center gap-1.5 sm:gap-2 lg:absolute lg:right-6 lg:top-1/2 lg:-translate-y-1/2">
+          {extraCenterSlot}
+          <RoundBtn
+            label={sidebar === 'chat' ? 'Close chat' : 'Chat with everyone'}
+            onClick={() => setSidebar((s) => (s === 'chat' ? null : 'chat'))}
+            active={sidebar === 'chat'}
+            badge={sidebar !== 'chat' ? unreadChat : 0}
+            accent="red"
+            glow={sidebar !== 'chat' && unreadChat > 0}
+          >
+            <MessageSquare />
+          </RoundBtn>
+        </div>
 
         <MoreMenu
           open={showMore}
@@ -157,9 +163,9 @@ export default memo(MeetingDock)
  * ──────────────────────────────────────────────────────────────────────── */
 
 const BTN =
-  'relative grid h-[52px] w-[52px] place-items-center rounded-full transition-all duration-200 ' +
+  'relative grid h-12 w-12 sm:h-[52px] sm:w-[52px] place-items-center rounded-full touch-manipulation transition-all duration-200 ' +
   'active:scale-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45 ' +
-  '[&_svg]:h-[22px] [&_svg]:w-[22px] [&_svg]:relative [&_svg]:z-10'
+  '[&_svg]:h-5 [&_svg]:w-5 sm:[&_svg]:h-[22px] sm:[&_svg]:w-[22px] [&_svg]:relative [&_svg]:z-10'
 
 // Every palette is a soft top-down gradient + inner highlight + outer glow so
 // the dock reads like a premium SaaS control bar (Meet / Around / Slack huddle)
@@ -180,14 +186,17 @@ const OFF =
   'bg-gradient-to-b from-[#F87171]/30 to-[#B91C1C]/14 text-[#FCA5A5] ring-1 ring-[#EF4444]/55 ' +
   'shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_0_18px_-2px_rgba(239,68,68,0.5)] ' +
   'hover:from-[#F87171]/42 hover:to-[#B91C1C]/22 hover:text-[#FECACA]'
-// Mic / camera "live" look — a glowing green-rimmed gradient on a dark interior.
-const LIVE =
-  'bg-gradient-to-b from-[#10B981]/26 to-[#059669]/10 text-[#6EE7B7] ring-1 ring-[#10B981]/60 ' +
-  'shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_0_18px_-3px_rgba(16,185,129,0.55)] ' +
-  'hover:from-[#10B981]/36 hover:to-[#059669]/18'
+/* Mic / camera toggle palettes — Google-Meet exact, flat (no gradient/glow):
+ *   • live (mic on / camera on)  → neutral translucent gray, white icon
+ *   • off  (muted / camera off)  → SOLID WHITE with a dark icon (#202124), the
+ *                                  high-contrast "active negative" state.
+ */
+const TOGGLE_ON = 'bg-white/[0.08] text-white hover:bg-white/[0.15]'
+const TOGGLE_OFF = 'bg-white text-[#202124] hover:bg-white/90'
 
-/* Mic / camera combo: a round toggle (solid green on, red-tint off) + a slim
- * caret that opens the device picker. The caret is omitted with no `deviceMenu`. */
+/* Mic / camera control — a clean circular ~48px toggle (Google-Meet style) plus
+ * a small, subtle device-picker caret. The toggle drives `onToggle`; the caret
+ * opens the device menu. Icons cross-fade/scale on state change. */
 function ComboPill({ on, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
@@ -207,44 +216,51 @@ function ComboPill({ on, onToggle, label, deviceMenu, iconOn, iconOff, kbd }) {
   const hasMenu = !!deviceMenu
 
   return (
-    <div ref={wrapRef} className="relative flex items-center">
+    <div ref={wrapRef} className="relative flex items-center gap-1">
       <button
         type="button"
         onClick={onToggle}
         aria-label={label}
         aria-pressed={!on}
         title={kbd ? `${label} (${kbd})` : label}
-        className={`${BTN} ${on ? LIVE : OFF}`}
+        className={
+          'grid h-12 w-12 sm:h-[52px] sm:w-[52px] place-items-center rounded-full transition-colors duration-150 touch-manipulation active:scale-[0.96] ' +
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B1220] ' +
+          '[&_svg]:h-5 [&_svg]:w-5 sm:[&_svg]:h-[22px] sm:[&_svg]:w-[22px] ' +
+          (on ? TOGGLE_ON : TOGGLE_OFF)
+        }
       >
-        {on ? iconOn : iconOff}
+        {/* Re-keyed wrapper so the icon swap replays the fade/scale each toggle. */}
+        <span key={on ? 'on' : 'off'} className="zk-icon-swap grid place-items-center">
+          {on ? iconOn : iconOff}
+        </span>
       </button>
       {hasMenu && (
-        <>
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-label={`${label} — device options`}
-            aria-haspopup="menu"
-            aria-expanded={open}
-            title="Device options"
-            className={
-              'ml-0.5 grid h-[52px] w-5 place-items-center rounded-full text-[#94A3B8] transition ' +
-              'hover:bg-white/[0.08] hover:text-white [&_svg]:h-4 [&_svg]:w-4 ' +
-              (open ? 'bg-white/[0.08] text-white' : '')
-            }
-          >
-            <ChevronUp className={open ? 'rotate-180 transition-transform' : 'transition-transform'} />
-          </button>
-          {open && (
-            <div
-              role="menu"
-              className="zk-glass zk-pop-in absolute bottom-[calc(100%+14px)] left-0 z-20 w-[300px] origin-bottom-left overflow-hidden rounded-2xl py-1 text-white"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {typeof deviceMenu === 'function' ? deviceMenu({ close: () => setOpen(false) }) : deviceMenu}
-            </div>
-          )}
-        </>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-label={`${label} — device options`}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          title="Device options"
+          className={
+            'grid h-12 w-7 sm:h-[52px] place-items-center rounded-full text-[#9AA0A6] transition-colors duration-150 touch-manipulation ' +
+            'hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 ' +
+            '[&_svg]:h-4 [&_svg]:w-4 ' +
+            (open ? 'bg-white/10 text-white' : '')
+          }
+        >
+          <ChevronUp className={open ? 'rotate-180 transition-transform' : 'transition-transform'} />
+        </button>
+      )}
+      {hasMenu && open && (
+        <div
+          role="menu"
+          className="zk-glass zk-pop-in absolute bottom-[calc(100%+14px)] left-0 z-20 w-[300px] max-w-[calc(100vw-1rem)] origin-bottom-left overflow-hidden rounded-2xl py-1 text-white"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {typeof deviceMenu === 'function' ? deviceMenu({ close: () => setOpen(false) }) : deviceMenu}
+        </div>
       )}
     </div>
   )
@@ -327,14 +343,14 @@ function LeaveBtn({ onClick }) {
       aria-label="Leave call"
       title="Leave call"
       className={
-        'inline-flex h-[52px] items-center gap-2 rounded-xl bg-gradient-to-b from-[#F87171] to-[#DC2626] px-5 text-[15px] font-semibold text-white transition-all duration-200 ' +
+        'inline-flex h-12 sm:h-[52px] items-center gap-2 rounded-xl bg-gradient-to-b from-[#F87171] to-[#DC2626] px-4 sm:px-5 text-[15px] font-semibold text-white transition-all duration-200 touch-manipulation ' +
         'hover:from-[#EF4444] hover:to-[#B91C1C] active:scale-[0.96] ' +
         'shadow-[inset_0_1px_0_rgba(255,255,255,0.3),0_0_26px_-4px_rgba(239,68,68,0.8),0_10px_26px_-8px_rgba(239,68,68,0.7)] ' +
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EF4444]/50 [&_svg]:h-5 [&_svg]:w-5'
       }
     >
       <Phone className="rotate-135" fill="currentColor" stroke="none" />
-      Leave
+      <span className="hidden sm:inline">Leave</span>
     </button>
   )
 }
@@ -380,7 +396,7 @@ function MoreMenu({ open, setOpen, isRecording, startRecording, stopRecording, i
       </RoundBtn>
       {open && (
         <div className="absolute bottom-[calc(100%+14px)] right-0 z-20">
-          <div role="menu" className="zk-glass zk-pop-in w-[268px] origin-bottom-right overflow-hidden rounded-2xl py-1.5">
+          <div role="menu" className="zk-glass zk-pop-in w-[268px] max-w-[calc(100vw-1rem)] origin-bottom-right overflow-hidden rounded-2xl py-1.5">
             {canRecord && (
               <>
                 <MenuItem

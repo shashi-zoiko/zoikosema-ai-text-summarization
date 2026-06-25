@@ -1,5 +1,11 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
-import { api } from '../api/client'
+import {
+  api,
+  requestGuestToken,
+  setGuestSession,
+  clearGuestSession,
+  getGuestSession,
+} from '../api/client'
 import { clearChatCache } from '../lib/chatCache'
 
 const AuthContext = createContext(null)
@@ -11,7 +17,31 @@ const REFRESH_MARGIN_MS = 2 * 60 * 1000
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  // Anonymous guest session (no account). Survives a tab reload via
+  // sessionStorage so a guest who refreshes mid-call reconnects seamlessly.
+  const [guest, setGuest] = useState(() => getGuestSession())
   const refreshTimerRef = useRef(null)
+
+  // Mint a guest identity for a meeting and persist it for this tab. Returns
+  // the server response (includes waiting_room_enabled) so the caller can
+  // decide whether to expect the lobby.
+  const joinAsGuest = useCallback(async (code, { displayName, password, captchaToken } = {}) => {
+    const data = await requestGuestToken(code, { displayName, password, captchaToken })
+    const session = {
+      code,
+      token: data.access_token,
+      userId: data.user_id,
+      name: data.name,
+    }
+    setGuestSession(session)
+    setGuest(session)
+    return data
+  }, [])
+
+  const clearGuest = useCallback(() => {
+    clearGuestSession()
+    setGuest(null)
+  }, [])
 
   const scheduleRefresh = useCallback((expiresInMs) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
@@ -150,9 +180,10 @@ export function AuthProvider({ children }) {
     <AuthContext.Provider value={{
       user, loading, login, register, logout, refresh,
       changePassword, updateProfile, deleteAccount,
-    }}>
-      {children}
-    </AuthContext.Provider>
+      // Guest session: `guest` is the active anonymous session (or null);
+      // isGuest is true only when there's a guest session AND no real account.
+      guest, isGuest: !!guest && !user, joinAsGuest, clearGuest,
+    }}>{children}</AuthContext.Provider>
   )
 }
 

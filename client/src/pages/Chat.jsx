@@ -989,9 +989,17 @@ export default function Chat() {
   /* ─────────────────── render ─────────────────── */
 
   return (
-    <div className="flex h-[calc(100vh-60px)] min-h-0 overflow-hidden font-sans">
+    <div className="flex h-[calc(100dvh-60px)] min-h-0 overflow-hidden font-sans">
       {/* ============== Channel list ============== */}
-      <aside className="flex w-[320px] shrink-0 flex-col border-r border-line bg-surface">
+      {/* Mobile shows the list OR the thread (not both): when a channel is
+          selected the list collapses and the thread fills the screen. md+ keeps
+          the classic two-pane layout. */}
+      <aside
+        className={cn(
+          'w-full shrink-0 flex-col border-r border-line bg-surface md:flex md:w-[300px] lg:w-[320px]',
+          channelId ? 'hidden md:flex' : 'flex'
+        )}
+      >
         <div className="flex items-center justify-between px-4 pb-3.5 pt-[18px]">
           <div className="font-display text-[22px] font-bold tracking-[-0.03em] text-fg">
             Chat
@@ -1088,7 +1096,12 @@ export default function Chat() {
       </aside>
 
       {/* ============== Thread ============== */}
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
+      <section
+        className={cn(
+          'min-h-0 min-w-0 flex-1 flex-col bg-bg md:flex',
+          channelId ? 'flex' : 'hidden md:flex'
+        )}
+      >
         {!activeChannel ? (
           <div className="grid flex-1 place-items-center p-10">
             <div className="flex max-w-[360px] flex-col items-center gap-2 text-center">
@@ -1121,11 +1134,19 @@ export default function Chat() {
                 : null
               return (
                 <header
-                  className="relative z-[2] flex items-center gap-3.5 border-b border-line px-6 py-4 backdrop-blur-xl"
+                  className="relative z-[2] flex items-center gap-3 border-b border-line px-4 py-3 backdrop-blur-xl sm:gap-3.5 sm:px-6 sm:py-4"
                   style={{
                     background: 'linear-gradient(180deg, color-mix(in srgb, var(--c-surface) 86%, transparent), color-mix(in srgb, var(--c-surface) 62%, transparent)), radial-gradient(900px 200px at 0% 0%, color-mix(in srgb, var(--c-accent) 12%, transparent), transparent 60%)',
                   }}
                 >
+                  <button
+                    type="button"
+                    onClick={() => navigate('/chat')}
+                    aria-label="Back to conversations"
+                    className="-ml-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-fg-dim transition hover:bg-bg-3 hover:text-fg md:hidden"
+                  >
+                    <Icon name="arrowLeft" size={20} />
+                  </button>
                   <div className="relative shrink-0">
                     <Avatar name={display.name} color={display.color} />
                     {activeChannel.is_direct && <span className="presence-dot" />}
@@ -1169,7 +1190,7 @@ export default function Chat() {
             <div
               ref={scrollContainerRef}
               onScroll={onMessagesScroll}
-              className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-7 pb-2 pt-6"
+              className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 pb-2 pt-4 sm:px-7 sm:pt-6"
               onClick={() => setEmojiPicker(null)}
             >
               {/* Load-older affordance — paginates back through history while
@@ -1384,7 +1405,10 @@ export default function Chat() {
             )}
 
             {/* Composer */}
-            <div className="relative flex items-end gap-2 border-t border-line bg-surface px-5 py-3">
+            <div
+              className="relative flex items-end gap-2 border-t border-line bg-surface px-3 py-3 sm:px-5"
+              style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
+            >
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1855,7 +1879,17 @@ function NewChannelModal({ onClose, onCreated }) {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    api(`/api/users${query ? `?q=${encodeURIComponent(query)}` : ''}`).then(setUsers).catch(() => {})
+    api(`/api/users${query ? `?q=${encodeURIComponent(query)}` : ''}`)
+      .then((list) =>
+        setUsers(
+          [...list].sort((a, b) =>
+            (a.name || a.email || '').localeCompare(b.name || b.email || '', undefined, {
+              sensitivity: 'base',
+            })
+          )
+        )
+      )
+      .catch(() => {})
   }, [query])
 
   const toggle = (id) => {
@@ -1949,16 +1983,16 @@ function NewChannelModal({ onClose, onCreated }) {
                 key={u.id}
                 onClick={() => toggle(u.id)}
                 className={cn(
-                  'flex w-full items-center gap-3 rounded-md border-0 px-2 py-2 text-left transition',
+                  'flex w-full items-center justify-start gap-3 rounded-md border-0 !px-2 !py-2 text-left !shadow-none transition',
                   isSelected
                     ? '!bg-accent-soft'
                     : '!bg-transparent hover:!bg-[color-mix(in_srgb,var(--c-fg)_5%,transparent)]'
                 )}
               >
                 <Avatar name={u.name} color={u.avatar_color} size="sm" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13.5px] text-fg">{u.name}</div>
-                  <div className="truncate text-[11px] text-fg-muted">{u.email}</div>
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
+                  <div className="truncate text-[13.5px] leading-tight text-fg">{u.name}</div>
+                  <div className="truncate text-[11px] leading-tight text-fg-muted">{u.email}</div>
                 </div>
                 {isSelected && (
                   <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-accent text-white">

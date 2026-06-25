@@ -14,7 +14,8 @@ class NullMediaProvider(MediaProvider):
         return f"null://{tenant_id}/{session_id}"
 
     async def generate_token(
-        self, *, media_room_ref: str, user_id: int, display_name: str, role: str
+        self, *, media_room_ref: str, user_id: int, display_name: str, role: str,
+        is_guest: bool = False,
     ) -> MediaToken:
         fake = hashlib.sha256(f"{media_room_ref}:{user_id}:{time.time()}".encode()).hexdigest()
         return MediaToken(

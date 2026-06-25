@@ -35,6 +35,10 @@ class Meeting(Base):
     # host controls
     waiting_room_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Allow anonymous (no-account) guests to join via the public guest-token
+    # endpoint. Default True so existing share links accept guests like
+    # Teams/Meet; host can disable per meeting to enforce authenticated-only.
+    guests_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # Per-meeting permissions enforced server-side. Host + co-host bypass.
     chat_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     screenshare_enabled: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -31,7 +31,14 @@ export default function MeetingHeader({
   const connecting = state === ConnectionState.Connecting
 
   return (
-    <header className="z-30 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[#263244] bg-[#0B1220]/85 px-4 backdrop-blur-md sm:px-5">
+    <header
+      className="z-30 flex min-h-16 shrink-0 items-center justify-between gap-2 border-b border-[#263244] bg-[#0B1220]/85 px-3 py-2 backdrop-blur-md sm:gap-3 sm:px-5"
+      style={{
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingLeft: 'max(0.75rem, env(safe-area-inset-left))',
+        paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
+      }}
+    >
       {/* ── Left: live state + room id + status chips ───────────────────── */}
       <div className="flex min-w-0 items-center gap-3">
         <span className="inline-flex items-center gap-2 text-[13px] font-semibold text-white">

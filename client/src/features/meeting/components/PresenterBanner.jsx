@@ -5,6 +5,16 @@ import { MonitorUp, PictureInPicture2, Square, X } from 'lucide-react'
 
 const PIP_SUPPORTED = typeof window !== 'undefined' && 'documentPictureInPicture' in window
 
+// Deterministic avatar colour per identity (mirrors ParticipantTile's palette)
+// so the presenter's banner avatar matches their tile colour.
+const AVATAR_COLORS = ['#7C3AED', '#2563EB', '#10B981', '#F59E0B', '#EC4899', '#06B6D4', '#3B82F6', '#8B5CF6']
+function avatarColor(seed) {
+  if (!seed) return AVATAR_COLORS[0]
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length]
+}
+
 /**
  * Persistent "X is presenting" banner — the Google Meet affordance that keeps
  * the presenter aware they're sharing and gives everyone a one-glance label of
@@ -55,12 +65,27 @@ export default function PresenterBanner() {
 
       {share && !hidden && (
         <div className="pointer-events-none absolute inset-x-0 top-3 z-30 flex justify-center px-4">
-          <div className="pointer-events-auto flex max-w-[calc(100%-1rem)] items-center gap-2.5 rounded-2xl bg-[#202124]/95 py-2 pl-3 pr-2 text-white shadow-[0_12px_36px_-12px_rgba(0,0,0,0.75)] ring-1 ring-white/12 backdrop-blur-xl">
-            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-400/25">
-              <MonitorUp className="h-4 w-4" />
+          <div className="pointer-events-auto flex max-w-[calc(100%-1rem)] items-center gap-2.5 rounded-2xl bg-[#202124]/95 py-2 pl-2.5 pr-2 text-white shadow-[0_12px_36px_-12px_rgba(0,0,0,0.75)] ring-1 ring-white/12 backdrop-blur-xl">
+            {/* Presenter avatar with a screen badge — one glance tells everyone
+                whose screen owns the stage. */}
+            <span className="relative shrink-0">
+              <span
+                className="grid h-9 w-9 place-items-center rounded-full text-[13px] font-semibold text-white ring-1 ring-white/15"
+                style={{ background: avatarColor(presenter?.identity || name) }}
+              >
+                {name.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="absolute -bottom-1 -right-1 grid h-4 w-4 place-items-center rounded-full bg-emerald-500 text-[#0B1220] ring-2 ring-[#202124]">
+                <MonitorUp className="h-2.5 w-2.5" />
+              </span>
             </span>
             <span className="flex min-w-0 flex-col leading-tight">
-              <span className="truncate text-[13.5px] font-semibold">
+              <span className="flex items-center gap-1.5 truncate text-[13.5px] font-semibold">
+                {/* Pulsing live dot — the meeting is actively being presented. */}
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/70" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+                </span>
                 {isLocal ? "You're presenting" : `${name} is presenting`}
               </span>
               <span className="hidden text-[11px] text-white/55 sm:block">

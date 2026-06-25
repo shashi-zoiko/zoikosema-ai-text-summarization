@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
-from app.core.deps import get_user_from_token
+from app.core.deps import get_participant_from_token
+from app.core.guest_cleanup import purge_meeting_guests
 from app.core.security import verify_password
 from app.models.meeting import (
     Meeting,
@@ -152,6 +153,7 @@ async def _send_waiting_list(room: str, meeting: Meeting, db: Session):
             "user_id": p.user_id,
             "name": u.name if u else "Unknown",
             "color": u.avatar_color if u else "#5b8def",
+            "is_guest": bool(u.is_guest) if u else False,
         })
 
     for member_ws in meet_manager.members(room):
@@ -167,7 +169,10 @@ async def _send_waiting_list(room: str, meeting: Meeting, db: Session):
 async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str = ""):
     db: Session = SessionLocal()
     try:
-        user = get_user_from_token(token, db)
+        # Accepts both signed-in users and anonymous guests (guest tokens). The
+        # rest of this handler is identity-agnostic — a guest is a real User row
+        # so every (meeting_id, user_id)-keyed path below works unchanged.
+        user = get_participant_from_token(token, db)
         if not user:
             await websocket.close(code=4401)
             return
@@ -269,11 +274,12 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 "user_id": user.id,
                 "name": user.name,
                 "color": user.avatar_color,
+                "is_guest": user.is_guest,
                 "is_host_or_cohost": False,
                 "role": participant.role,
                 "status": STATUS_PENDING,
             }
-            log.info("[WAITING_USER_CREATED] meeting=%s user=%s name=%s", meeting.id, user.id, user.name)
+            log.info("[WAITING_USER_CREATED] meeting=%s user=%s name=%s guest=%s", meeting.id, user.id, user.name, user.is_guest)
 
             await websocket.send_json({
                 "type": "waiting-room-hold",
@@ -387,6 +393,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 "user_id": user.id,
                 "name": user.name,
                 "color": user.avatar_color,
+                "is_guest": user.is_guest,
                 "is_host_or_cohost": host_or_cohost,
                 "role": participant.role,
                 "status": STATUS_ADMITTED,
@@ -399,6 +406,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
             "user_id": user.id,
             "name": user.name,
             "color": user.avatar_color,
+            "is_guest": user.is_guest,
             "is_host_or_cohost": host_or_cohost,
             "role": participant.role,
             "status": STATUS_ADMITTED,
@@ -443,6 +451,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 "user_id": info["user_id"],
                 "name": info["name"],
                 "color": info["color"],
+                "is_guest": bool(info.get("is_guest", False)),
                 "role": info.get("role", "participant"),
                 # Include mic/camera state so the late joiner doesn't render
                 # a <video> over a peer whose camera is actually off — that
@@ -477,6 +486,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 "user_id": user.id,
                 "name": user.name,
                 "color": user.avatar_color,
+                "is_guest": user.is_guest,
             },
             "peers": existing,
             "is_host": is_host,
@@ -568,6 +578,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                             "user_id": user.id,
                             "name": user.name,
                             "color": user.avatar_color,
+                            "is_guest": user.is_guest,
                             "body": body[:2000],
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         },
@@ -830,6 +841,13 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     meeting.is_active = False
                     meeting.ended_at = datetime.now(timezone.utc)
                     db.commit()
+                    # Purge ephemeral guest accounts for this meeting (best-effort).
+                    try:
+                        purge_meeting_guests(meeting.id, db)
+                        db.commit()
+                    except Exception:
+                        log.exception("purge_meeting_guests failed for meeting=%s", meeting.id)
+                        db.rollback()
                     await meet_manager.broadcast(
                         room,
                         {"type": "meeting-ended"},

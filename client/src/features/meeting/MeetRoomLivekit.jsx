@@ -98,7 +98,7 @@ export default function MeetRoomLivekit() {
 function MeetRoom() {
   const { code } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, isGuest, guest, joinAsGuest } = useAuth()
   const { notify, notifyChat, syncLobby, registerLobbyActions } = useNotifications()
 
   // Mic/camera choice the user made in the lobby (persisted there before
@@ -259,7 +259,10 @@ function MeetRoom() {
       } else if (t === 'meeting-ended') {
         userLeftRef.current = true
         setToast({ kind: 'info', text: 'Meeting ended by host' })
-        setTimeout(() => navigate('/meet', { replace: true }), 1500)
+        // Guests have no app shell to return to (/meet is auth-gated), so send
+        // them back to the public lobby which will show the "ended" state.
+        const dest = isGuest ? `/meet/${code}` : '/meet'
+        setTimeout(() => navigate(dest, { replace: true }), 1500)
       } else if (t === 'permission-denied') {
         setToast({ kind: 'error', text: data.reason || 'Action not allowed' })
       } else if (t === 'caption') {
@@ -278,9 +281,26 @@ function MeetRoom() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      try {
+      // Guest reconnect: if the guest's short-lived token expired (e.g. a long
+      // background tab) the join/media-token calls 401. Re-mint silently using
+      // the remembered guest name, then retry once before surfacing an error.
+      const tryJoin = async () => {
         await api(`/api/meetings/${code}/join`, { method: 'POST' })
-        const t = await fetchMediaToken(code)
+        return fetchMediaToken(code)
+      }
+      try {
+        let t
+        try {
+          t = await tryJoin()
+        } catch (e) {
+          const credErr = /credential|401|unauthor/i.test(e?.message || '')
+          if (credErr && isGuest && guest?.code === code && guest?.name) {
+            await joinAsGuest(code, { displayName: guest.name })
+            t = await tryJoin()
+          } else {
+            throw e
+          }
+        }
         if (cancelled) return
         setToken(t.access_token)
         setWsUrl(t.ws_url)
@@ -494,7 +514,7 @@ function MeetRoom() {
       video={joinPrefs.video !== false}
       onDisconnected={handleDisconnected}
       onError={(e) => setError(e?.message || String(e))}
-      className="zk-room-bg flex h-screen w-screen flex-col overflow-hidden text-white"
+      className="zk-room-bg flex h-dvh w-screen flex-col overflow-hidden overscroll-none text-white"
       style={{ background: CANVAS }}
     >
       <MeetingHeader
@@ -799,8 +819,8 @@ function RoundDockExtra({ active, onClick, label, badge, side, glow = false, chi
       aria-pressed={active}
       title={label}
       className={
-        'relative grid h-[52px] w-[52px] place-items-center rounded-full transition active:scale-[0.94] ' +
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45 [&_svg]:h-[22px] [&_svg]:w-[22px] ' +
+        'relative grid h-12 w-12 sm:h-[52px] sm:w-[52px] place-items-center rounded-full touch-manipulation transition active:scale-[0.94] ' +
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45 [&_svg]:h-5 [&_svg]:w-5 sm:[&_svg]:h-[22px] sm:[&_svg]:w-[22px] ' +
         (active
           ? 'bg-[#10B981]/20 text-[#34D399] ring-1 ring-[#10B981]/40'
           : 'text-[#94A3B8] hover:bg-white/[0.06] hover:text-white' + (side ? ' border border-[#263244]' : '') + glowCls)
@@ -1009,7 +1029,7 @@ function mentionsMe(body, name) {
 
 function Splash({ text, children }) {
   return (
-    <div className="grid h-screen w-screen place-items-center bg-[#0B1220] text-white">
+    <div className="grid h-dvh w-screen place-items-center bg-[#0B1220] text-white">
       <div className="flex flex-col items-center text-center">
         <span className="spinner mb-4" />
         <div className="text-[15px] text-[#94A3B8]">{text}</div>

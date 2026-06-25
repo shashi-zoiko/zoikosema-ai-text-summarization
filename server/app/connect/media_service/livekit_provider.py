@@ -43,12 +43,17 @@ class LiveKitMediaProvider(MediaProvider):
         user_id: int,
         display_name: str,
         role: str,
+        is_guest: bool = False,
         metadata: dict | None = None,
     ) -> MediaToken:
         from livekit import api  # lazy import — keeps null-provider deploys SDK-free
 
+        # Guests are exactly a "participant" capability-wise: publish A/V + data,
+        # subscribe, but NO room_admin (can't mute/remove others) and NO
+        # room_record. A guest can never be host/co-host, so even if role were
+        # spoofed upstream, is_guest forces non-admin grants here.
         can_publish = role in ("host", "co_host", "cohost", "participant")
-        is_admin = role in ("host", "co_host", "cohost")
+        is_admin = (not is_guest) and role in ("host", "co_host", "cohost")
 
         grants = api.VideoGrants(
             room_join=True,
@@ -60,15 +65,19 @@ class LiveKitMediaProvider(MediaProvider):
             room_record=is_admin,       # required for Egress
         )
 
+        # Carry identity hints in token metadata so any LiveKit-side consumer
+        # (and the client, via participant.metadata) can render the guest badge.
+        meta = dict(metadata or {})
+        meta.update({"displayName": display_name, "role": role, "guest": bool(is_guest)})
+
         at = (
             api.AccessToken(self.api_key, self.api_secret)
             .with_identity(f"u:{user_id}")     # stable per-user → SFU dedups duplicate tabs
             .with_name(display_name)
             .with_grants(grants)
+            .with_metadata(json.dumps(meta))
             .with_ttl(timedelta(seconds=self.token_ttl))
         )
-        if metadata:
-            at = at.with_metadata(json.dumps(metadata))
 
         return MediaToken(
             access_token=at.to_jwt(),

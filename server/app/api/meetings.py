@@ -3,11 +3,11 @@ import io
 import logging
 import secrets
 import string
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, desc, and_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -16,8 +16,15 @@ from app.connect.media_service import service as media
 from app.websocket import signaling as ws_signaling
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.deps import get_current_user
-from app.core.security import hash_password, verify_password
+from app.core.deps import get_current_user, get_current_participant
+from app.core.guest import DisplayNameError, guest_avatar_color, sanitize_display_name
+from app.core.guest_cleanup import purge_meeting_guests
+from app.core.rate_limit import guest_join_limiter, invalid_room_limiter
+from app.core.security import (
+    create_guest_token,
+    hash_password,
+    verify_password,
+)
 
 log = logging.getLogger(__name__)
 from app.models.meeting import (
@@ -57,6 +64,14 @@ def _generate_code() -> str:
     return "-".join(groups)
 
 
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP, honoring the proxy header Cloud Run sets."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 def _meeting_out(meeting: Meeting) -> dict:
     """Convert a Meeting to MeetingOut-compatible dict with password_protected."""
     return {
@@ -71,6 +86,7 @@ def _meeting_out(meeting: Meeting) -> dict:
         "locked": meeting.locked,
         "chat_enabled": meeting.chat_enabled,
         "screenshare_enabled": meeting.screenshare_enabled,
+        "guests_enabled": meeting.guests_enabled,
         "password_protected": meeting.password_hash is not None,
         "media_provider": meeting.media_provider or "mesh",
         "created_at": meeting.created_at,
@@ -160,6 +176,172 @@ def get_meeting(
     return _meeting_out(_get_meeting_or_404(code, db))
 
 
+# ── Guest (anonymous) join ───────────────────────────────────────────────────
+
+class PublicMeetingOut(BaseModel):
+    """Unauthenticated view of a meeting for the guest pre-join screen.
+
+    Deliberately minimal — never exposes the password hash, host id, participant
+    list, or any internal field. Just enough to render the lobby (title, who's
+    hosting, branding) and decide which inputs to show (password, waiting room).
+    """
+    code: str
+    title: str
+    host_name: str | None = None
+    org_logo_url: str | None = None
+    is_active: bool
+    password_protected: bool
+    waiting_room_enabled: bool
+    guests_enabled: bool
+
+
+def _org_logo_for_host(host_id: int, db: Session) -> str | None:
+    """Best-effort organization logo for branding the guest lobby.
+
+    Meetings aren't tied to an org yet (no org_id column), so we surface the
+    logo of an org the host owns, if any. Returns None otherwise; the client
+    falls back to the Zoiko wordmark.
+    """
+    try:
+        from app.models.organization import Organization
+
+        org = db.scalar(
+            select(Organization).where(Organization.owner_id == host_id)
+        )
+        return org.logo_url if org else None
+    except Exception:
+        return None
+
+
+@router.get("/{code}/public", response_model=PublicMeetingOut)
+def public_meeting_info(
+    code: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Public meeting metadata for the guest pre-join screen (no auth).
+
+    Throttled per IP so a scripted client can't enumerate valid meeting codes.
+    """
+    ip = _client_ip(request)
+    meeting = db.scalar(select(Meeting).where(Meeting.code == code))
+    if not meeting:
+        # Count misses toward the enumeration throttle; once over the limit,
+        # 429 instead of a fast 404 so guessing codes is expensive.
+        if not invalid_room_limiter.check(f"public:{ip}"):
+            raise HTTPException(status_code=429, detail="Too many requests")
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    host = db.get(User, meeting.host_id)
+    return PublicMeetingOut(
+        code=meeting.code,
+        title=meeting.title,
+        host_name=host.name if host else None,
+        org_logo_url=_org_logo_for_host(meeting.host_id, db),
+        is_active=meeting.is_active,
+        password_protected=meeting.password_hash is not None,
+        waiting_room_enabled=meeting.waiting_room_enabled,
+        guests_enabled=meeting.guests_enabled,
+    )
+
+
+class GuestTokenIn(BaseModel):
+    display_name: str = Field(..., max_length=200)
+    password: str | None = None
+    # CAPTCHA hook — validated only when a provider is configured (none wired by
+    # default). Present so the client contract is stable when one is added.
+    captcha_token: str | None = None
+
+
+class GuestTokenOut(BaseModel):
+    access_token: str
+    token_type: str = "guest"
+    user_id: int
+    name: str
+    is_guest: bool = True
+    # Mirrors the participant status the join will produce so the client knows
+    # up front whether to expect the waiting room.
+    waiting_room_enabled: bool
+
+
+@router.post("/{code}/guest-token", response_model=GuestTokenOut, status_code=201)
+def guest_token(
+    code: str,
+    data: GuestTokenIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Mint an anonymous guest identity + JWT for a meeting (no auth required).
+
+    Creates an ephemeral `users` row (is_guest=True, no email/password) and
+    returns a short-lived guest token. The client then uses this token against
+    the existing /join + /media-token + control-WS exactly like a signed-in
+    user — guest participant creation, waiting room, and admission all flow
+    through unchanged code.
+
+    Abuse controls: 20 tokens / IP / hour, password + locked + guests_enabled
+    enforced server-side, display name sanitized. Never creates a permanent
+    account; guest rows are purged when the meeting ends (see guest_cleanup).
+    """
+    ip = _client_ip(request)
+    if not guest_join_limiter.check(f"guest:{ip}"):
+        retry = guest_join_limiter.retry_after(f"guest:{ip}")
+        raise HTTPException(
+            status_code=429,
+            detail="Too many guest join attempts. Please try again later.",
+            headers={"Retry-After": str(retry)},
+        )
+
+    meeting = _get_meeting_or_404(code, db)
+    if not meeting.is_active:
+        raise HTTPException(status_code=410, detail="Meeting has ended")
+    if not meeting.guests_enabled:
+        raise HTTPException(
+            status_code=403, detail="Guests are not allowed in this meeting"
+        )
+    if meeting.locked:
+        raise HTTPException(status_code=403, detail="Meeting is locked")
+
+    # Meeting password (guests are never the host, so always enforced).
+    if meeting.password_hash:
+        if not data.password or not verify_password(data.password, meeting.password_hash):
+            raise HTTPException(status_code=403, detail="Incorrect meeting password")
+
+    # Validate + sanitize the display name (never trust the client).
+    try:
+        name = sanitize_display_name(data.display_name)
+    except DisplayNameError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    # Create the ephemeral guest account. email/password stay NULL; a 6h TTL
+    # backstops cleanup if the meeting never formally ends.
+    now = datetime.now(timezone.utc)
+    ttl = get_settings().livekit_token_ttl_seconds
+    guest = User(
+        email=None,
+        name=name,
+        password_hash=None,
+        avatar_color=guest_avatar_color(f"{code}:{name}:{now.timestamp()}"),
+        is_guest=True,
+        guest_expires_at=now + timedelta(seconds=ttl),
+    )
+    db.add(guest)
+    db.commit()
+    db.refresh(guest)
+
+    token = create_guest_token(guest.id)
+    log.info(
+        "[GUEST_JOIN] meeting=%s guest_user=%s name=%r ip=%s",
+        meeting.id, guest.id, name, ip,
+    )
+    return GuestTokenOut(
+        access_token=token,
+        user_id=guest.id,
+        name=name,
+        waiting_room_enabled=meeting.waiting_room_enabled,
+    )
+
+
 # ── Update ──────────────────────────────────────────────────────────────────
 
 @router.patch("/{code}", response_model=MeetingOut)
@@ -197,6 +379,16 @@ async def end_meeting(
     # is the source of truth for "meeting ended"; LiveKit will GC anyway.
     room_ref = meeting.media_room_ref
     meeting.media_room_ref = None
+    # Purge ephemeral guest accounts created for this meeting (participant rows
+    # cascade). Best-effort — a failure here must not block ending the meeting.
+    try:
+        purge_meeting_guests(meeting.id, db)
+    except Exception:
+        log.exception("purge_meeting_guests failed for meeting=%s", meeting.id)
+        db.rollback()
+        meeting.is_active = False
+        meeting.ended_at = datetime.now(timezone.utc)
+        meeting.media_room_ref = None
     db.commit()
     db.refresh(meeting)
 
@@ -223,7 +415,7 @@ class MediaTokenOut(BaseModel):
 async def issue_media_token(
     code: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_participant),
 ):
     """Issue a short-lived LiveKit JWT for the caller.
 
@@ -287,6 +479,7 @@ async def issue_media_token(
         user_id=user.id,
         display_name=user.name,
         role=participant.role,
+        is_guest=user.is_guest,
     )
 
     # Public WS URL the browser dials. server-side LIVEKIT_WS_URL points at
@@ -328,7 +521,7 @@ def _active_recording(meeting: Meeting, db: Session):
 def recording_state(
     code: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_participant),
 ):
     meeting = _get_meeting_or_404(code, db)
     rec = _active_recording(meeting, db)
@@ -435,7 +628,7 @@ def join_meeting(
     code: str,
     data: JoinMeetingIn | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_participant),
 ):
     try:
         meeting = _get_meeting_or_404(code, db)
@@ -540,7 +733,7 @@ def join_meeting(
 def get_participants(
     code: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_participant),
 ):
     meeting = _get_meeting_or_404(code, db)
     participants = db.scalars(
@@ -555,6 +748,7 @@ def get_participants(
             "user_id": p.user_id,
             "name": u.name if u else "Unknown",
             "avatar_color": u.avatar_color if u else "#5b8def",
+            "is_guest": bool(u.is_guest) if u else False,
             "role": p.role,
             "status": p.status,
             "joined_at": p.joined_at.isoformat() if p.joined_at else None,

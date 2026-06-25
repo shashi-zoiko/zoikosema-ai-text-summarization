@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 import Layout from './components/Layout.jsx'
 import UpdateToast from './components/UpdateToast.jsx'
 import CallOverlay from './components/CallOverlay.jsx'
@@ -46,6 +46,24 @@ function RequireAuth({ children }) {
   return children
 }
 
+// Meeting room access: a signed-in user OR an active guest session for THIS
+// meeting may enter. Anyone else is bounced to the lobby (/meet/:code), which
+// shows the guest-join screen rather than forcing a login.
+function RequireMeetingAccess({ children }) {
+  const { user, loading, guest } = useAuth()
+  const { code } = useParams()
+  if (loading) {
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', height: '100vh' }}>
+        <div className="spinner" />
+      </div>
+    )
+  }
+  const hasGuestSession = guest && guest.code === code
+  if (!user && !hasGuestSession) return <Navigate to={`/meet/${code}`} replace />
+  return children
+}
+
 function RedirectIfAuthed({ children }) {
   const { user, loading } = useAuth()
   if (loading) return null
@@ -78,36 +96,33 @@ export default function App() {
         />
         {/* Public share playback — no auth so the link works for anyone. */}
         <Route path="/recording/:token" element={<SharedRecording />} />
-        <Route
-          path="/meet/:code"
-          element={
-            <RequireAuth>
-              <MeetLobby />
-            </RequireAuth>
-          }
-        />
+        {/* Public lobby: MeetLobby branches internally — signed-in users get
+            the existing pre-join flow, anonymous visitors get the guest-join
+            screen (no forced login). */}
+        <Route path="/meet/:code" element={<MeetLobby />} />
         {/* LiveKit SFU is the only media plane. /room is kept as an alias for
             old links/bookmarks and the 1:1 call flow; the legacy WebRTC mesh
             room (pages/MeetRoom.jsx) has been removed. Both paths render the
-            same LiveKit room. */}
+            same LiveKit room. Guests with a valid session for this meeting are
+            admitted alongside signed-in users. */}
         <Route
           path="/meet/:code/room"
           element={
-            <RequireAuth>
+            <RequireMeetingAccess>
               <RoomErrorBoundary>
                 <MeetRoomLivekit />
               </RoomErrorBoundary>
-            </RequireAuth>
+            </RequireMeetingAccess>
           }
         />
         <Route
           path="/meet/:code/room-lk"
           element={
-            <RequireAuth>
+            <RequireMeetingAccess>
               <RoomErrorBoundary>
                 <MeetRoomLivekit />
               </RoomErrorBoundary>
-            </RequireAuth>
+            </RequireMeetingAccess>
           }
         />
         <Route

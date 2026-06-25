@@ -6,12 +6,13 @@ import {
   useTrackMutedIndicator,
 } from '@livekit/components-react'
 import { ConnectionQuality, Track } from 'livekit-client'
-import { AlertTriangle, Eye, Hand, MicOff, MonitorUp, Square } from 'lucide-react'
+import { AlertTriangle, Eye, Hand, Loader2, MicOff, MonitorUp, Square } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
 import { PinButton, PinnedNameIcon } from '../../../components/meeting/PinControls.jsx'
+import GuestBadge, { isGuestParticipant } from './GuestBadge.jsx'
 
 // Enterprise dark palette (mirrors index.css meeting tokens).
-const CARD = '#151D2B'
+const CARD = '#161B26'
 
 // Tint a hex accent to an rgba string for glows / soft rings.
 function withAlpha(hex, a) {
@@ -21,15 +22,14 @@ function withAlpha(hex, a) {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
 }
 
-// Google-Meet-style colourful tile canvas: a dark card washed with the
-// participant's accent in two opposite corners so each person's tile reads as a
-// distinct, saturated colour (not the same flat grey). The centre stays dark so
-// the avatar / name overlay keep their contrast.
+// Calm, low-saturation tile canvas (Google-Meet / Teams dark): a neutral dark
+// card with only a FAINT wash of the participant's accent in the top-left, so
+// each person still reads as their own colour without the old neon glare. The
+// accent lives on the thin border + status dot + speaking ring, not the fill.
 function tileBackground(accent) {
   return (
-    `radial-gradient(135% 115% at 12% 0%, ${withAlpha(accent, 0.45)} 0%, transparent 58%),` +
-    `radial-gradient(135% 115% at 100% 100%, ${withAlpha(accent, 0.30)} 0%, transparent 55%),` +
-    `linear-gradient(150deg, ${withAlpha(accent, 0.12)} 0%, ${CARD} 60%)`
+    `radial-gradient(120% 120% at 14% 0%, ${withAlpha(accent, 0.16)} 0%, transparent 55%),` +
+    `linear-gradient(160deg, ${withAlpha(accent, 0.07)} 0%, ${CARD} 62%)`
   )
 }
 
@@ -53,7 +53,7 @@ function useConnectionQuality(participant) {
   return quality
 }
 
-function ParticipantTileImpl({ trackRef, isHero, fit = 'cover', accent }) {
+function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = false }) {
   const { name, identity } = useParticipantInfo({ participant: trackRef.participant })
   const isSpeaking = useIsSpeaking(trackRef.participant)
   const quality = useConnectionQuality(trackRef.participant)
@@ -95,6 +95,7 @@ function ParticipantTileImpl({ trackRef, isHero, fit = 'cover', accent }) {
 
   const hasVideo = !!trackRef.publication && !videoMuted
   const displayName = name || identity || 'Guest'
+  const isGuest = isGuestParticipant(trackRef.participant)
   // Deterministic colour per identity so the same user always gets the same
   // avatar — Meet does the same trick.
   const avatarColor = pickColor(identity || displayName)
@@ -215,10 +216,41 @@ function ParticipantTileImpl({ trackRef, isHero, fit = 'cover', accent }) {
     )
   }
 
+  // ── Remote presentation tile ────────────────────────────────────────────────
+  // A REMOTE screen share renders as a neutral, black-letterboxed surface — no
+  // accent wash, no speaking ring (it's content, not a face). While the first
+  // frame is still decoding we show a calm "Loading presentation…" spinner
+  // instead of a black rectangle.
+  if (trackRef.source === Track.Source.ScreenShare) {
+    return (
+      <div className="group relative isolate h-full w-full overflow-hidden rounded-[20px] bg-black ring-1 ring-[#263244]">
+        {hasVideo && (
+          <VideoTrack
+            trackRef={trackRef}
+            onLoadedData={onVideoLive}
+            onPlaying={onVideoLive}
+            className="absolute inset-0 h-full w-full bg-black object-contain"
+          />
+        )}
+        {(!hasVideo || !videoReady) && (
+          <div className="absolute inset-0 grid place-items-center bg-[#0B1018]">
+            <div className="flex flex-col items-center gap-3 text-center">
+              <Loader2 className="h-8 w-8 animate-spin text-[#10B981]" />
+              <span className="text-[13px] font-medium text-[#94A3B8]">Loading presentation…</span>
+            </div>
+          </div>
+        )}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end p-3">
+          <div className="flex items-center gap-1.5 rounded-lg bg-black/55 px-2.5 py-1 text-[12.5px] font-medium text-white ring-1 ring-white/10 backdrop-blur-md">
+            <MonitorUp className="h-3.5 w-3.5 text-emerald-400" />
+            <span className="truncate">{displayName}'s screen</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const speaking = isSpeaking && !micMuted
-  // Live status shown under the name: Muted (red) · Speaking (accent) · Active.
-  const statusText = micMuted ? 'Muted' : speaking ? 'Speaking' : 'Active'
-  const statusColor = micMuted ? '#F87171' : speaking ? tileAccent : '#34D399'
 
   return (
     <div
@@ -228,16 +260,20 @@ function ParticipantTileImpl({ trackRef, isHero, fit = 'cover', accent }) {
         (speaking ? 'zk-tile-speak scale-[1.015]' : 'zk-tile-rest')
       }
       style={{
-        // Colourful per-participant canvas (Google-Meet style), plus accent
-        // custom props that drive the rest / speaking glow keyframes in CSS so
-        // every tile carries a dense accent border and the active speaker pulses
-        // brightly in their own colour — the Teams / Discord "who's talking" cue.
+        // Calm per-participant canvas, plus accent custom props that drive the
+        // rest / speaking glow keyframes in CSS. Resting tiles get only a THIN
+        // accent border; the active speaker still pulses a brighter ring so
+        // "who's talking" stays unmistakable — just without the old neon glare.
         background: tileBackground(tileAccent),
+        // `size` containment makes this a query container, so the avatar/text
+        // below can scale to the tile via cqmin units — fixes the "huge avatar
+        // in a small strip tile" bug at every tile size.
+        containerType: 'size',
         '--tile-accent': tileAccent,
-        '--tile-soft': withAlpha(tileAccent, 0.55),
-        '--tile-faint': withAlpha(tileAccent, 0.18),
-        '--tile-glow': withAlpha(tileAccent, 0.5),
-        '--tile-glow-soft': withAlpha(tileAccent, 0.32),
+        '--tile-soft': withAlpha(tileAccent, 0.22),
+        '--tile-faint': withAlpha(tileAccent, 0.12),
+        '--tile-glow': withAlpha(tileAccent, 0.32),
+        '--tile-glow-soft': withAlpha(tileAccent, 0.10),
       }}
     >
       {hasVideo && (
@@ -254,13 +290,15 @@ function ParticipantTileImpl({ trackRef, isHero, fit = 'cover', accent }) {
 
       {(!hasVideo || !videoReady) && (
         <div className="absolute inset-0 grid place-items-center" style={{ background: tileBackground(tileAccent) }}>
-          <div className="flex flex-col items-center gap-3.5">
+          <div className="flex flex-col items-center gap-[4cqmin]">
             <div
-              className={
-                'grid place-items-center rounded-full font-semibold text-white ' +
-                (isHero ? 'h-32 w-32 text-5xl' : 'h-24 w-24 text-3xl')
-              }
+              className="grid aspect-square shrink-0 place-items-center rounded-full font-semibold leading-none text-white"
               style={{
+                // Scale to the SMALLER tile axis (cqmin) so the avatar fills a big
+                // hero proportionally yet never overflows a tiny strip tile; the
+                // px ceiling stops it ballooning on very large heroes.
+                width: 'min(42cqmin, 132px)',
+                fontSize: 'min(19cqmin, 52px)',
                 background: `linear-gradient(145deg, ${withAlpha(tileAccent, 1)} 0%, ${withAlpha(tileAccent, 0.7)} 100%)`,
                 boxShadow: speaking
                   ? `0 0 0 3px ${tileAccent}, 0 0 0 10px ${withAlpha(tileAccent, 0.18)}, 0 0 28px 2px ${withAlpha(tileAccent, 0.5)}`
@@ -272,16 +310,27 @@ function ParticipantTileImpl({ trackRef, isHero, fit = 'cover', accent }) {
             {speaking ? (
               <VoiceBars participant={trackRef.participant} accent={tileAccent} />
             ) : (
-              <span className="text-[12.5px] font-medium text-[#94A3B8]">Camera off</span>
+              <span className="text-[min(11cqmin,12.5px)] font-medium text-[#94A3B8]">Camera off</span>
             )}
           </div>
         </div>
       )}
 
-      {/* Hand raised — top-left chip */}
-      {raised && (
-        <div className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-[#F59E0B] text-[#0B1220] shadow-lg ring-1 ring-white/20" title="Hand raised">
-          <Hand className="h-4 w-4" />
+      {/* Top-left status chips — "Presenting" (this person owns the shared screen)
+          and a raised hand. Stacked in one row so they never overlap. */}
+      {(isPresenting || raised) && (
+        <div className="absolute left-3 top-3 flex items-center gap-1.5">
+          {isPresenting && (
+            <span className="flex items-center gap-1 rounded-full bg-[#10B981] px-2 py-1 text-[11px] font-semibold text-[#0B1220] shadow-lg ring-1 ring-white/20" title="Presenting">
+              <MonitorUp className="h-3.5 w-3.5" />
+              Presenting
+            </span>
+          )}
+          {raised && (
+            <span className="grid h-8 w-8 place-items-center rounded-full bg-[#F59E0B] text-[#0B1220] shadow-lg ring-1 ring-white/20" title="Hand raised">
+              <Hand className="h-4 w-4" />
+            </span>
+          )}
         </div>
       )}
 
@@ -301,18 +350,22 @@ function ParticipantTileImpl({ trackRef, isHero, fit = 'cover', accent }) {
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/65 to-transparent" />
       )}
 
-      {/* Bottom-left identity block — name line + live status line. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3.5">
-        <div className="flex max-w-[calc(100%-2rem)] flex-col gap-1 rounded-xl bg-black/45 px-2.5 py-1.5 ring-1 ring-white/10 backdrop-blur-md">
-          <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-white">
-            {isPinned && <PinnedNameIcon />}
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tileAccent }} />
-            <span className="truncate">{displayName}{isSelf && ' (You)'}</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-[11px] font-medium leading-none">
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: statusColor }} />
-            <span style={{ color: statusColor }}>{statusText}</span>
-          </div>
+      {/* Bottom-left name — plain text, Google-Meet style (no chip background).
+          Sized in container-query units so it scales with the tile: big & bold in
+          a hero / single-user stage, shrinking to a legible floor as more people
+          join or in the small screen-share filmstrip. A dark halo keeps it
+          readable over bright video; a soft accent glow makes it pop. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 px-[3.5cqmin] pb-[3.5cqmin]">
+        <div
+          className="flex max-w-[calc(100%-1rem)] items-center gap-1.5 font-bold tracking-[-0.01em] text-white"
+          style={{
+            fontSize: 'clamp(12px, 4.4cqmin, 26px)',
+            textShadow: `0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.65), 0 0 20px ${withAlpha(tileAccent, 0.75)}`,
+          }}
+        >
+          {isPinned && <PinnedNameIcon />}
+          <span className="truncate">{displayName}{isSelf && ' (You)'}</span>
+          {isGuest && <GuestBadge />}
         </div>
       </div>
     </div>
@@ -381,7 +434,8 @@ export const ParticipantTile = memo(
     a.trackRef.participant === b.trackRef.participant &&
     a.isHero === b.isHero &&
     a.fit === b.fit &&
-    a.accent === b.accent,
+    a.accent === b.accent &&
+    a.isPresenting === b.isPresenting,
 )
 
 function QualityBars({ quality }) {

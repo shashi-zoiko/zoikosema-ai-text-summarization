@@ -53,6 +53,27 @@ def create_refresh_token(subject: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def create_guest_token(subject: str) -> str:
+    """Mint a short-lived JWT for an anonymous meeting guest.
+
+    Distinct `type: "guest"` so `get_current_user` (account-only) rejects it,
+    while `get_current_participant` accepts it. TTL matches the LiveKit media
+    session lifetime (6h) so the token outlives any real meeting and survives
+    reconnects without re-minting. Subject is the ephemeral guest User id.
+    """
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(seconds=settings.livekit_token_ttl_seconds)
+    jti = secrets.token_hex(16)
+    payload = {
+        "sub": str(subject),
+        "exp": expire,
+        "iat": now,
+        "jti": jti,
+        "type": "guest",
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
 def decode_token(token: str, expected_type: str = "access") -> Optional[str]:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
@@ -66,6 +87,28 @@ def decode_token(token: str, expected_type: str = "access") -> Optional[str]:
         return payload.get("sub")
     except JWTError:
         return None
+
+
+def decode_token_any(
+    token: str, types: tuple[str, ...] = ("access", "guest")
+) -> tuple[Optional[str], Optional[str]]:
+    """Decode a token accepting any of `types`. Returns (subject, token_type).
+
+    Used by the participant dependencies so a single code path serves both
+    signed-in users ("access") and anonymous guests ("guest"). Returns
+    (None, None) on a bad signature, expiry, blacklist, or unexpected type.
+    """
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        token_type = payload.get("type", "access")
+        if token_type not in types:
+            return None, None
+        jti = payload.get("jti")
+        if jti and is_blacklisted(jti):
+            return None, None
+        return payload.get("sub"), token_type
+    except JWTError:
+        return None, None
 
 
 def blacklist_token(token: str) -> None:

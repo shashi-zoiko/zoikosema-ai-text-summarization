@@ -370,17 +370,24 @@ function Section({ children }) {
 
 function Table({ head, children }) {
   return (
+    // Horizontal scroll on narrow screens so the fr-columns don't squish into an
+    // unreadable mush; min-width keeps the layout legible and the header aligned
+    // with the rows (both share the same column template).
     <div className="overflow-hidden rounded-[16px] border border-line bg-bg-1 shadow-sm">
-      <div
-        className="grid border-b border-line px-4 py-3 text-[10.5px] font-semibold uppercase tracking-[0.10em] text-fg-muted backdrop-blur-md"
-        style={{
-          gridTemplateColumns: head.map((h) => h.flex).join(' '),
-          background: 'linear-gradient(180deg, color-mix(in srgb, var(--c-surface) 88%, transparent), color-mix(in srgb, var(--c-surface) 68%, transparent))',
-        }}
-      >
-        {head.map((h, i) => (<span key={i}>{h.label}</span>))}
+      <div className="zk-rail overflow-x-auto">
+        <div className="min-w-[640px]">
+          <div
+            className="grid border-b border-line px-4 py-3 text-[10.5px] font-semibold uppercase tracking-[0.10em] text-fg-muted backdrop-blur-md"
+            style={{
+              gridTemplateColumns: head.map((h) => h.flex).join(' '),
+              background: 'linear-gradient(180deg, color-mix(in srgb, var(--c-surface) 88%, transparent), color-mix(in srgb, var(--c-surface) 68%, transparent))',
+            }}
+          >
+            {head.map((h, i) => (<span key={i}>{h.label}</span>))}
+          </div>
+          <div>{children}</div>
+        </div>
       </div>
-      <div>{children}</div>
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { Check, Loader2, UserMinus } from 'lucide-react'
 import DrawerShell from './DrawerShell.jsx'
+import GuestBadge from './GuestBadge.jsx'
 
 /**
  * Host-only waiting-room drawer (dark). Each action (admit / deny / admit-all)
@@ -76,7 +77,10 @@ export default function WaitingRoomPanel({ waiting, onAdmit, onDeny, onAdmitAll,
                 {(w.name || '?').slice(0, 1).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-medium text-white">{w.name || 'Guest'}</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-[13px] font-medium text-white">{w.name || 'Guest'}</span>
+                  {w.is_guest && <GuestBadge />}
+                </div>
                 <div className="text-[11px] text-[#94A3B8]">Wants to join</div>
               </div>
               <button
