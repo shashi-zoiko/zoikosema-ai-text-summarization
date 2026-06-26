@@ -102,12 +102,12 @@ const ParticipantRow = memo(function ParticipantRow({
         <div className="text-[11px] text-[#94A3B8]">{ROLE_LABEL[role]}</div>
       </div>
 
-      <div className="flex items-center gap-1 text-[#64748B]">
+      <div className="flex w-12 shrink-0 items-center justify-end gap-1.5 text-[#64748B]">
         {micMuted && <MicOff className="h-3.5 w-3.5" />}
         {camOff && <VideoOff className="h-3.5 w-3.5" />}
       </div>
 
-      <div className="ml-1 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+      <div className="flex w-22 shrink-0 items-center justify-end gap-0.5 opacity-0 transition group-hover:opacity-100">
         <RowBtn onClick={onTogglePin} title={pinned ? 'Unpin' : 'Pin to main view'}>
           {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
         </RowBtn>

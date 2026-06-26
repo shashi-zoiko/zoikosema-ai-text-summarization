@@ -4,6 +4,10 @@ import { cn } from '../lib/cn'
 
 const COLORS = ['#ffffff', '#ef4f6b', '#fbbf24', '#34d399', '#7c8cff', '#f472b6', '#38bdf8', '#a78bfa']
 const STROKE_SIZES = [2, 4, 8, 14]
+
+// Document-style text: modest size that scales gently with the stroke size.
+const textFontSize = (size) => Math.max(16, (size || 4) * 4)
+const TEXT_PAD = 10 // px inset of the text editor from the canvas edges
 const TOOLS = [
   { id: 'pen', icon: 'pen', label: 'Draw' },
   { id: 'line', icon: 'minus', label: 'Line' },
@@ -28,6 +32,15 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
   const [showColors, setShowColors] = useState(false)
   const [showSizes, setShowSizes] = useState(false)
   const [textInput, setTextInput] = useState(null)  // { x, y } when placing text
+  const [editingText, setEditingText] = useState('') // initial value of the text editor
+  const textareaRef = useRef(null)
+  const editingOrigRef = useRef(null) // original text stroke being re-edited (for restore on cancel)
+  const editorClosedRef = useRef(false) // guard so the unmount blur doesn't re-fire after Esc
+  const rootRef = useRef(null)
+  const [panelPct, setPanelPct] = useState(50) // panel height as % of the stage — opens half-screen
+  const resizingRef = useRef(false)
+  const strokesRef = useRef(strokes)
+  useEffect(() => { strokesRef.current = strokes }, [strokes])
 
   const getCanvasPos = useCallback((e) => {
     const canvas = canvasRef.current
@@ -109,8 +122,29 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
       ctx.stroke()
     } else if (stroke.tool === 'text') {
       const p = toPixel(stroke.points[0])
-      ctx.font = `${Math.max(14, stroke.size * 4)}px sans-serif`
-      ctx.fillText(stroke.text, p.x, p.y)
+      const fontSize = stroke.fontSize || textFontSize(stroke.size)
+      ctx.font = `${fontSize}px system-ui, sans-serif`
+      ctx.textBaseline = 'top'
+      const canvas = canvasRef.current
+      const rectW = canvas ? canvas.getBoundingClientRect().width : 0
+      const maxW = Math.max(40, rectW - p.x - TEXT_PAD) // wrap to the right edge
+      const lh = fontSize * 1.35
+      let y = p.y
+      for (const para of String(stroke.text).split('\n')) {
+        let line = ''
+        for (const word of para.split(' ')) {
+          const test = line ? `${line} ${word}` : word
+          if (line && ctx.measureText(test).width > maxW) {
+            ctx.fillText(line, p.x, y)
+            y += lh
+            line = word
+          } else {
+            line = test
+          }
+        }
+        ctx.fillText(line, p.x, y)
+        y += lh
+      }
     }
 
     ctx.restore()
@@ -141,13 +175,15 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
     redrawAll([])
   }, [redrawAll])
 
-  // Handle window resize
+  // Keep the canvas backing store in sync with its rendered size — covers both
+  // window resizes and the panel being dragged taller/shorter.
   useEffect(() => {
-    const handleResize = () => {
-      const canvas = canvasRef.current
-      if (!canvas) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ro = new ResizeObserver(() => {
       const dpr = window.devicePixelRatio || 1
       const rect = canvas.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
       canvas.width = rect.width * dpr
       canvas.height = rect.height * dpr
       const ctx = canvas.getContext('2d')
@@ -155,11 +191,11 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
       ctxRef.current = ctx
-      redrawAll(strokes)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [strokes, redrawAll])
+      redrawAll(strokesRef.current)
+    })
+    ro.observe(canvas)
+    return () => ro.disconnect()
+  }, [redrawAll])
 
   // Render remote strokes — mirror inbound prop into local state so undo/redo
   // and resize redraws treat them the same as locally-drawn strokes.
@@ -179,12 +215,82 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
     if (onDraw) onDraw(stroke)
   }, [onDraw])
 
-  const handlePointerDown = useCallback((e) => {
-    if (tool === 'text') {
-      const pos = getCanvasPos(e)
-      setTextInput(pos)
-      return
+  // Measure a committed text stroke's on-screen box (mirrors drawStroke's wrapping)
+  // so we can hit-test clicks against it.
+  const measureTextStroke = useCallback((stroke) => {
+    const ctx = ctxRef.current
+    const canvas = canvasRef.current
+    if (!ctx || !canvas) return null
+    const p = toPixel(stroke.points[0])
+    const fontSize = stroke.fontSize || textFontSize(stroke.size)
+    ctx.save()
+    ctx.font = `${fontSize}px system-ui, sans-serif`
+    const rectW = canvas.getBoundingClientRect().width
+    const maxW = Math.max(40, rectW - p.x - TEXT_PAD)
+    const lh = fontSize * 1.35
+    let lines = 0
+    let widest = 0
+    for (const para of String(stroke.text).split('\n')) {
+      let line = ''
+      for (const word of para.split(' ')) {
+        const test = line ? `${line} ${word}` : word
+        if (line && ctx.measureText(test).width > maxW) {
+          widest = Math.max(widest, ctx.measureText(line).width)
+          lines++
+          line = word
+        } else { line = test }
+      }
+      widest = Math.max(widest, ctx.measureText(line).width)
+      lines++
     }
+    ctx.restore()
+    return { x: p.x, y: p.y, w: Math.min(maxW, widest), h: lines * lh }
+  }, [toPixel])
+
+  // Open a fresh text editor at the top-left of the canvas (Word/Notepad page).
+  const openTextEditor = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    editingOrigRef.current = null
+    setEditingText('')
+    setTextInput({
+      x: (TEXT_PAD / rect.width) * 100,
+      y: (TEXT_PAD / rect.height) * 100,
+    })
+  }, [])
+
+  // Clicking the canvas with the text tool: re-edit the clicked text in place
+  // (like Word), else start a new text block where you clicked.
+  const handleCanvasClick = useCallback((e) => {
+    if (tool !== 'text') return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const cx = e.clientX - rect.left
+    const cy = e.clientY - rect.top
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const s = strokes[i]
+      if (s.tool !== 'text') continue
+      const b = measureTextStroke(s)
+      if (!b) continue
+      if (cx >= b.x - 12 && cx <= b.x + b.w + 16 && cy >= b.y - 6 && cy <= b.y + b.h + 6) {
+        editingOrigRef.current = s
+        setColor(s.color)
+        setStrokeSize(s.size)
+        setEditingText(String(s.text))
+        setTextInput(s.points[0])
+        setStrokes(prev => { const u = prev.filter((_, idx) => idx !== i); redrawAll(u); return u })
+        return
+      }
+    }
+    editingOrigRef.current = null
+    setEditingText('')
+    setTextInput(getCanvasPos(e))
+  }, [tool, strokes, measureTextStroke, getCanvasPos, redrawAll])
+
+  const handlePointerDown = useCallback((e) => {
+    if (tool === 'text') return   // text is handled by the editor, not drawing
     setIsDrawing(true)
     const pos = getCanvasPos(e)
     startPosRef.current = pos
@@ -236,19 +342,64 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
     }
   }, [isDrawing, commitStroke])
 
-  const handleTextSubmit = useCallback((text) => {
-    if (!text.trim() || !textInput) return
-    const stroke = {
-      tool: 'text',
-      color,
-      size: strokeSize,
-      points: [textInput],
-      text: text.trim(),
+  // Commit (non-empty) or cancel (empty) the text editor. On cancel while
+  // re-editing an existing block, the original is restored so it isn't lost.
+  const closeEditor = useCallback((raw) => {
+    if (editorClosedRef.current) { editorClosedRef.current = false; return }
+    const text = (raw ?? '').replace(/\s+$/, '')
+    const orig = editingOrigRef.current
+    editingOrigRef.current = null
+    if (text.trim() && textInput) {
+      const stroke = {
+        tool: 'text',
+        color,
+        size: strokeSize,
+        fontSize: textFontSize(strokeSize),
+        points: [textInput],
+        text,
+      }
+      drawStroke(stroke)
+      commitStroke(stroke)
+    } else if (orig) {
+      setStrokes(prev => { const u = [...prev, orig]; redrawAll(u); return u })
     }
-    drawStroke(stroke)
-    commitStroke(stroke)
     setTextInput(null)
-  }, [textInput, color, strokeSize, drawStroke, commitStroke])
+    setEditingText('')
+  }, [textInput, color, strokeSize, drawStroke, commitStroke, redrawAll])
+
+  // Drag the bottom handle to resize the panel (reveals the meeting below).
+  const startResize = useCallback((e) => {
+    resizingRef.current = true
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    e.preventDefault()
+  }, [])
+  const onResize = useCallback((e) => {
+    if (!resizingRef.current) return
+    const parent = rootRef.current?.parentElement
+    if (!parent) return
+    const rect = parent.getBoundingClientRect()
+    // Bottom-anchored: panel height = distance from the pointer to the stage bottom.
+    const pct = ((rect.bottom - e.clientY) / rect.height) * 100
+    setPanelPct(Math.min(95, Math.max(20, pct)))
+  }, [])
+  const endResize = useCallback((e) => {
+    resizingRef.current = false
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
+  }, [])
+
+  // Grow the text editor to fit its content, but never past the canvas bottom —
+  // once it would overflow, cap the height and let it scroll internally.
+  const growTextarea = useCallback((el) => {
+    const canvas = canvasRef.current
+    if (!el || !canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const topPx = (parseFloat(el.style.top || '0') / 100) * rect.height
+    const maxH = Math.max(24, rect.height - topPx - TEXT_PAD)
+    el.style.height = 'auto'
+    const h = Math.min(el.scrollHeight, maxH)
+    el.style.height = `${h}px`
+    el.style.overflowY = el.scrollHeight > maxH ? 'auto' : 'hidden'
+  }, [])
 
   const undo = useCallback(() => {
     setStrokes(prev => {
@@ -291,11 +442,36 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
     return () => window.removeEventListener('keydown', handler)
   }, [undo, redo])
 
+  // When the text editor opens: focus it, size it to its content, and drop the
+  // caret at the end so typing continues from there (click inside to reposition).
+  useEffect(() => {
+    if (!textInput) return
+    const el = textareaRef.current
+    if (!el) return
+    growTextarea(el)
+    el.focus()
+    const len = el.value.length
+    el.setSelectionRange(len, len)
+  }, [textInput, growTextarea])
+
   return (
     <div
-      className="fade-in relative flex min-h-0 min-w-0 flex-1 flex-col"
-      style={{ background: '#06060c' }}
+      ref={rootRef}
+      className="fade-in pointer-events-auto absolute inset-x-0 bottom-0 flex min-h-0 min-w-0 flex-col border-t border-line shadow-2xl"
+      style={{ background: '#06060c', height: `${panelPct}%` }}
     >
+      {/* Drag handle (top edge) — pull up to grow the board, down to reveal the meeting */}
+      <div
+        onPointerDown={startResize}
+        onPointerMove={onResize}
+        onPointerUp={endResize}
+        className="group flex h-4 shrink-0 cursor-ns-resize touch-none items-center justify-center"
+        style={{ background: 'rgba(15,15,23,0.9)' }}
+        title="Drag to resize"
+      >
+        <div className="h-1 w-12 rounded-full bg-white/25 transition-colors group-hover:bg-white/45" />
+      </div>
+
       {/* Toolbar */}
       <div
         className="z-[5] flex shrink-0 items-center gap-1 border-b border-line px-3 py-2 backdrop-blur-md"
@@ -303,7 +479,12 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
       >
         <div className="flex gap-0.5">
           {TOOLS.map(t => (
-            <ToolBtn key={t.id} active={tool === t.id} onClick={() => setTool(t.id)} title={t.label}>
+            <ToolBtn
+              key={t.id}
+              active={tool === t.id}
+              onClick={() => { setTool(t.id); if (t.id === 'text') openTextEditor() }}
+              title={t.label}
+            >
               <Icon name={t.icon} size={16} />
             </ToolBtn>
           ))}
@@ -397,41 +578,54 @@ export default function Whiteboard({ onDraw, remoteStrokes, onClose }) {
 
         <div className="flex-1" />
 
-        <ToolBtn onClick={onClose} title="Close whiteboard">
-          <Icon name="close" size={16} />
-        </ToolBtn>
+        <button
+          onClick={onClose}
+          title="Close whiteboard"
+          className="grid h-[34px] w-[34px] place-items-center !rounded-sm !border-0 !bg-danger !p-0 !text-white !shadow-none transition hover:!bg-[color-mix(in_srgb,var(--c-danger)_82%,black)]"
+        >
+          <Icon name="close" size={18} />
+        </button>
       </div>
 
-      {/* Canvas */}
-      <canvas
-        ref={canvasRef}
-        className="block w-full flex-1 touch-none"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
-        style={{ cursor: tool === 'text' ? 'text' : tool === 'eraser' ? 'cell' : 'crosshair' }}
-      />
+      {/* Canvas + overlays — relative wrapper so % coords match the canvas, not the toolbar */}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 h-full w-full touch-none"
+          onClick={handleCanvasClick}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerLeave={handlePointerUp}
+          style={{ cursor: tool === 'text' ? 'text' : tool === 'eraser' ? 'cell' : 'crosshair' }}
+        />
 
-      {/* Text input overlay */}
-      {textInput && (
-        <div
-          className="absolute z-10"
-          style={{ left: `${textInput.x}%`, top: `${textInput.y}%` }}
-        >
-          <input
-            autoFocus
-            placeholder="Type text…"
-            className="!min-w-[180px] !rounded-sm !border-accent !px-2.5 !py-1.5 !text-[14px] !text-white !outline-none"
-            style={{ background: 'rgba(0,0,0,0.7)' }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { handleTextSubmit(e.target.value); }
-              if (e.key === 'Escape') setTextInput(null)
+        {/* Document-style text editor — borderless, starts top-left, multi-line.
+            Enter = new line; click away (blur) commits; Esc cancels. */}
+        {textInput && (
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            defaultValue={editingText}
+            className="absolute z-10 m-0 resize-none overflow-hidden border-0 bg-transparent p-0 !shadow-none outline-none"
+            style={{
+              left: `${textInput.x}%`,
+              top: `${textInput.y}%`,
+              right: `${TEXT_PAD}px`,
+              color: color,
+              fontSize: `${textFontSize(strokeSize)}px`,
+              lineHeight: 1.35,
+              fontFamily: 'system-ui, sans-serif',
             }}
-            onBlur={(e) => { if (e.target.value.trim()) handleTextSubmit(e.target.value); else setTextInput(null) }}
+            onInput={(e) => growTextarea(e.target)}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Escape') { e.preventDefault(); closeEditor(''); editorClosedRef.current = true }
+            }}
+            onBlur={(e) => closeEditor(e.target.value)}
           />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

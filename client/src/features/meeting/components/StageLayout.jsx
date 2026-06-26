@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { AnimatePresence, LayoutGroup, motion } from 'framer-motion'
-import { computeGridLayout, galleryGridOpts, useElementSize, useGridLayout } from '../hooks/useGridLayout.js'
+import { computeGridLayout, galleryGridOpts, TILE_ASPECT, useElementSize, useGridLayout } from '../hooks/useGridLayout.js'
 
 /**
  * Pure, LiveKit-free presentational layout for the meeting stage. Owns ALL of
@@ -30,7 +30,7 @@ const TRANSITION = { duration: 0.26, ease: EASE }
 const ENTER = { opacity: 0, scale: 0.85 }
 const SHOW = { opacity: 1, scale: 1 }
 
-export default function StageLayout({ items, heroKey, heroFit = 'cover', renderTile }) {
+export default function StageLayout({ items, heroKey, heroFit = 'cover', heroAspect, renderTile }) {
   const hero = heroKey ? items.find((i) => i.key === heroKey) : null
   const others = hero ? items.filter((i) => i.key !== hero.key) : items
 
@@ -44,7 +44,7 @@ export default function StageLayout({ items, heroKey, heroFit = 'cover', renderT
   return (
     <LayoutGroup>
       {hero ? (
-        <HeroView hero={hero} heroFit={heroFit} others={others} renderTile={renderTile} />
+        <HeroView hero={hero} heroFit={heroFit} heroAspect={heroAspect} others={others} renderTile={renderTile} />
       ) : (
         <GalleryGrid items={items} renderTile={renderTile} />
       )}
@@ -102,33 +102,35 @@ function GalleryGrid({ items, renderTile }) {
   )
 }
 
-function HeroView({ hero, heroFit, others, renderTile }) {
+function HeroView({ hero, heroFit, heroAspect, others, renderTile }) {
   // Hero owns the stage; the rail of other tiles sits to the RIGHT on desktop and
   // drops to a horizontal carousel UNDER the hero on tablet/mobile.
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row">
-      <Hero item={hero} fit={heroFit} renderTile={renderTile} />
+      <Hero item={hero} fit={heroFit} aspect={heroAspect} renderTile={renderTile} />
       {others.length > 0 && <Filmstrip items={others} renderTile={renderTile} />}
     </div>
   )
 }
 
-function Hero({ item, fit, renderTile }) {
-  // Fit a single aspect-correct tile inside the measured hero box — same engine
-  // as the gallery, count of 1.
-  const [ref, grid] = useGridLayout(1, GAP)
-  // Screen share is letterboxed by the <video> itself (object-contain), so the
-  // hero should fill the WHOLE box and let any aspect (4:3 / 16:9 / 21:9 /
-  // portrait) preserve itself — never crop. A camera hero keeps the 16:9 best-fit
-  // so a single talking head doesn't stretch edge to edge.
+function Hero({ item, fit, aspect, renderTile }) {
   const contain = fit === 'contain'
+  // Screen share: size the hero box to the SHARE's real aspect ratio so the frame
+  // hugs the content edge-to-edge — no black letterbox bars, and the rounded
+  // border sits right against the shared screen (Meet / Teams behaviour). A camera
+  // hero keeps the adaptive best-fit (16:9 on desktop, fill on portrait phones).
+  const opts = useMemo(
+    () => (contain ? { aspect: aspect || TILE_ASPECT, maxCols: 1 } : undefined),
+    [contain, aspect],
+  )
+  const [ref, grid] = useGridLayout(1, GAP, opts)
   return (
     <div ref={ref} className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
       <motion.div
         layoutId={item.key}
         layout
         transition={TRANSITION}
-        style={contain ? { width: '100%', height: '100%' } : { width: grid.tileW, height: grid.tileH }}
+        style={{ width: grid.tileW, height: grid.tileH }}
       >
         {renderTile(item, { isHero: true, fit })}
       </motion.div>
@@ -139,13 +141,16 @@ function Hero({ item, fit, renderTile }) {
 function Filmstrip({ items, renderTile }) {
   // Horizontal scroller on tablet/mobile, vertical rail on desktop. Fixed cross
   // size; scrolls on the main axis so a long roster never overlaps. Each tile is
-  // aspect-video, so equal spacing falls out of the flex gap.
+  // aspect-video, so equal spacing falls out of the flex gap. The desktop rail is
+  // generously wide so the avatar + name sit comfortably (Meet / Teams), and the
+  // tiles render in `dense` mode (fixed type sizes) since their auto height can't
+  // drive container-query sizing.
   return (
     <div
       className={
         'zk-rail flex shrink-0 gap-2.5 overflow-auto ' +
-        'h-28 w-full flex-row sm:h-32 ' +
-        'lg:h-full lg:w-[240px] lg:flex-col lg:pr-0.5'
+        'h-32 w-full flex-row sm:h-36 ' +
+        'lg:h-full lg:w-75 lg:flex-col lg:pr-1'
       }
     >
       <AnimatePresence mode="popLayout">
@@ -158,9 +163,9 @@ function Filmstrip({ items, renderTile }) {
             animate={SHOW}
             exit={ENTER}
             transition={TRANSITION}
-            className="aspect-video h-full w-44 shrink-0 sm:w-52 lg:h-auto lg:w-full"
+            className="aspect-video h-full w-52 shrink-0 sm:w-64 lg:h-auto lg:w-full"
           >
-            {renderTile(item, { isHero: false, fit: 'cover' })}
+            {renderTile(item, { isHero: false, fit: 'cover', dense: true })}
           </motion.div>
         ))}
       </AnimatePresence>

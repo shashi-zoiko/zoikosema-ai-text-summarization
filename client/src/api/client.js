@@ -47,8 +47,20 @@ export function clearGuestSession() {
   sessionStorage.removeItem(GUEST_TOKEN_KEY)
 }
 
-function token() {
+/**
+ * The bearer token for the current session: a signed-in user's localStorage
+ * token always wins; otherwise fall back to the anonymous guest token in
+ * sessionStorage. Exported so every transport (REST, WebSocket, SSE) resolves
+ * the token identically — the control WS once read localStorage only, which
+ * silently broke chat/reactions/raise-hand for guests (empty token → server
+ * 4401 → no reconnect).
+ */
+export function getAuthToken() {
   return localStorage.getItem('zoiko_token') || sessionStorage.getItem(GUEST_TOKEN_KEY) || ''
+}
+
+function token() {
+  return getAuthToken()
 }
 
 export async function api(path, { method = 'GET', body, form, auth = true } = {}) {

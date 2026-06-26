@@ -540,7 +540,7 @@ function MeetRoom() {
           <ReactionOverlay events={reactions} />
           <CaptionsOverlay captions={liveCaptions} />
           {showWhiteboard && (
-            <div className="absolute inset-0 z-20">
+            <div className="pointer-events-none absolute inset-0 z-20">
               <Whiteboard
                 remoteStrokes={wbStrokes}
                 onDraw={(stroke) => ctrlSend({ type: 'wb-stroke', stroke })}
@@ -675,12 +675,20 @@ function LivekitDockAdapter({
   leave,
 }) {
   const { localParticipant } = useLocalParticipant()
+  const { notify } = useNotifications()
   const audioInputs = useMediaDeviceSelect({ kind: 'audioinput' })
   const videoInputs = useMediaDeviceSelect({ kind: 'videoinput' })
 
   const micOn = !!localParticipant?.isMicrophoneEnabled
   const camOn = !!localParticipant?.isCameraEnabled
   const screenOn = !!localParticipant?.isScreenShareEnabled
+  // Capability check (NOT user-agent sniffing): iPhone Safari has no
+  // getDisplayMedia, so screen-share is impossible there. iPadOS and desktop
+  // expose it. Used to fail gracefully with a toast instead of silently.
+  const screenShareSupported =
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getDisplayMedia === 'function'
 
   const toggleMic = useCallback(
     () => localParticipant?.setMicrophoneEnabled(!micOn).catch(() => {}),
@@ -692,6 +700,15 @@ function LivekitDockAdapter({
   )
   const startShare = useCallback(async () => {
     if (!localParticipant) return
+    // iPhone Safari can't share a screen at all — surface a clear message
+    // rather than failing silently when the user taps the button.
+    if (!screenShareSupported) {
+      notify('error', {
+        title: 'Screen sharing unavailable',
+        text: 'Screen sharing isn’t supported on this device. Try a desktop browser or iPad.',
+      })
+      return
+    }
     try {
       await localParticipant.setScreenShareEnabled(
         true,
@@ -707,7 +724,7 @@ function LivekitDockAdapter({
     } catch {
       /* user dismissed the picker, or no permission — nothing to do */
     }
-  }, [localParticipant])
+  }, [localParticipant, screenShareSupported, notify])
   const stopShare = useCallback(
     () => localParticipant?.setScreenShareEnabled(false).catch(() => {}),
     [localParticipant],
