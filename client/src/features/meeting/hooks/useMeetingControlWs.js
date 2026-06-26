@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getWsBase } from '../../../api/client'
+import { getWsBase, getAuthToken } from '../../../api/client'
 
 /**
  * Connects to the existing /ws/meetings/{code} control WS and exposes:
@@ -41,7 +41,11 @@ export default function useMeetingControlWs(code, { password } = {}) {
 
     const open = () => {
       if (cancelled) return
-      const token = localStorage.getItem('zoiko_token') || ''
+      // Resolve the token the same way the REST client does — signed-in token
+      // first, else the anonymous guest token (sessionStorage). Reading only
+      // localStorage here sent an empty token for guests, so the server closed
+      // the socket with 4401 and the client never reconnected.
+      const token = getAuthToken()
       const pwd = password || ''
       let url = `${getWsBase()}/ws/meetings/${code}?token=${encodeURIComponent(token)}`
       if (pwd) url += `&pwd=${encodeURIComponent(pwd)}`

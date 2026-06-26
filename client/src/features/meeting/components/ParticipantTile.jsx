@@ -53,7 +53,7 @@ function useConnectionQuality(participant) {
   return quality
 }
 
-function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = false }) {
+function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = false, onAspectRatio, dense = false }) {
   const { name, identity } = useParticipantInfo({ participant: trackRef.participant })
   const isSpeaking = useIsSpeaking(trackRef.participant)
   const quality = useConnectionQuality(trackRef.participant)
@@ -118,6 +118,18 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
   }, [trackSid, hasVideo])
   const onVideoLive = useCallback(() => setVideoReady(true), [])
 
+  // Report the share's real aspect ratio up to the stage so the hero box can hug
+  // the shared screen (no black letterbox bars). Fires on first metadata and
+  // again whenever the presenter switches the captured surface (size changes).
+  const reportAspect = useCallback(
+    (e) => {
+      const v = e?.currentTarget
+      if (!onAspectRatio || !v?.videoWidth || !v?.videoHeight) return
+      onAspectRatio(v.videoWidth / v.videoHeight)
+    },
+    [onAspectRatio],
+  )
+
   // Local presenter self-view: hidden by default to break the "hall of mirrors"
   // loop. `showMirror` opts into the live self-preview for testing.
   const [showMirror, setShowMirror] = useState(false)
@@ -131,7 +143,12 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
       return (
         <div className="group relative isolate h-full w-full overflow-hidden rounded-[20px] bg-black ring-1 ring-[#263244]">
           {hasVideo && (
-            <VideoTrack trackRef={trackRef} className="absolute inset-0 h-full w-full bg-black object-contain" />
+            <VideoTrack
+              trackRef={trackRef}
+              onLoadedMetadata={reportAspect}
+              onResize={reportAspect}
+              className="absolute inset-0 h-full w-full bg-black object-contain"
+            />
           )}
           <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[#F59E0B] px-3 py-1 text-[12px] font-semibold text-[#0B1220] shadow-md">
             <AlertTriangle className="h-3.5 w-3.5" />
@@ -223,12 +240,14 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
   // instead of a black rectangle.
   if (trackRef.source === Track.Source.ScreenShare) {
     return (
-      <div className="group relative isolate h-full w-full overflow-hidden rounded-[20px] bg-black ring-1 ring-[#263244]">
+      <div className="group relative isolate h-full w-full overflow-hidden rounded-[20px] bg-black shadow-2xl ring-1 ring-[#263244]">
         {hasVideo && (
           <VideoTrack
             trackRef={trackRef}
             onLoadedData={onVideoLive}
             onPlaying={onVideoLive}
+            onLoadedMetadata={reportAspect}
+            onResize={reportAspect}
             className="absolute inset-0 h-full w-full bg-black object-contain"
           />
         )}
@@ -290,15 +309,17 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
 
       {(!hasVideo || !videoReady) && (
         <div className="absolute inset-0 grid place-items-center" style={{ background: tileBackground(tileAccent) }}>
-          <div className="flex flex-col items-center gap-[4cqmin]">
+          <div className={'flex flex-col items-center ' + (dense ? 'gap-2' : 'gap-[4cqmin]')}>
             <div
               className="grid aspect-square shrink-0 place-items-center rounded-full font-semibold leading-none text-white"
               style={{
-                // Scale to the SMALLER tile axis (cqmin) so the avatar fills a big
-                // hero proportionally yet never overflows a tiny strip tile; the
-                // px ceiling stops it ballooning on very large heroes.
-                width: 'min(42cqmin, 132px)',
-                fontSize: 'min(19cqmin, 52px)',
+                // Filmstrip tiles size from `aspect-video` (auto height), where a
+                // `container-type: size` query container doesn't reliably establish
+                // — so cqmin would fall back to the viewport and balloon. Those
+                // tiles use FIXED sizes (`dense`); gallery / hero tiles have explicit
+                // px dimensions, so cqmin resolves correctly and scales with the tile.
+                width: dense ? 56 : 'min(42cqmin, 132px)',
+                fontSize: dense ? 22 : 'min(19cqmin, 52px)',
                 background: `linear-gradient(145deg, ${withAlpha(tileAccent, 1)} 0%, ${withAlpha(tileAccent, 0.7)} 100%)`,
                 boxShadow: speaking
                   ? `0 0 0 3px ${tileAccent}, 0 0 0 10px ${withAlpha(tileAccent, 0.18)}, 0 0 28px 2px ${withAlpha(tileAccent, 0.5)}`
@@ -310,7 +331,12 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
             {speaking ? (
               <VoiceBars participant={trackRef.participant} accent={tileAccent} />
             ) : (
-              <span className="text-[min(11cqmin,12.5px)] font-medium text-[#94A3B8]">Camera off</span>
+              <span
+                className="font-medium text-[#94A3B8]"
+                style={{ fontSize: dense ? 11 : 'min(11cqmin,12.5px)' }}
+              >
+                Camera off
+              </span>
             )}
           </div>
         </div>
@@ -355,16 +381,20 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
           a hero / single-user stage, shrinking to a legible floor as more people
           join or in the small screen-share filmstrip. A dark halo keeps it
           readable over bright video; a soft accent glow makes it pop. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 px-[3.5cqmin] pb-[3.5cqmin]">
+      <div className={'pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 ' + (dense ? 'px-2.5 pb-2' : 'px-[3.5cqmin] pb-[3.5cqmin]')}>
         <div
-          className="flex max-w-[calc(100%-1rem)] items-center gap-1.5 font-bold tracking-[-0.01em] text-white"
+          className="flex min-w-0 max-w-full items-center gap-1.5 font-semibold leading-none tracking-[-0.01em] text-white"
           style={{
-            fontSize: 'clamp(12px, 4.4cqmin, 26px)',
+            // Dense filmstrip tiles use a fixed legible size (their auto height
+            // breaks container-query resolution); gallery / hero tiles scale with
+            // the tile via cqmin, capped tight so a name never outgrows its tile —
+            // Google-Meet / Teams proportions.
+            fontSize: dense ? 13 : 'clamp(11px, 3.4cqmin, 20px)',
             textShadow: `0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.65), 0 0 20px ${withAlpha(tileAccent, 0.75)}`,
           }}
         >
           {isPinned && <PinnedNameIcon />}
-          <span className="truncate">{displayName}{isSelf && ' (You)'}</span>
+          <span className="min-w-0 truncate">{displayName}{isSelf && ' (You)'}</span>
           {isGuest && <GuestBadge />}
         </div>
       </div>
@@ -435,7 +465,8 @@ export const ParticipantTile = memo(
     a.isHero === b.isHero &&
     a.fit === b.fit &&
     a.accent === b.accent &&
-    a.isPresenting === b.isPresenting,
+    a.isPresenting === b.isPresenting &&
+    a.dense === b.dense,
 )
 
 function QualityBars({ quality }) {

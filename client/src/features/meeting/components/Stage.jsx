@@ -77,6 +77,18 @@ export default function Stage({ layout = 'grid' }) {
     [shareTracks, presenterId],
   )
 
+  // Real aspect ratio of the active share, reported by the <video> once its
+  // metadata loads (and again on surface-switch). Drives the hero box so the
+  // frame hugs the shared screen with no black letterbox bars.
+  const [screenAspect, setScreenAspect] = useState(16 / 9)
+  // When the presenter changes, reseed from the new track's published dimensions
+  // (if known) so the hero doesn't briefly keep the previous share's shape; the
+  // <video>'s onLoadedMetadata then refines it to the exact ratio.
+  useEffect(() => {
+    const d = screen?.publication?.dimensions
+    if (d?.width && d?.height) setScreenAspect(d.width / d.height)
+  }, [presenterId, screen])
+
   // Stable accent per participant, keyed off the sorted camera order below.
 
   // Deterministic, stable camera order so tiles don't reshuffle when LiveKit
@@ -185,13 +197,16 @@ export default function Stage({ layout = 'grid' }) {
       items={items}
       heroKey={hero ? tileKey(hero) : null}
       heroFit={screen ? 'contain' : 'cover'}
-      renderTile={(item, { isHero, fit }) => (
+      heroAspect={screen ? screenAspect : null}
+      renderTile={(item, { isHero, fit, dense }) => (
         <ParticipantTile
           trackRef={item.track}
           accent={item.accent}
           isHero={isHero}
           fit={fit}
+          dense={dense}
           isPresenting={item.isPresenting}
+          onAspectRatio={item.track.source === Track.Source.ScreenShare ? setScreenAspect : undefined}
         />
       )}
     />
