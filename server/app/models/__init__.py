@@ -12,6 +12,7 @@ from app.models.organization import (
     MeetingInvite,
     Notification,
 )
+from app.models.private_note import PrivateNote
 
 __all__ = [
     "User",
@@ -26,4 +27,5 @@ __all__ = [
     "OrganizationMember",
     "MeetingInvite",
     "Notification",
+    "PrivateNote",
 ]

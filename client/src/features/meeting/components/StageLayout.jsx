@@ -139,18 +139,48 @@ function Hero({ item, fit, aspect, renderTile }) {
 }
 
 function Filmstrip({ items, renderTile }) {
-  // Horizontal scroller on tablet/mobile, vertical rail on desktop. Fixed cross
-  // size; scrolls on the main axis so a long roster never overlaps. Each tile is
-  // aspect-video, so equal spacing falls out of the flex gap. The desktop rail is
-  // generously wide so the avatar + name sit comfortably (Meet / Teams), and the
-  // tiles render in `dense` mode (fixed type sizes) since their auto height can't
-  // drive container-query sizing.
+  // Two shapes, like Meet / Teams: a VERTICAL rail down the right on desktop and
+  // a HORIZONTAL carousel under the hero on tablet/mobile. Tiles render in
+  // `dense` mode (fixed type sizes) throughout.
+  //
+  // Desktop rail: instead of stacking fixed `aspect-video` tiles (whose combined
+  // height overflows the rail and clips the last tile — the "cut/uneven" bug), we
+  // best-fit a SINGLE column into the available height so every tile is the same
+  // size and the whole roster fits with no clipping. Only when there are too many
+  // to stay legible do we fall back to a scrolling rail at a comfortable size.
+  const [ref, size] = useElementSize()
+  const count = items.length
+  const gap = 10
+  // Pick the strategy from the rail's MEASURED shape (tall → vertical rail, wide
+  // → horizontal carousel). The container's own responsive classes set that
+  // shape, so reading it back never feeds into itself.
+  const vertical = size.width > 0 ? size.height >= size.width : false
+  const grid = useMemo(
+    () =>
+      vertical
+        ? computeGridLayout(count, size.width, size.height, gap, {
+            aspect: TILE_ASPECT,
+            maxCols: 1,
+            minTileH: 92,
+          })
+        : null,
+    [vertical, count, size.width, size.height],
+  )
+  const scroll = !!grid?.scroll
+
   return (
     <div
+      ref={ref}
+      style={{ gap }}
       className={
-        'zk-rail flex shrink-0 gap-2.5 overflow-auto ' +
+        'zk-rail flex shrink-0 ' +
         'h-32 w-full flex-row sm:h-36 ' +
-        'lg:h-full lg:w-75 lg:flex-col lg:pr-1'
+        'lg:h-full lg:w-75 lg:flex-col lg:pr-1 ' +
+        (vertical
+          ? scroll
+            ? 'items-center overflow-y-auto overflow-x-hidden'
+            : 'items-center justify-center overflow-hidden'
+          : 'overflow-x-auto overflow-y-hidden')
       }
     >
       <AnimatePresence mode="popLayout">
@@ -163,7 +193,8 @@ function Filmstrip({ items, renderTile }) {
             animate={SHOW}
             exit={ENTER}
             transition={TRANSITION}
-            className="aspect-video h-full w-52 shrink-0 sm:w-64 lg:h-auto lg:w-full"
+            className={'shrink-0 ' + (vertical ? '' : 'aspect-video h-full w-52 sm:w-64')}
+            style={vertical && grid ? { width: grid.tileW, height: grid.tileH } : undefined}
           >
             {renderTile(item, { isHero: false, fit: 'cover', dense: true })}
           </motion.div>

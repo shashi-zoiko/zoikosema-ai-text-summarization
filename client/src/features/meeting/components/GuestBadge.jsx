@@ -6,7 +6,7 @@ export default function GuestBadge({ className = '' }) {
     <span
       className={
         'inline-flex shrink-0 items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 ' +
-        'text-[9px] font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-500/30 ' +
+        'text-[10px] font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-500/30 ' +
         className
       }
     >

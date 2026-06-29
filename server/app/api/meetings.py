@@ -40,6 +40,7 @@ from app.models.meeting import (
     STATUS_KICKED,
     STATUS_LEFT,
 )
+from app.models.private_note import PrivateNote
 from app.models.user import User
 from app.schemas.meeting import (
     MeetingCreate,
@@ -49,6 +50,8 @@ from app.schemas.meeting import (
     MeetingRoster,
     JoinMeetingIn,
     ParticipantActionIn,
+    PrivateNotesUpdate,
+    PrivateNotesOut,
 )
 
 router = APIRouter(prefix="/api/meetings", tags=["meetings"])
@@ -835,8 +838,7 @@ async def admit_all(
     db.commit()
     log.info("[ADMIT_SUCCESS] meeting=%s host=%s admit-all count=%s", meeting.id, user.id, len(admitted_ids))
 
-    for uid in admitted_ids:
-        await ws_signaling.signal_admitted(meeting.id, uid)
+    await ws_signaling.signal_admitted_many(meeting.id, admitted_ids)
     await ws_signaling.broadcast_waiting_list(code, meeting.id)
     return AdmitAllOut(admitted=admitted_ids)
 
@@ -970,3 +972,116 @@ def promote_participant(
     db.commit()
     db.refresh(participant)
     return participant
+
+
+# ── Private notes (per-participant notebook) ───────────────────────────────
+#
+# Each participant owns one private notebook per meeting (rich-text notes +
+# personal drawing canvas). This data is NEVER shared: it is fetched and saved
+# only through these endpoints, always scoped to the JWT's user_id. There is no
+# WS relay and no `user_id` query param — a caller can only ever touch their own
+# notebook. Guests are allowed (get_current_participant) so anonymous attendees
+# keep notes too.
+
+
+def _require_meeting_access(meeting: Meeting, user: User, db: Session) -> None:
+    """403 unless the caller is the host or has a participant row in this meeting.
+
+    Gates the private-notes endpoints so only people actually in the meeting can
+    create/read their notebook for it.
+    """
+    if meeting.host_id == user.id:
+        return
+    participant = db.scalars(
+        select(MeetingParticipant).where(
+            MeetingParticipant.meeting_id == meeting.id,
+            MeetingParticipant.user_id == user.id,
+        )
+    ).first()
+    if not participant:
+        raise HTTPException(status_code=403, detail="Not a participant of this meeting")
+
+
+@router.get("/{code}/private-notes", response_model=PrivateNotesOut)
+def get_private_notes(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_participant),
+):
+    meeting = _get_meeting_or_404(code, db)
+    _require_meeting_access(meeting, user, db)
+    note = db.scalar(
+        select(PrivateNote).where(
+            PrivateNote.meeting_id == meeting.id,
+            PrivateNote.user_id == user.id,
+        )
+    )
+    if not note:
+        # No notebook yet — return an empty shell so the client renders a blank
+        # editor rather than 404-ing on first open.
+        return PrivateNotesOut()
+    return note
+
+
+@router.put("/{code}/private-notes", response_model=PrivateNotesOut)
+def upsert_private_notes(
+    code: str,
+    data: PrivateNotesUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_participant),
+):
+    meeting = _get_meeting_or_404(code, db)
+    _require_meeting_access(meeting, user, db)
+
+    fields = data.model_dump(exclude_unset=True)
+    note = db.scalar(
+        select(PrivateNote).where(
+            PrivateNote.meeting_id == meeting.id,
+            PrivateNote.user_id == user.id,
+        )
+    )
+    if note is None:
+        note = PrivateNote(meeting_id=meeting.id, user_id=user.id, **fields)
+        db.add(note)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Concurrent first-write from another tab raced us to the unique
+            # (meeting_id, user_id) row — fall back to updating the existing one.
+            db.rollback()
+            note = db.scalar(
+                select(PrivateNote).where(
+                    PrivateNote.meeting_id == meeting.id,
+                    PrivateNote.user_id == user.id,
+                )
+            )
+            for key, value in fields.items():
+                setattr(note, key, value)
+            db.commit()
+    else:
+        for key, value in fields.items():
+            setattr(note, key, value)
+        db.commit()
+
+    db.refresh(note)
+    return note
+
+
+@router.delete("/{code}/private-notes", status_code=204)
+def delete_private_notes(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_participant),
+):
+    meeting = _get_meeting_or_404(code, db)
+    _require_meeting_access(meeting, user, db)
+    note = db.scalar(
+        select(PrivateNote).where(
+            PrivateNote.meeting_id == meeting.id,
+            PrivateNote.user_id == user.id,
+        )
+    )
+    if note:
+        db.delete(note)
+        db.commit()
+    return None

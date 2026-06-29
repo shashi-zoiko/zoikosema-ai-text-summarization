@@ -108,6 +108,29 @@ class RecordingShareOut(BaseModel):
     recorder_name: str | None = None
 
 
+# ── Private notes (per-participant notebook) ───────────────────────────────
+
+class PrivateNotesUpdate(BaseModel):
+    """Partial update of the caller's own notebook. Every field is optional so
+    autosave can PATCH just the tab the user touched; omitted fields are left
+    unchanged. user_id is NEVER accepted here — it comes from the JWT."""
+
+    notes_json: dict | None = None
+    drawing_json: dict | None = None
+    sticky_notes: list | None = None
+    canvas_state: dict | None = None
+
+
+class PrivateNotesOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    notes_json: dict | None = None
+    drawing_json: dict | None = None
+    sticky_notes: list | None = None
+    canvas_state: dict | None = None
+    updated_at: datetime | None = None
+
+
 # ── Meeting intelligence ───────────────────────────────────────────────────
 
 class IntelligenceGenerateIn(BaseModel):

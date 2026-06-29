@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTracks } from '@livekit/components-react'
 import { Track, VideoQuality } from 'livekit-client'
 import { ParticipantTile } from './ParticipantTile.jsx'
@@ -19,13 +19,22 @@ const tileKey = (t) => `${t.participant.identity ?? t.participant.sid}:${t.sourc
 // speaker brightens it.
 const ACCENTS = ['#10B981', '#3B82F6', '#8B5CF6', '#F59E0B', '#EC4899', '#06B6D4']
 
+// Stable palette index for a LiveKit identity (e.g. "u:42"). Deterministic, so a
+// participant keeps the SAME accent for the whole call regardless of who joins
+// or leaves — the property the sorted-slot version only claimed to have.
+function accentIndex(identity) {
+  let h = 0
+  for (let i = 0; i < identity.length; i++) h = (h * 31 + identity.charCodeAt(i)) | 0
+  return Math.abs(h) % ACCENTS.length
+}
+
 /**
  * The meeting stage. Resolves the LiveKit track list into an ordered tile list
  * + an optional hero, then hands the geometry to {@link StageLayout}.
  *
  * Hero priority:  screen share  >  pinned  >  active speaker (speaker layout).
  */
-export default function Stage({ layout = 'grid' }) {
+function Stage({ layout = 'grid' }) {
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
   const setPinned = useRoomStore((s) => s.setPinned)
   const activeSpeaker = useActiveSpeaker()
@@ -104,11 +113,23 @@ export default function Stage({ layout = 'grid' }) {
     [tracks],
   )
 
-  // Assign each participant a stable accent from their slot in the sorted
-  // roster. Stable order → stable colour; nobody's tile changes hue mid-call.
+  // Accent is a deterministic hash of the (stable) LiveKit identity, NOT the
+  // participant's slot in the sorted roster. Slot-based assignment was a
+  // render-storm bug: when an admitted user whose identity sorts earlier joined,
+  // every existing participant's index shifted, so their `accent` prop changed
+  // and ParticipantTile's memo (which compares `accent`) re-rendered EVERY
+  // existing tile — O(N) per join, O(N²) for an admit-all burst, and a prime
+  // cause of the freeze when several users were admitted at once. Hashing the
+  // identity makes each tile's accent permanent and independent of who else is
+  // present, so admitting someone re-renders ONLY their new tile. (Same idiom as
+  // the per-identity avatar colour; an occasional shared accent is cosmetic.)
   const accentByIdentity = useMemo(() => {
     const map = new Map()
-    cams.forEach((t, i) => map.set(t.participant.identity, ACCENTS[i % ACCENTS.length]))
+    for (const t of cams) {
+      const id = t.participant.identity
+      if (id == null) continue
+      map.set(id, ACCENTS[accentIndex(id)])
+    }
     return map
   }, [cams])
 
@@ -212,3 +233,9 @@ export default function Stage({ layout = 'grid' }) {
     />
   )
 }
+
+// Memoised: <Stage> only takes `layout`, so MeetRoom's frequent control-plane
+// state churn (waiting-room, chat, recording, sidebar toggles) no longer
+// re-renders the entire stage subtree. Track/speaker/pin changes still re-render
+// it through its own LiveKit + zustand subscriptions (memo doesn't block those).
+export default memo(Stage)

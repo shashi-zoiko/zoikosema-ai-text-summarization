@@ -316,12 +316,24 @@ function ChatToastStack({ cards, onDismiss, onMarkRead, onOpenChat }) {
   const hidden = cards.filter((c) => !c.leaving).length - visible.filter((c) => !c.leaving).length
 
   return (
-    <div className="pointer-events-none fixed bottom-28 right-4 z-[60] flex w-[clamp(300px,92vw,360px)] flex-col gap-2.5">
+    // Desktop: docked bottom-right (360–380px). Mobile: 90vw, centred above the
+    // meeting toolbar. Safe-area inset keeps it clear of the iOS home bar, and
+    // the bottom offset keeps it from ever overlapping the dock controls.
+    <div
+      className={
+        'pointer-events-none fixed z-[60] flex flex-col gap-2.5 ' +
+        'left-1/2 -translate-x-1/2 w-[90vw] ' +
+        'sm:left-auto sm:translate-x-0 sm:right-4 sm:w-[320px] ' +
+        'lg:w-[clamp(360px,30vw,380px)]'
+      }
+      style={{ bottom: 'calc(7rem + env(safe-area-inset-bottom, 0px))' }}
+    >
       {hidden > 0 && (
         <button
           type="button"
           onClick={onMarkRead}
-          className="pointer-events-auto self-end rounded-full border border-[#8B5CF6]/50 bg-[#2E2160]/95 px-3 py-1 text-[11.5px] font-medium text-[#C4B5FD] shadow-[0_18px_40px_-12px_rgba(124,58,237,0.5)] backdrop-blur transition hover:text-white"
+          className="zk-chat-card zk-chat-focus pointer-events-auto self-center sm:self-end rounded-full px-3.5 py-1.5 text-[11.5px] font-medium text-[var(--zk-notif-msg)] transition hover:text-white"
+          style={{ borderRadius: 9999 }}
         >
           +{hidden} more — mark all read
         </button>
@@ -334,65 +346,72 @@ function ChatToastStack({ cards, onDismiss, onMarkRead, onOpenChat }) {
 }
 
 function ChatCard({ card, onDismiss, onMarkRead, onOpenChat }) {
-  const { id, name, color, body, mention, at, leaving } = card
+  const { id, name, body, mention, at, leaving } = card
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className={
-        // Purple skin (not the meeting's slate) so the card stays clearly
-        // distinct from the dark stage behind it. Mentions keep an amber edge.
-        'pointer-events-auto rounded-[18px] border p-4 backdrop-blur ' +
-        'bg-linear-to-br from-[#3B2A7A] via-[#2E2160] to-[#241A4D] ' +
-        'shadow-[0_20px_60px_rgba(124,58,237,0.5)] ' +
-        (mention
-          ? 'border-[#F59E0B]/55 ring-1 ring-[#F59E0B]/20 '
-          : 'border-[#8B5CF6]/55 ring-1 ring-[#8B5CF6]/20 ') +
-        (leaving ? 'zk-notif-out' : 'zk-notif-in')
-      }
-    >
-      <div className="flex items-start gap-3">
-        <span
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[14px] font-semibold text-white"
-          style={{ background: color }}
-        >
-          {(name || '?').slice(0, 1).toUpperCase()}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-white">
-              {mention ? `${name} mentioned you` : name}
-            </span>
-            <span className="shrink-0 text-[11px] text-[#C4B5FD]">{relTime(at)}</span>
-            <button
-              type="button"
-              onClick={() => onDismiss(id)}
-              aria-label="Dismiss notification"
-              className="grid h-6 w-6 shrink-0 place-items-center rounded-lg !border-0 !bg-transparent !p-0 !shadow-none text-[#C4B5FD] transition hover:!bg-white/[0.12] hover:text-white"
-            >
-              <X className="h-4 w-4" />
-            </button>
+    // Wrapper owns the enter/exit transform so the inner card's transform is
+    // free for the GPU-friendly :hover lift (no animation/transform conflict).
+    <div className={'pointer-events-auto ' + (leaving ? 'zk-card-out' : 'zk-card-in')}>
+      <div
+        role="status"
+        aria-live="polite"
+        className={
+          'zk-chat-card p-4 ' +
+          (mention ? 'ring-1 ring-[#FFC56B]/25 ' : '')
+        }
+      >
+        <div className="flex items-start gap-3">
+          <span className="zk-chat-avatar relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-[14px] font-semibold text-white">
+            {(name || '?').slice(0, 1).toUpperCase()}
+            {/* Unread indicator — gentle 2s pulse. */}
+            <span
+              className="zk-unread-pulse absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full ring-2 ring-[#283255]"
+              style={{ background: 'var(--zk-notif-badge)' }}
+              aria-hidden="true"
+            />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-[var(--zk-notif-name)]">
+                {mention ? `${name} mentioned you` : name}
+              </span>
+              <span className="shrink-0 text-[11px] text-[var(--zk-notif-time)]">{relTime(at)}</span>
+              <button
+                type="button"
+                onClick={() => onDismiss(id)}
+                aria-label="Dismiss notification"
+                className="zk-chat-focus grid h-6 w-6 shrink-0 place-items-center rounded-lg !border-0 !bg-transparent !p-0 !shadow-none text-[var(--zk-notif-time)] transition hover:!bg-white/[0.08] hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {body && (
+              <button
+                type="button"
+                onClick={onOpenChat}
+                title="Open chat"
+                className="zk-chat-focus mt-1 block w-full rounded !border-0 !bg-transparent !p-0 !shadow-none text-left text-[12.5px] leading-snug text-[var(--zk-notif-msg)] line-clamp-2 hover:text-white"
+              >
+                {body}
+              </button>
+            )}
           </div>
-          {body && (
-            <button
-              type="button"
-              onClick={onOpenChat}
-              title="Open chat"
-              className="mt-1 block w-full !border-0 !bg-transparent !p-0 !shadow-none text-left text-[12.5px] leading-snug text-[#D8CEF6] line-clamp-2 hover:text-white"
-            >
-              {body}
-            </button>
-          )}
         </div>
-      </div>
-      <div className="mt-3 flex items-center justify-end">
-        <button
-          type="button"
-          onClick={onMarkRead}
-          className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white/[0.12] px-3 text-[12px] font-semibold text-white transition hover:bg-white/[0.2]"
-        >
-          <Check className="h-3.5 w-3.5" /> Mark as read
-        </button>
+        <div className="mt-3.5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onMarkRead}
+            className="zk-chat-btn-2 zk-chat-focus inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12px] font-semibold text-[var(--zk-notif-msg)] hover:text-white"
+          >
+            <Check className="h-3.5 w-3.5" /> Mark as read
+          </button>
+          <button
+            type="button"
+            onClick={onOpenChat}
+            className="zk-chat-btn zk-chat-focus inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-[12px] font-semibold text-white"
+          >
+            <MessageSquare className="h-3.5 w-3.5" /> Reply
+          </button>
+        </div>
       </div>
     </div>
   )
