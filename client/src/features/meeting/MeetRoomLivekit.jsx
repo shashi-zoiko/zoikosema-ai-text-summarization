@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   LiveKitRoom,
@@ -29,7 +29,9 @@ import CaptionsOverlay from './components/CaptionsOverlay.jsx'
 import { backgroundEffectsSupported } from './backgroundEngine.js'
 import { getPreset, NONE_EFFECT } from './backgroundPresets.js'
 import { LkBackgroundProcessor } from './lkBackgroundProcessor.js'
-import Whiteboard from '../../components/Whiteboard.jsx'   // reused from legacy
+// Private per-participant notebook (rich-text notes + personal drawing canvas).
+// Lazy-loaded so the TipTap editor bundle isn't in the initial meeting load.
+const PrivateNotebook = lazy(() => import('./notebook/PrivateNotebook.jsx'))
 import useMeetingControlWs from './hooks/useMeetingControlWs.js'
 import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
 import { useLocalParticipant, useMediaDeviceSelect, useRoomContext } from '@livekit/components-react'
@@ -146,7 +148,6 @@ function MeetRoom() {
   const [unreadChat, setUnreadChat] = useState(0)
   const [showEmoji, setShowEmoji] = useState(false)
   const [showWhiteboard, setShowWhiteboard] = useState(false)
-  const [wbStrokes, setWbStrokes] = useState([])  // remote strokes from WS
   const { byPeer: liveCaptions, push: pushCaption } = useCaptions()
   const joinedAtRef = useRef(null) // wall-clock ms when media token landed → header timer
   // Bridge the legacy { kind, text } toast API onto the notification engine so
@@ -267,10 +268,6 @@ function MeetRoom() {
         setToast({ kind: 'error', text: data.reason || 'Action not allowed' })
       } else if (t === 'caption') {
         pushCaption(data.peer_id, { name: data.name, color: data.color, text: data.text })
-      } else if (t === 'wb-stroke') {
-        if (data.stroke) setWbStrokes((prev) => [...prev, data.stroke])
-      } else if (t === 'wb-clear') {
-        setWbStrokes([])
       }
     })
   }, [ctrlSubscribe, sidebar, navigate, user?.id, user?.name, pushReaction, setHand, setRole, seedRoles, notify, notifyChat, syncLobby])
@@ -541,11 +538,13 @@ function MeetRoom() {
           <CaptionsOverlay captions={liveCaptions} />
           {showWhiteboard && (
             <div className="pointer-events-none absolute inset-0 z-20">
-              <Whiteboard
-                remoteStrokes={wbStrokes}
-                onDraw={(stroke) => ctrlSend({ type: 'wb-stroke', stroke })}
-                onClose={() => setShowWhiteboard(false)}
-              />
+              <Suspense fallback={null}>
+                <PrivateNotebook
+                  code={code}
+                  userId={user?.id}
+                  onClose={() => setShowWhiteboard(false)}
+                />
+              </Suspense>
             </div>
           )}
         </div>
@@ -798,7 +797,7 @@ function LivekitDockAdapter({
         <RoundDockExtra
           active={showWhiteboard}
           onClick={toggleWhiteboard}
-          label={showWhiteboard ? 'Close whiteboard' : 'Open whiteboard'}
+          label={showWhiteboard ? 'Close notes' : 'Private notes & whiteboard'}
         >
           <PencilLine className="h-5 w-5" />
         </RoundDockExtra>

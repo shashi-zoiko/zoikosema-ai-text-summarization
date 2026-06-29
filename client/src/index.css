@@ -700,6 +700,86 @@ h4 { line-height: 1.40; font-weight: 600; }
   .zk-notif-in  { animation: zk-notif-in 300ms cubic-bezier(0.16,1,0.3,1) both; }
   .zk-notif-out { animation: zk-notif-out 220ms ease-in both; }
 
+  /* ── Floating chat notification (glass dark-indigo) ────────────────────────
+     Design tokens so colours live in one place and can be re-themed. Premium
+     Discord/Linear/Arc feel: indigo glass, soft (not strong-purple) glow. */
+  :root {
+    --zk-notif-bg:           linear-gradient(135deg, #374880, #1F253D);
+    --zk-notif-border:       rgba(140, 160, 255, 0.15);
+    --zk-notif-radius:       22px;
+    --zk-notif-shadow:       0 16px 45px rgba(0, 0, 0, 0.45), 0 0 40px rgba(99, 102, 241, 0.15);
+    --zk-notif-shadow-hover: 0 22px 58px rgba(0, 0, 0, 0.50), 0 0 52px rgba(99, 102, 241, 0.22);
+    --zk-notif-name:         #FFFFFF;
+    --zk-notif-msg:          #D7DCEA;
+    --zk-notif-time:         #AAB3C7;
+    --zk-notif-badge:        #FF4D67;
+    --zk-notif-avatar:       linear-gradient(135deg, #5B8DFF, #7F6CFF);
+    --zk-notif-btn:          #4F6FFF;
+    --zk-notif-btn-hover:    #5D7DFF;
+    --zk-notif-btn-2-border: rgba(255, 255, 255, 0.12);
+    --zk-notif-btn-2-hover:  rgba(255, 255, 255, 0.06);
+    --zk-notif-focus:        #6C8DFF;
+  }
+
+  /* Glass surface + GPU-friendly hover lift. The entry/exit transforms live on
+     a separate wrapper so this transform is free for the :hover lift. */
+  .zk-chat-card {
+    background: var(--zk-notif-bg);
+    border: 1px solid var(--zk-notif-border);
+    border-radius: var(--zk-notif-radius);
+    box-shadow: var(--zk-notif-shadow);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+                box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+  .zk-chat-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--zk-notif-shadow-hover);
+  }
+  .zk-chat-avatar {
+    background: var(--zk-notif-avatar);
+    box-shadow: 0 4px 14px rgba(91, 141, 255, 0.35);
+  }
+  .zk-chat-btn {
+    background: var(--zk-notif-btn);
+    border: 0;
+    box-shadow: 0 4px 14px -4px rgba(79, 111, 255, 0.55);
+    transition: background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  }
+  .zk-chat-btn:hover { background: var(--zk-notif-btn-hover); }
+  .zk-chat-btn-2 {
+    background: transparent;
+    border: 1px solid var(--zk-notif-btn-2-border);
+    box-shadow: none;
+    transition: background-color 160ms ease;
+  }
+  .zk-chat-btn-2:hover { background: var(--zk-notif-btn-2-hover); }
+  .zk-chat-focus:focus-visible {
+    outline: 2px solid var(--zk-notif-focus);
+    outline-offset: 2px;
+  }
+
+  /* Popup: fade + rise + subtle scale. Dismiss: fade + slide right. */
+  @keyframes zk-card-in {
+    0%   { opacity: 0; transform: translateY(16px) scale(0.97); }
+    100% { opacity: 1; transform: translateY(0)    scale(1);    }
+  }
+  @keyframes zk-card-out {
+    0%   { opacity: 1; transform: translateX(0);    }
+    100% { opacity: 0; transform: translateX(40px); }
+  }
+  .zk-card-in  { animation: zk-card-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .zk-card-out { animation: zk-card-out 220ms cubic-bezier(0.4, 0, 1, 1) both; }
+
+  /* Unread dot — gentle pulse every 2s. */
+  @keyframes zk-unread-pulse {
+    0%, 100% { transform: scale(1);    opacity: 1;   }
+    50%      { transform: scale(1.25); opacity: 0.8; }
+  }
+  .zk-unread-pulse { animation: zk-unread-pulse 2s ease-in-out infinite; }
+
   /* Unread/attention badge — the floating counter pulses by scaling, Teams /
      Meet style. It sits OUTSIDE the button (top-right) and must grab the eye. */
   @keyframes zk-badge-pop {
@@ -729,9 +809,14 @@ h4 { line-height: 1.40; font-weight: 600; }
     .zk-notif-in,
     .zk-badge-pop,
     .zk-unread-glow,
+    .zk-card-in,
+    .zk-unread-pulse,
     .zk-tile-speak,
     .zk-tile-speaking { animation-duration: 0ms; }
-    .zk-notif-out { animation-duration: 0ms; }
+    .zk-notif-out,
+    .zk-card-out { animation-duration: 0ms; }
+    .zk-chat-card { transition: none; }
+    .zk-chat-card:hover { transform: none; }
     .zk-stage-hero,
     .zk-tile,
     .zk-press { transition: none; }
@@ -986,4 +1071,85 @@ textarea { resize: vertical; }
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
+}
+
+/* ── Private notebook: TipTap rich-text editor ──────────────────────────────
+   Scoped to .zk-notes so it never leaks into the rest of the app. The editor is
+   a per-participant private surface; styling only, no behavior. */
+.zk-notes .zk-notes-editor {
+  min-height: 100%;
+  color: var(--c-fg);
+  font-size: 15px;
+  line-height: 1.6;
+  caret-color: var(--c-accent);
+}
+.zk-notes .zk-notes-editor :is(h1, h2, h3) {
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 0.8em 0 0.35em;
+}
+.zk-notes .zk-notes-editor h1 { font-size: 1.7em; }
+.zk-notes .zk-notes-editor h2 { font-size: 1.4em; }
+.zk-notes .zk-notes-editor h3 { font-size: 1.18em; }
+.zk-notes .zk-notes-editor p { margin: 0.4em 0; }
+.zk-notes .zk-notes-editor ul,
+.zk-notes .zk-notes-editor ol { padding-left: 1.4em; margin: 0.4em 0; }
+.zk-notes .zk-notes-editor ul { list-style: disc; }
+.zk-notes .zk-notes-editor ol { list-style: decimal; }
+.zk-notes .zk-notes-editor a {
+  color: var(--c-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.zk-notes .zk-notes-editor mark {
+  background: #fbbf24;
+  color: #1a1206;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.zk-notes .zk-notes-editor code {
+  background: var(--c-bg-3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.zk-notes .zk-notes-editor pre {
+  background: #11131b;
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0.6em 0;
+  overflow-x: auto;
+}
+.zk-notes .zk-notes-editor pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.88em;
+}
+/* Checklist (task list) */
+.zk-notes .zk-notes-editor ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.2em;
+}
+.zk-notes .zk-notes-editor ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+.zk-notes .zk-notes-editor ul[data-type="taskList"] li > label {
+  margin-top: 0.25em;
+}
+.zk-notes .zk-notes-editor ul[data-type="taskList"] input[type="checkbox"] {
+  accent-color: var(--c-accent);
+  width: 15px;
+  height: 15px;
+}
+/* Placeholder shown while empty */
+.zk-notes .zk-notes-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--c-fg-muted);
 }

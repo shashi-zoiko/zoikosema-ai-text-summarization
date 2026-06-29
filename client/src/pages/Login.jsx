@@ -1,15 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { useTheme } from '../theme/ThemeProvider'
 import Logo from '../components/ui/Logo'
 import { Input, Field } from '../components/ui/Input'
 
 export default function Login() {
   const { login } = useAuth()
-  const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -17,14 +15,6 @@ export default function Login() {
   const [remember, setRemember] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-
-  // Force light theme on this page; restore the user's prior theme on unmount
-  useEffect(() => {
-    const previous = theme
-    if (previous !== 'light') setTheme('light')
-    return () => { if (previous !== 'light') setTheme(previous) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -41,7 +31,7 @@ export default function Login() {
   }
 
   return (
-    <div className="relative isolate flex min-h-dvh items-center justify-center overflow-x-hidden bg-[var(--c-bg)] px-4 py-10 text-[var(--c-fg)]">
+    <div data-theme="light" className="relative isolate flex min-h-dvh items-center justify-center overflow-x-hidden bg-[var(--c-bg)] px-4 py-10 text-[var(--c-fg)]">
       {/* Soft ambient backdrop */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
         <div

@@ -27,3 +27,4 @@ class NullMediaProvider(MediaProvider):
 
     async def release_room(self, media_room_ref: str | None) -> None:
         return None
+

@@ -387,9 +387,10 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
           style={{
             // Dense filmstrip tiles use a fixed legible size (their auto height
             // breaks container-query resolution); gallery / hero tiles scale with
-            // the tile via cqmin, capped tight so a name never outgrows its tile —
-            // Google-Meet / Teams proportions.
-            fontSize: dense ? 13 : 'clamp(11px, 3.4cqmin, 20px)',
+            // the tile via cqmin. A higher floor + scale factor keeps the name
+            // clearly readable even when a busy grid shrinks each tile, while
+            // `min-w-0 truncate` (below) guarantees it never outgrows the tile.
+            fontSize: dense ? 14 : 'clamp(14px, 4.4cqmin, 22px)',
             textShadow: `0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.65), 0 0 20px ${withAlpha(tileAccent, 0.75)}`,
           }}
         >

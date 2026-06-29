@@ -512,10 +512,10 @@ export default function MeetLobby() {
 
   return (
     <Shell>
-      <div className="zk-dock-enter mx-auto grid w-full max-w-[1240px] gap-6 lg:gap-10 lg:grid-cols-[minmax(0,1.86fr)_minmax(0,1fr)] lg:items-stretch">
+      <div className="zk-dock-enter mx-auto grid w-full max-w-[1240px] grid-cols-1 gap-6 lg:gap-10 lg:grid-cols-[minmax(0,1.86fr)_minmax(0,1fr)] lg:items-stretch">
         {/* ── Left: device preview (65%) ──────────────────────────── */}
-        <section className="flex flex-col gap-5">
-          <div className="zk-glass-card relative isolate aspect-[4/3] w-full overflow-hidden rounded-[20px] bg-[#0A0F18] shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)] sm:aspect-video sm:rounded-[24px]">
+        <section className="flex min-w-0 flex-col gap-5">
+          <div className="zk-glass-card relative isolate aspect-video w-full overflow-hidden rounded-[20px] bg-[#0A0F18] shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)] sm:rounded-[24px]">
             {/* Video — ALWAYS mounted so the ref is stable. Visibility is
                 controlled with classes, not conditional rendering. */}
             <video
@@ -644,7 +644,7 @@ export default function MeetLobby() {
         </section>
 
         {/* ── Right: meeting info panel (35%) ─────────────────────── */}
-        <aside className="zk-glass-card flex flex-col justify-center rounded-[24px] bg-[#111A28]/75 p-5 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)] backdrop-blur-2xl sm:p-8">
+        <aside className="zk-glass-card flex min-w-0 flex-col justify-center rounded-[24px] bg-[#111A28]/75 p-5 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)] backdrop-blur-2xl sm:p-8">
           <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[#34D399]">
             {isGuest ? 'Joining as guest' : (firstName ? `${timeGreeting()}, ${firstName}` : 'Ready to join')}
           </span>
@@ -820,7 +820,7 @@ function Shell({ children }) {
     >
       <LobbyLeaves />
       <header
-        className="zk-fade-divider relative z-10 flex h-14 shrink-0 items-center justify-between bg-white/[0.02] px-4 backdrop-blur-xl sm:px-6"
+        className="zk-fade-divider relative z-10 flex h-14 shrink-0 items-center justify-between bg-white/[0.02] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl sm:px-6"
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
       >
         <div className="flex items-center gap-2">
@@ -831,7 +831,7 @@ function Shell({ children }) {
           {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
       </header>
-      <main className="relative z-10 flex flex-1 items-start justify-center px-4 py-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:items-center sm:px-8 sm:py-12 lg:px-12">
+      <main className="relative z-10 flex flex-1 items-start justify-center py-6 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:items-center sm:px-8 sm:py-12 lg:px-12">
         {children}
       </main>
     </div>

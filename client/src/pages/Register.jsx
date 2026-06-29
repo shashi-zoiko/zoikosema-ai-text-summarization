@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertCircle, ArrowRight, Check, Eye, EyeOff, Sparkles } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { useTheme } from '../theme/ThemeProvider'
 import Logo from '../components/ui/Logo'
 import { Input, Field } from '../components/ui/Input'
 import { cn } from '../lib/cn'
@@ -21,7 +20,6 @@ const STRENGTH_LABELS = ['Weak', 'Weak', 'Okay', 'Good', 'Strong']
 
 export default function Register() {
   const { register } = useAuth()
-  const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -29,14 +27,6 @@ export default function Register() {
   const [showPwd, setShowPwd] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-
-  // Force light theme on this page; restore the user's prior theme on unmount
-  useEffect(() => {
-    const previous = theme
-    if (previous !== 'light') setTheme('light')
-    return () => { if (previous !== 'light') setTheme(previous) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const checks = useMemo(() => passwordChecks(password), [password])
   const strength = useMemo(() => Object.values(checks).filter(Boolean).length, [checks])
@@ -62,7 +52,7 @@ export default function Register() {
   }
 
   return (
-    <div className="relative isolate flex min-h-dvh items-center justify-center overflow-x-hidden bg-[var(--c-bg)] px-4 py-10 text-[var(--c-fg)]">
+    <div data-theme="light" className="relative isolate flex min-h-dvh items-center justify-center overflow-x-hidden bg-[var(--c-bg)] px-4 py-10 text-[var(--c-fg)]">
       {/* Soft ambient backdrop */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
         <div

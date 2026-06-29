@@ -85,6 +85,22 @@ async def signal_admitted(meeting_id: int, user_id: int) -> None:
     )
 
 
+async def signal_admitted_many(meeting_id: int, user_ids: list[int]) -> None:
+    """Fan out 'admitted' to many waiting clients CONCURRENTLY.
+
+    Admit-all previously awaited signal_admitted() one user at a time, so the
+    host's request blocked on N sequential socket sends (and each wake). Each
+    push targets a different socket and is independent, so we gather them — the
+    whole fan-out now costs ~one send, not N. Exceptions are swallowed per user
+    (gather return_exceptions) so one dead socket can't sink the rest."""
+    if not user_ids:
+        return
+    await asyncio.gather(
+        *(signal_admitted(meeting_id, uid) for uid in user_ids),
+        return_exceptions=True,
+    )
+
+
 async def signal_denied(meeting_id: int, user_id: int) -> None:
     """Instant denial notification: push 'denied' + wake the hold loop."""
     await notify_user(meeting_id, user_id, {"type": "denied"})
@@ -145,10 +161,20 @@ async def _send_waiting_list(room: str, meeting: Meeting, db: Session):
         )
     ).all()
 
-    waiting = []
+    # Bulk-load every pending user in ONE query instead of db.get() per row.
+    # The per-row lookup was an N+1 that ran on every admit (the waiting list is
+    # recomputed and rebroadcast each time), so an admit-all over N waiters cost
+    # O(N²) point reads against the (possibly pooled/remote) DB.
     from app.models.user import User
+    user_ids = [p.user_id for p in pending]
+    users = (
+        {u.id: u for u in db.scalars(select(User).where(User.id.in_(user_ids))).all()}
+        if user_ids
+        else {}
+    )
+    waiting = []
     for p in pending:
-        u = db.get(User, p.user_id)
+        u = users.get(p.user_id)
         waiting.append({
             "user_id": p.user_id,
             "name": u.name if u else "Unknown",
@@ -627,27 +653,11 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                         exclude=websocket,
                     )
 
-                # ── Collaboration: whiteboard, annotations, presenters ──
-                elif kind == "wb-stroke":
-                    # Relay whiteboard stroke to all others
-                    await meet_manager.broadcast(
-                        room,
-                        {
-                            "type": "wb-stroke",
-                            "peer_id": peer_id,
-                            "name": user.name,
-                            "stroke": data.get("stroke"),
-                        },
-                        exclude=websocket,
-                    )
-
-                elif kind == "wb-clear":
-                    await meet_manager.broadcast(
-                        room,
-                        {"type": "wb-clear", "peer_id": peer_id, "name": user.name},
-                        exclude=websocket,
-                    )
-
+                # ── Collaboration: annotations, presenters ──
+                # NOTE: whiteboard/notes are intentionally NOT relayed. Each
+                # participant keeps a private notebook (rich-text notes + personal
+                # drawing canvas) persisted via the REST private-notes API; there
+                # is deliberately no wb-stroke/wb-clear broadcast here.
                 elif kind == "annotation":
                     # Relay screen annotation to all others
                     await meet_manager.broadcast(
@@ -737,8 +747,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                         tp.last_seen_at = datetime.now(timezone.utc)
                     db.commit()
                     log.info("[ADMISSION_REQUEST] meeting=%s host=%s admit-all count=%s via=ws", meeting.id, user.id, len(target_ids))
-                    for uid in target_ids:
-                        await signal_admitted(meeting.id, uid)
+                    await signal_admitted_many(meeting.id, target_ids)
                     await _send_waiting_list(room, meeting, db)
 
                 elif kind == "deny" and host_or_cohost:
