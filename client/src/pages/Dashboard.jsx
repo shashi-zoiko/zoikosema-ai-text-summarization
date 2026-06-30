@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { meetingPath, meetingIntelligencePath } from '../lib/meetingUrls.js'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight, ArrowUpRight, BarChart3, Brain, Calendar, CalendarDays, Clock, Disc,
@@ -403,8 +404,8 @@ export default function Dashboard() {
                     key={m.id}
                     meeting={m}
                     delay={i * 0.05}
-                    onClick={() => navigate(`/meet/${m.code}`)}
-                    onIntel={() => navigate(`/meet/${m.code}/intelligence`)}
+                    onClick={() => navigate(meetingPath(m.code))}
+                    onIntel={() => navigate(meetingIntelligencePath(m.code))}
                   />
                 ))}
               </ul>
@@ -453,7 +454,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="mt-3 flex items-center gap-2">
-                    <Button asMotion size="sm" block onClick={() => navigate(`/meet/${m.code}`)} rightIcon={<ArrowRight className="h-3.5 w-3.5" />}>
+                    <Button asMotion size="sm" block onClick={() => navigate(meetingPath(m.code))} rightIcon={<ArrowRight className="h-3.5 w-3.5" />}>
                       Join
                     </Button>
                     <IconButton variant="ghost" size="sm" label="Add to calendar" onClick={() => downloadCalendar(m.code)}>
@@ -504,7 +505,7 @@ export default function Dashboard() {
                       className="group relative"
                     >
                       <button
-                        onClick={() => navigate(`/meet/${m.code}`)}
+                        onClick={() => navigate(meetingPath(m.code))}
                         className="grid w-full grid-cols-1 gap-1 px-5 py-3 text-left transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)] md:grid-cols-[1fr_180px_120px_120px_140px_100px] md:items-center md:gap-4"
                       >
                         <span className="flex items-center gap-3">
@@ -540,7 +541,7 @@ export default function Dashboard() {
                       </button>
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); navigate(`/meet/${m.code}/intelligence`) }}
+                        onClick={(e) => { e.stopPropagation(); navigate(meetingIntelligencePath(m.code)) }}
                         title="View AI intelligence"
                         className="absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-lg border border-[var(--c-line)] bg-[var(--c-surface)] px-2 py-1 text-[11px] font-semibold text-[var(--c-fg-dim)] opacity-0 transition-all duration-200 hover:border-[var(--c-accent)] hover:text-[var(--c-accent)] group-hover:opacity-100 md:inline-flex"
                       >

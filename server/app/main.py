@@ -6,12 +6,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.types import Scope
 
 from app.core.config import get_settings
+from app.core.social_meta import render_index
 from app.core.database import engine, init_db
 from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.core.recording_cleanup import recording_cleanup_loop
@@ -166,6 +167,27 @@ if os.path.isdir(_dist_dir):
         app.mount("/assets", _ImmutableStaticFiles(directory=_assets_dir), name="assets")
 
     _index_html = os.path.join(_dist_dir, "index.html")
+    # Read the built SPA shell once; metadata is rewritten per-request in memory
+    # (cheap string ops) so link-preview crawlers get meeting-specific tags.
+    try:
+        with open(_index_html, encoding="utf-8") as fh:
+            _index_html_src = fh.read()
+    except OSError:
+        _index_html_src = ""
+
+    # Long-lived, immutable cache for the branded social card and app icons —
+    # these are stable assets; crawlers and browsers should not revalidate them.
+    _LONG_CACHE_FILES = {
+        "og-image.png",
+        "og-image.svg",
+        "favicon.ico",
+        "favicon.svg",
+        "favicon-32.png",
+        "favicon-64.png",
+        "apple-touch-icon.png",
+        "icon-192.png",
+        "icon-512.png",
+    }
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_frontend(full_path: str):
@@ -183,7 +205,18 @@ if os.path.isdir(_dist_dir):
             candidate = os.path.normpath(os.path.join(_dist_dir, full_path))
             # Guard against path traversal (../) escaping the dist root.
             if candidate.startswith(_dist_dir + os.sep) and os.path.isfile(candidate):
-                return FileResponse(candidate)
+                # FileResponse adds ETag + Last-Modified automatically; stamp a
+                # 1y immutable cache on the OG image and favicons (spec).
+                headers = None
+                if os.path.basename(candidate) in _LONG_CACHE_FILES:
+                    headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+                return FileResponse(candidate, headers=headers)
+        # SPA shell: inject meeting-specific Open Graph metadata so shared
+        # meeting links unfurl correctly on crawlers that never run JS.
+        if _index_html_src:
+            base_url = settings.frontend_url.rstrip("/")
+            html_doc = render_index(_index_html_src, full_path, base_url)
+            return HTMLResponse(html_doc, headers={"Cache-Control": "no-cache"})
         return FileResponse(_index_html)
 else:
     log.warning("frontend dist not found at %s; SPA routes will 404", _dist_dir)

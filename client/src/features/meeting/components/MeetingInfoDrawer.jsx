@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParticipants } from '@livekit/components-react'
 import { Check, Copy, Hash, ShieldCheck, Timer, Users } from 'lucide-react'
 import DrawerShell from './DrawerShell.jsx'
+import { meetingUrl } from '../../../lib/meetingUrls.js'
 
 /**
  * Meeting details drawer — the read-only "about this call" panel. Shows live
@@ -11,7 +12,7 @@ import DrawerShell from './DrawerShell.jsx'
 export default function MeetingInfoDrawer({ code, joinedAt, onClose }) {
   const participants = useParticipants()
   const [copied, setCopied] = useState(false)
-  const link = `${window.location.origin}/meet/${code}`
+  const link = meetingUrl(code)
 
   const copy = async (text) => {
     try {

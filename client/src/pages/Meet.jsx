@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { meetingPath } from '../lib/meetingUrls.js'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   AlertCircle, ArrowRight, Calendar, CalendarClock, CalendarPlus,
@@ -106,7 +107,7 @@ export default function Meet() {
         method: 'POST',
         body: { title: 'Instant meeting' },
       })
-      navigate(`/meet/${meeting.code}`)
+      navigate(meetingPath(meeting.code))
     } catch (e) {
       setErr(e.message || 'Could not start meeting')
     } finally {
@@ -117,7 +118,7 @@ export default function Meet() {
   const joinCode = (e) => {
     e.preventDefault()
     const cleaned = code.trim().toLowerCase()
-    if (cleaned) navigate(`/meet/${cleaned}`)
+    if (cleaned) navigate(meetingPath(cleaned))
   }
 
   const scheduleMeeting = async (e) => {
@@ -406,7 +407,7 @@ export default function Meet() {
                     className={m.is_active ? '' : 'opacity-[0.92]'}
                   >
                     <button
-                      onClick={() => navigate(`/meet/${m.code}`)}
+                      onClick={() => navigate(meetingPath(m.code))}
                       className="group/row relative flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_6%,transparent)]"
                     >
                       {/* active accent rail */}

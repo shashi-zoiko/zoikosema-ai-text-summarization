@@ -1,8 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import {
-  ChevronUp, Disc, Grid3x3, Hand, Info, LayoutPanelLeft, Maximize, Minimize,
-  MessageSquare, Mic, MicOff, MonitorUp, MonitorX, MoreVertical, Phone,
-  Settings, Smile, Sparkles, Square, Users, Video, VideoOff,
+  Captions, CaptionsOff, ChevronUp, Disc, Grid3x3, Hand, Info, LayoutPanelLeft,
+  Maximize, Minimize, MessageSquare, Mic, MicOff, MonitorUp, MonitorX,
+  MoreVertical, Phone, Settings, Smile, Sparkles, Square, Users, Video, VideoOff,
 } from 'lucide-react'
 import Emoji from '../../features/emoji/Emoji'
 
@@ -26,6 +26,7 @@ function MeetingDock({
   startScreenShare, stopScreenShare,
   isRecording, startRecording, stopRecording,
   handRaised, toggleHand,
+  captionsOn = false, toggleCaptions, captionsSupported = true,
   showEmoji, setShowEmoji, sendReaction,
   layout, toggleLayout,
   sidebar, setSidebar,
@@ -87,6 +88,25 @@ function MeetingDock({
         <RoundBtn label={handRaised ? 'Lower hand' : 'Raise hand'} onClick={toggleHand} active={handRaised}>
           <Hand />
         </RoundBtn>
+
+        {/* Live captions (CC) — highlighted when on. Disabled with a tooltip on
+            browsers without the Web Speech API (e.g. Firefox). Shortcut: C. */}
+        {toggleCaptions && (
+          <RoundBtn
+            label={
+              !captionsSupported
+                ? 'Captions not supported in this browser'
+                : captionsOn
+                  ? 'Turn off captions (c)'
+                  : 'Turn on captions (c)'
+            }
+            onClick={toggleCaptions}
+            active={captionsOn}
+            disabled={!captionsSupported}
+          >
+            {captionsOn ? <Captions /> : <CaptionsOff />}
+          </RoundBtn>
+        )}
 
         <RoundBtn
           label="Send a reaction"
