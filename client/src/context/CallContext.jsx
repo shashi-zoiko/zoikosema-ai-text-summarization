@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, getWsBase } from '../api/client'
+import { meetingRoomPath } from '../lib/meetingUrls.js'
 import { useAuth } from './AuthContext'
 
 const CallContext = createContext(null)
@@ -19,7 +20,7 @@ export function CallProvider({ children }) {
         JSON.stringify({ audio: true, video: kind === 'video' })
       )
     } catch {}
-    navigate(`/meet/${meeting_code}/room-lk`)
+    navigate(meetingRoomPath(meeting_code))
   }, [navigate])
 
   useEffect(() => {

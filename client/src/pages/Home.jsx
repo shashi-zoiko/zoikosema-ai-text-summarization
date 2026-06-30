@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
+import { meetingPath, meetingUrl } from '../lib/meetingUrls.js'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight, Calendar, Check, ChevronDown, Clock,
@@ -174,7 +175,7 @@ export default function Home() {
     api('/api/recordings').then(setRecordings).catch(() => {})
   }, [])
 
-  const meetingLink = (c) => `${window.location.origin}/meet/${c}`
+  const meetingLink = (c) => meetingUrl(c)
 
   // "Start an instant meeting" — mint a meeting and join it immediately.
   const startInstant = async () => {
@@ -182,7 +183,7 @@ export default function Home() {
     setBusy(true)
     try {
       const meeting = await api('/api/meetings', { method: 'POST', body: { title: 'Instant meeting' } })
-      navigate(`/meet/${meeting.code}`)
+      navigate(meetingPath(meeting.code))
     } catch (e) {
       toast({ variant: 'error', title: 'Could not start meeting', description: e.message })
     } finally {
@@ -224,7 +225,7 @@ export default function Home() {
     e.preventDefault()
     const cleaned = code.trim().toLowerCase()
     if (!cleaned) return
-    navigate(`/meet/${cleaned}`)
+    navigate(meetingPath(cleaned))
   }
 
   const scheduleMeeting = async () => {
@@ -591,7 +592,7 @@ export default function Home() {
                     className="group/row flex w-full items-center gap-4 px-4 py-3 transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)]"
                   >
                     <button
-                      onClick={() => navigate(`/meet/${m.code}`)}
+                      onClick={() => navigate(meetingPath(m.code))}
                       className="flex min-w-0 flex-1 items-center gap-4 text-left"
                     >
                       <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--c-bg-3)] text-[var(--c-fg-dim)] transition-all duration-200 group-hover/row:scale-110 group-hover/row:bg-[var(--c-accent-soft)] group-hover/row:text-[var(--c-accent)]">
@@ -735,7 +736,7 @@ export default function Home() {
               </Button>
             </div>
             <button
-              onClick={() => { const c = laterMeeting.code; setLaterMeeting(null); navigate(`/meet/${c}`) }}
+              onClick={() => { const c = laterMeeting.code; setLaterMeeting(null); navigate(meetingPath(c)) }}
               className="text-[13px] font-medium text-[var(--c-accent)] transition hover:underline"
             >
               Join this meeting now →

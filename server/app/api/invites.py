@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.config import get_settings
 from app.core.email import send_meeting_invite_email
 from app.core.calendar import generate_ics
+from app.core.urls import meeting_url
 from app.models.user import User
 from app.models.meeting import Meeting
 from app.models.organization import (
@@ -39,8 +39,7 @@ def invite_to_meeting(
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    settings = get_settings()
-    join_url = f"{settings.frontend_url}/meet/{meeting.code}"
+    join_url = meeting_url(meeting.code)
     results = []
 
     scheduled_str = None
@@ -262,13 +261,12 @@ def download_calendar(
     if not meeting.scheduled_at:
         raise HTTPException(status_code=400, detail="Meeting is not scheduled")
 
-    settings = get_settings()
     host = db.get(User, meeting.host_id)
 
     ics_data = generate_ics(
         title=meeting.title,
         meeting_code=meeting.code,
-        join_url=f"{settings.frontend_url}/meet/{meeting.code}",
+        join_url=meeting_url(meeting.code),
         scheduled_at=meeting.scheduled_at,
         organizer_name=host.name if host else "ZoikoSema",
         attendee_email=user.email,

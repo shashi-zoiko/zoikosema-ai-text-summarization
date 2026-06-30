@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Editable source for og-image.png (1200x630). The PNG actually served to
+  crawlers is rendered from the ZoikoSema app icon via Pillow
+  (scripts/gen_assets in the social-preview change); this SVG mirrors that
+  layout so the asset can be re-exported from any vector tool (Figma/AI/Inkscape).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#FFFFFF"/>
+
+  <!-- App icon (from public/favicon.svg) -->
+  <svg x="484" y="92" width="232" height="232" viewBox="0 0 1024 1024">
+    <rect x="98.38" y="97.19" width="827.24" height="827.24" rx="164.23" ry="164.23" fill="#474787"/>
+    <path fill="#fff" d="M538.47,609.43h-69.38c-106.86,0-193.8-83.05-193.8-185.14s86.94-185.14,193.8-185.14h166.5v38.28h-166.5c-85.76,0-155.52,65.88-155.52,146.86s69.77,146.86,155.52,146.86h69.38v38.28Z"/>
+    <path fill="#fff" d="M554.91,782.47h-166.5v-38.28h166.5c85.76,0,155.52-65.88,155.52-146.86s-69.77-146.86-155.52-146.86h-69.38v-38.28h69.38c106.86,0,193.8,83.05,193.8,185.14s-86.94,185.14-193.8,185.14Z"/>
+    <path fill="#2a6bdd" d="M553.16,695.25h-164.75v-38.28h164.75c34.9,0,63.29-28.39,63.29-63.29v-.9c0-34.9-28.39-63.29-63.29-63.29h-82.32c-56,0-101.57-45.56-101.57-101.57s45.56-101.57,101.57-101.57h164.75v38.28h-164.75c-34.9,0-63.29,28.39-63.29,63.29s28.39,63.29,63.29,63.29h82.32c56,0,101.57,45.56,101.57,101.57v.9c0,56-45.56,101.57-101.57,101.57Z"/>
+  </svg>
+
+  <!-- Name -->
+  <text x="600" y="408" text-anchor="middle"
+        font-family="'Segoe UI', 'Hanken Grotesk', Arial, sans-serif"
+        font-size="66" font-weight="700" fill="#1B2552">ZoikoSema</text>
+
+  <!-- Tagline -->
+  <text x="600" y="478" text-anchor="middle"
+        font-family="'Segoe UI', 'Hanken Grotesk', Arial, sans-serif"
+        font-size="31" font-weight="400" fill="#5A6472">Meetings, Chat, Webinars in one workspace</text>
+
+  <!-- Website -->
+  <g transform="translate(498, 528)">
+    <rect x="0" y="4" width="24" height="18" rx="9" fill="none" stroke="#2A6BDD" stroke-width="6"/>
+    <rect x="14" y="4" width="24" height="18" rx="9" fill="none" stroke="#2A6BDD" stroke-width="6"/>
+  </g>
+  <text x="552" y="546" text-anchor="start"
+        font-family="'Segoe UI', 'Hanken Grotesk', Arial, sans-serif"
+        font-size="30" font-weight="700" fill="#2A6BDD">meet.zoikosema.com</text>
+</svg>

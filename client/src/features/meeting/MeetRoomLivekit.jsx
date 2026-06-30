@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { meetingPath } from '../../lib/meetingUrls.js'
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -25,7 +26,9 @@ import ReactionOverlay from './components/ReactionOverlay.jsx'
 import ParticipantsPanel from './components/ParticipantsPanel.jsx'
 import SettingsDrawer from './components/SettingsDrawer.jsx'
 import MeetingInfoDrawer from './components/MeetingInfoDrawer.jsx'
-import CaptionsOverlay from './components/CaptionsOverlay.jsx'
+import CaptionProvider from './captions/CaptionProvider.jsx'
+import CaptionOverlay from './captions/CaptionOverlay.jsx'
+import { useCaptionControls } from './captions/useCaptions.js'
 import { backgroundEffectsSupported } from './backgroundEngine.js'
 import { getPreset, NONE_EFFECT } from './backgroundPresets.js'
 import { LkBackgroundProcessor } from './lkBackgroundProcessor.js'
@@ -35,7 +38,6 @@ const PrivateNotebook = lazy(() => import('./notebook/PrivateNotebook.jsx'))
 import useMeetingControlWs from './hooks/useMeetingControlWs.js'
 import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
 import { useLocalParticipant, useMediaDeviceSelect, useRoomContext } from '@livekit/components-react'
-import { useCaptions } from './components/CaptionsOverlay.jsx'
 import { useRoomStore } from './state/roomStore.js'
 import { NotificationProvider, useNotifications } from './notify/NotificationProvider.jsx'
 
@@ -148,7 +150,6 @@ function MeetRoom() {
   const [unreadChat, setUnreadChat] = useState(0)
   const [showEmoji, setShowEmoji] = useState(false)
   const [showWhiteboard, setShowWhiteboard] = useState(false)
-  const { byPeer: liveCaptions, push: pushCaption } = useCaptions()
   const joinedAtRef = useRef(null) // wall-clock ms when media token landed → header timer
   // Bridge the legacy { kind, text } toast API onto the notification engine so
   // recording / permission-denied / error paths keep working unchanged.
@@ -262,13 +263,14 @@ function MeetRoom() {
         setToast({ kind: 'info', text: 'Meeting ended by host' })
         // Guests have no app shell to return to (/meet is auth-gated), so send
         // them back to the public lobby which will show the "ended" state.
-        const dest = isGuest ? `/meet/${code}` : '/meet'
+        const dest = isGuest ? meetingPath(code) : '/meet'
         setTimeout(() => navigate(dest, { replace: true }), 1500)
       } else if (t === 'permission-denied') {
         setToast({ kind: 'error', text: data.reason || 'Action not allowed' })
-      } else if (t === 'caption') {
-        pushCaption(data.peer_id, { name: data.name, color: data.color, text: data.text })
       }
+      // NOTE: live captions no longer travel on the control WS — they ride the
+      // LiveKit data channel (see captions/CaptionProvider). The server 'caption'
+      // relay is left intact as a documented fallback transport.
     })
   }, [ctrlSubscribe, sidebar, navigate, user?.id, user?.name, pushReaction, setHand, setRole, seedRoles, notify, notifyChat, syncLobby])
 
@@ -514,6 +516,10 @@ function MeetRoom() {
       className="zk-room-bg flex h-dvh w-screen flex-col overflow-hidden overscroll-none text-white"
       style={{ background: CANVAS }}
     >
+      {/* CaptionProvider must live inside <LiveKitRoom> (it uses the local
+          participant + data channel). It only renders context providers around
+          its children, so frequent caption updates never re-render the grid. */}
+      <CaptionProvider>
       <MeetingHeader
         code={code}
         ctrlConnected={ctrlConnected}
@@ -535,7 +541,7 @@ function MeetRoom() {
           <PresenterBanner />
           <PresenterPiP />
           <ReactionOverlay events={reactions} />
-          <CaptionsOverlay captions={liveCaptions} />
+          <CaptionOverlay />
           {showWhiteboard && (
             <div className="pointer-events-none absolute inset-0 z-20">
               <Suspense fallback={null}>
@@ -634,6 +640,7 @@ function MeetRoom() {
           {error}
         </div>
       )}
+      </CaptionProvider>
     </LiveKitRoom>
     </div>
   )
@@ -677,6 +684,9 @@ function LivekitDockAdapter({
   const { notify } = useNotifications()
   const audioInputs = useMediaDeviceSelect({ kind: 'audioinput' })
   const videoInputs = useMediaDeviceSelect({ kind: 'videoinput' })
+  // Caption on/off + support state. This context value changes only on toggle,
+  // so threading it through the dock never causes caption-frame re-renders.
+  const { enabled: captionsOn, supported: captionsSupported, toggle: toggleCaptions } = useCaptionControls()
 
   const micOn = !!localParticipant?.isMicrophoneEnabled
   const camOn = !!localParticipant?.isCameraEnabled
@@ -779,6 +789,9 @@ function LivekitDockAdapter({
       stopRecording={toggleRecording}
       handRaised={handRaised}
       toggleHand={toggleHand}
+      captionsOn={captionsOn}
+      toggleCaptions={toggleCaptions}
+      captionsSupported={captionsSupported}
       showEmoji={showEmoji}
       setShowEmoji={setShowEmoji}
       sendReaction={sendReaction}

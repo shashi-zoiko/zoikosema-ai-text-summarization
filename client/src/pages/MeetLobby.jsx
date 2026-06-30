@@ -11,6 +11,7 @@ import useMediaDevices from '../hooks/useMediaDevices'
 import useAudioLevel from '../hooks/useAudioLevel'
 import LobbyLeaves from '../components/LobbyLeaves'
 import Logo from '../components/ui/Logo'
+import { meetingRoomPath, meetingUrl } from '../lib/meetingUrls.js'
 
 /**
  * Meeting pre-join lobby — Google Meet–style.
@@ -35,7 +36,7 @@ const PERM = {
 // the SFU room; the server gates joins on the global MEDIA_PROVIDER setting,
 // not the per-meeting media_provider column, so old meetings work too.
 function pickRoomPath(code) {
-  return `/meet/${code}/room-lk`
+  return meetingRoomPath(code)
 }
 
 // Restore the participant's last mic/cam choice for this meeting so a refresh
@@ -437,7 +438,7 @@ export default function MeetLobby() {
 
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}/meet/${code}`)
+      await navigator.clipboard.writeText(meetingUrl(code))
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     } catch {}
@@ -508,7 +509,7 @@ export default function MeetLobby() {
   // ─────────────────────────────────────────────────────────────────
   // Main lobby
   // ─────────────────────────────────────────────────────────────────
-  const meetingLink = `${window.location.origin}/meet/${code}`
+  const meetingLink = meetingUrl(code)
 
   return (
     <Shell>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { meetingPath } from '../lib/meetingUrls.js'
 import { api, getWsBase } from '../api/client'
 import Icon from './Icon'
 import { cn } from '../lib/cn'
@@ -124,7 +125,7 @@ export default function NotificationBell() {
     try {
       const data = notif.data ? JSON.parse(notif.data) : {}
       if (data.meeting_code) {
-        navigate(`/meet/${data.meeting_code}`)
+        navigate(meetingPath(data.meeting_code))
         setOpen(false)
       } else if (data.org_slug) {
         navigate(`/org/${data.org_slug}`)
@@ -147,7 +148,7 @@ export default function NotificationBell() {
         return next
       })
       if (!notif.is_read) markRead(notif.id)
-      navigate(`/meet/${invite.meeting_code}`)
+      navigate(meetingPath(invite.meeting_code))
       setOpen(false)
     } catch {}
   }
