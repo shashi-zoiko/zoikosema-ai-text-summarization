@@ -24,7 +24,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._lock = threading.Lock()
 
     # Paths that are rate-limited
-    RATE_LIMITED_PATHS = {"/api/auth/login", "/api/auth/register", "/api/auth/refresh"}
+    RATE_LIMITED_PATHS = {
+        "/api/auth/login",
+        "/api/auth/register",
+        "/api/auth/refresh",
+        # Password-reset flow — coarse per-IP burst protection (the endpoints
+        # also enforce a per-email hourly cap and a per-OTP attempt cap).
+        "/api/auth/forgot-password",
+        "/api/auth/verify-otp",
+        "/api/auth/reset-password",
+    }
 
     def _get_client_ip(self, request: Request) -> str:
         forwarded = request.headers.get("x-forwarded-for")

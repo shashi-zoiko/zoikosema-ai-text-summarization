@@ -12,6 +12,14 @@ export const useRoomStore = create((set) => ({
   togglePinned: (id) =>
     set((s) => ({ pinnedIdentity: s.pinnedIdentity === id ? null : id })),
 
+  // heroActive: true whenever the stage is in hero mode (screen share OR
+  // speaker-view hero). Published by <Stage> and read by <CaptionOverlay> so
+  // captions can clear the bottom participant carousel that hero mode shows on
+  // phones/portrait — they must never sit on top of the strip (Phase 8).
+  heroActive: false,
+  setHeroActive: (v) =>
+    set((s) => (s.heroActive === !!v ? s : { heroActive: !!v })),
+
   // raisedHands: Set<user_id>
   raisedHands: new Set(),
   setHand: (userId, raised) =>
@@ -51,6 +59,7 @@ export const useRoomStore = create((set) => ({
   reset: () =>
     set({
       pinnedIdentity: null,
+      heroActive: false,
       raisedHands: new Set(),
       reactions: [],
       roles: new Map(),

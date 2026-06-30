@@ -16,6 +16,7 @@ import Home from './pages/Home.jsx'
 // Everything else is route-split so the home-page bundle stays lean.
 // MeetRoomLivekit and MeetingIntelligence in particular pull in framer-motion +
 // lucide trees that don't need to load until the user actually navigates.
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword.jsx'))
 const Chat = lazy(() => import('./pages/Chat.jsx'))
 const Meet = lazy(() => import('./pages/Meet.jsx'))
 const MeetLobby = lazy(() => import('./pages/MeetLobby.jsx'))
@@ -102,6 +103,14 @@ export default function App() {
           element={
             <RedirectIfAuthed>
               <Register />
+            </RedirectIfAuthed>
+          }
+        />
+        <Route
+          path="/forgot-password"
+          element={
+            <RedirectIfAuthed>
+              <ForgotPassword />
             </RedirectIfAuthed>
           }
         />

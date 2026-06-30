@@ -13,7 +13,7 @@ export default function DrawerShell({ title, count, onClose, subheader, footer, 
   return (
     <aside
       className={
-        'absolute inset-0 z-40 flex flex-col overflow-hidden bg-[#111827] text-white shadow-2xl ' +
+        'zk-drawer-enter absolute inset-0 z-40 flex flex-col overflow-hidden bg-[#111827] text-white shadow-2xl ' +
         'sm:relative sm:inset-auto sm:z-auto sm:m-2 sm:h-[calc(100%-1rem)] sm:w-[380px] sm:shrink-0 ' +
         'sm:rounded-2xl sm:border sm:border-[#263244]'
       }

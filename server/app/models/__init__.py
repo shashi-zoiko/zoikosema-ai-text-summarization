@@ -13,9 +13,11 @@ from app.models.organization import (
     Notification,
 )
 from app.models.private_note import PrivateNote
+from app.models.password_reset import PasswordResetOTP
 
 __all__ = [
     "User",
+    "PasswordResetOTP",
     "Channel",
     "ChannelMember",
     "Message",

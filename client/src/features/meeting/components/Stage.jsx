@@ -37,6 +37,7 @@ function accentIndex(identity) {
 function Stage({ layout = 'grid' }) {
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
   const setPinned = useRoomStore((s) => s.setPinned)
+  const setHeroActive = useRoomStore((s) => s.setHeroActive)
   const activeSpeaker = useActiveSpeaker()
 
   const tracks = useTracks(
@@ -150,6 +151,13 @@ function Stage({ layout = 'grid' }) {
   // (Meet/Zoom behaviour). Otherwise the resolved camera hero takes it.
   const hero = screen ?? heroCam
 
+  // Publish hero state so <CaptionOverlay> can lift the caption stack above the
+  // bottom participant carousel that hero mode shows on phones (Phase 8).
+  useEffect(() => {
+    setHeroActive(!!hero)
+    return () => setHeroActive(false)
+  }, [hero, setHeroActive])
+
   // ── Drop a stale pin when the pinned participant leaves ─────────────────────
   useEffect(() => {
     if (!pinnedIdentity) return
@@ -213,12 +221,26 @@ function Stage({ layout = 'grid' }) {
     return tiles
   }, [cams, screen, pinnedIdentity, accentByIdentity])
 
+  // Keys to float onto the first gallery page when the room paginates — the
+  // active speaker (and any pin) so the person talking is always on screen. Only
+  // consumed by StageLayout while paginating; harmless otherwise.
+  const priorityKeys = useMemo(() => {
+    const keys = []
+    for (const id of [pinnedIdentity, activeSpeaker]) {
+      if (!id) continue
+      const t = cams.find((c) => c.participant.identity === id)
+      if (t) keys.push(tileKey(t))
+    }
+    return keys
+  }, [pinnedIdentity, activeSpeaker, cams])
+
   return (
     <StageLayout
       items={items}
       heroKey={hero ? tileKey(hero) : null}
       heroFit={screen ? 'contain' : 'cover'}
       heroAspect={screen ? screenAspect : null}
+      priorityKeys={priorityKeys}
       renderTile={(item, { isHero, fit, dense }) => (
         <ParticipantTile
           trackRef={item.track}

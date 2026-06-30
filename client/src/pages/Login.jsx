@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react'
+import { AlertCircle, ArrowRight, Eye, EyeOff, Mail } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Logo from '../components/ui/Logo'
 import { Input, Field } from '../components/ui/Input'
@@ -69,8 +69,11 @@ export default function Login() {
             <h1 className="mt-6 text-[26px] font-bold tracking-[-0.02em] text-[var(--c-fg)]">
               Welcome back
             </h1>
-            <p className="mt-1.5 text-[13.5px] font-medium text-[var(--c-fg-muted)]">
-              <span className="bg-[linear-gradient(120deg,#1f7a54,#15936b_50%,#34d399)] bg-clip-text text-transparent">
+            <p className="mt-1.5 text-[13.5px] text-[var(--c-fg-muted)]">
+              Sign in to your workspace and continue
+            </p>
+            <p className="mt-1.5 text-[13.5px] font-semibold">
+              <span className="bg-[linear-gradient(110deg,#15936b,#15936b_42%,#2563eb)] bg-clip-text text-transparent">
                 Meet · Chat · Collaborate
               </span>
             </p>
@@ -111,6 +114,7 @@ export default function Login() {
                   autoFocus
                   placeholder="you@company.com"
                   autoComplete="email"
+                  leftIcon={<Mail />}
                 />
               </Field>
             </motion.div>
@@ -171,7 +175,7 @@ export default function Login() {
                 Remember this device
               </label>
               <Link
-                to="#"
+                to="/forgot-password"
                 className="text-[13px] font-semibold text-[var(--c-accent)] transition-colors duration-150 hover:text-[var(--c-accent-2)]"
               >
                 Forgot password?
@@ -188,7 +192,7 @@ export default function Login() {
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-x-3 -bottom-2 h-8 rounded-full opacity-40 blur-xl transition-opacity duration-300 group-hover/cta:opacity-90"
-                style={{ background: 'linear-gradient(90deg, #1f7a54, #34d399)' }}
+                style={{ background: 'linear-gradient(90deg, #13a06a, #2563eb)' }}
               />
               <motion.button
                 type="submit"
@@ -196,7 +200,7 @@ export default function Login() {
                 whileHover={{ scale: busy ? 1 : 1.015 }}
                 whileTap={{ scale: busy ? 1 : 0.985 }}
                 transition={{ type: 'spring', stiffness: 360, damping: 22 }}
-                className="group/cta relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(135deg,#1f7a54_0%,#15936b_55%,#34d399_100%)] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(31,122,84,0.55),inset_0_1px_0_rgba(255,255,255,0.22)] outline-none transition-[filter,box-shadow] duration-200 hover:brightness-[1.08] hover:saturate-110 hover:shadow-[0_18px_36px_-10px_rgba(31,122,84,0.65),inset_0_1px_0_rgba(255,255,255,0.28)] focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)] disabled:cursor-not-allowed disabled:opacity-80"
+                className="group/cta relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(115deg,#13a06a_0%,#1f8fb8_48%,#2563eb_100%)] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(37,99,235,0.5),inset_0_1px_0_rgba(255,255,255,0.22)] outline-none transition-[filter,box-shadow] duration-200 hover:brightness-[1.08] hover:saturate-110 hover:shadow-[0_18px_36px_-10px_rgba(37,99,235,0.6),inset_0_1px_0_rgba(255,255,255,0.28)] focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)] disabled:cursor-not-allowed disabled:opacity-80"
               >
                 {/* Shine sweep */}
                 <span
@@ -226,7 +230,7 @@ export default function Login() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.58, duration: 0.4 }}
-          className="mt-6 text-center text-[13px] text-[var(--c-fg-muted)]"
+          className="mt-6 text-center text-[15px] text-[var(--c-fg-muted)]"
         >
           New to ZoikoSema?{' '}
           <Link
