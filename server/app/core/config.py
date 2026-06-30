@@ -20,6 +20,24 @@ class Settings(BaseSettings):
     smtp_from_name: str = "ZoikoSema"
     smtp_use_tls: bool = True
 
+    # Resend transactional email (preferred over SMTP when configured). The
+    # API key is provided via env / GitHub / GCP secret as RESEND_API_KEY.
+    # resend_from_email must be on a Resend-verified domain; when blank we fall
+    # back to smtp_from_email (e.g. support@zoikosema.com).
+    resend_api_key: str = ""
+    resend_from_email: str = ""
+
+    # Password-reset OTP policy
+    otp_expiry_minutes: int = 10
+    otp_max_attempts: int = 5
+    otp_requests_per_hour: int = 5
+
+    # Absolute, publicly-reachable URL of the ZoikoSema wordmark used in
+    # transactional emails. Must be hosted (email clients block SVG / strip
+    # base64), so this points at the prod static asset by default; override
+    # with BRAND_EMAIL_LOGO_URL if the logo lives elsewhere.
+    brand_email_logo_url: str = "https://meet.zoikosema.com/email-logo.png"
+
     # Frontend base URL for invite links
     frontend_url: str = "http://localhost:5173"
 
@@ -55,6 +73,15 @@ class Settings(BaseSettings):
     @property
     def smtp_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_user)
+
+    @property
+    def resend_enabled(self) -> bool:
+        return bool(self.resend_api_key)
+
+    @property
+    def mail_from_email(self) -> str:
+        """Sender address for outbound mail (Resend preferred, SMTP fallback)."""
+        return self.resend_from_email or self.smtp_from_email
 
 
 @lru_cache

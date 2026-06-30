@@ -103,6 +103,36 @@ export async function requestGuestToken(code, { displayName, password, captchaTo
   })
 }
 
+// ── Password reset (forgot-password OTP flow, all unauthenticated) ───────────
+
+/** Step 1 — request a reset code. Always resolves generically (no account
+ *  enumeration); the email only sends if the account exists. */
+export async function requestPasswordReset(email) {
+  return api('/api/auth/forgot-password', {
+    method: 'POST',
+    auth: false,
+    body: { email },
+  })
+}
+
+/** Step 2 — verify the 4-digit OTP. Returns { reset_token } on success. */
+export async function verifyResetOtp(email, otp) {
+  return api('/api/auth/verify-otp', {
+    method: 'POST',
+    auth: false,
+    body: { email, otp },
+  })
+}
+
+/** Step 3 — set the new password using the one-time reset_token from step 2. */
+export async function resetPassword(email, resetToken, newPassword) {
+  return api('/api/auth/reset-password', {
+    method: 'POST',
+    auth: false,
+    body: { email, reset_token: resetToken, new_password: newPassword },
+  })
+}
+
 export async function uploadFile(path, file) {
   const headers = {}
   const t = token()

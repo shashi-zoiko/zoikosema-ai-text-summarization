@@ -136,6 +136,37 @@ export function computeGridLayout(count, width, height, gap = 12, opts = {}) {
 }
 
 /**
+ * How many tiles can share ONE gallery page while every tile stays at or above a
+ * legible size — the cap that turns an endless scrolling wall into Google-Meet
+ * style pagination. We grow the per-page count until the best-fit solution would
+ * start scrolling (i.e. tiles dip under the legible floor), then back off by one.
+ * The result is clamped to a hard ceiling (Meet tops out near 49 on desktop, far
+ * fewer on a phone) so a page is never an unreadable mosaic.
+ *
+ * @returns {number} tiles per page, ≥ 1
+ */
+export function computePageSize(count, width, height, gap = 12, portrait = false) {
+  if (count <= 0 || width <= 0 || height <= 0) return Math.max(1, count)
+  const hardCap = portrait ? 6 : 49
+  const cap = Math.min(count, hardCap)
+  // Walk down from the cap and return the largest count that fits on ONE page
+  // without scrolling AND keeps every tile at or above the legible floor. We
+  // check the floor directly (not just the grid's `scroll` flag) because the
+  // aspect-preserving fall-back lets tiles dip a little under the floor before
+  // it switches to scroll — on a short/narrow landscape that would otherwise
+  // pack 49 unreadable specks onto one page instead of paginating. c=1 always
+  // clears the floor, so this never returns nothing. galleryGridOpts encodes the
+  // same orientation strategy the live grid renders, so page math matches paint.
+  for (let c = cap; c >= 1; c--) {
+    const opts = galleryGridOpts(c, portrait)
+    const g = computeGridLayout(c, width, height, gap, opts)
+    const floor = opts.minTileH || 0
+    if (!g.scroll && g.tileH > 0 && g.tileH >= floor) return c
+  }
+  return 1
+}
+
+/**
  * Observe an element's content box. Coalesces bursts (resize, sidebar open,
  * device-pixel changes) into a single rAF-throttled update so layout math runs
  * at most once per frame.

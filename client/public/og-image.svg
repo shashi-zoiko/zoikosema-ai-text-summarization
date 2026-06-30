@@ -1,37 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Editable source for og-image.png (1200x630). The PNG actually served to
-  crawlers is rendered from the ZoikoSema app icon via Pillow
-  (scripts/gen_assets in the social-preview change); this SVG mirrors that
-  layout so the asset can be re-exported from any vector tool (Figma/AI/Inkscape).
+  Editable source mirroring og-image.png (1200x630). The PNG served to crawlers
+  is rendered by client/scripts/gen_social_assets.py (Pillow) — that script is
+  the authoritative source; this SVG mirrors its layout for vector editing
+  (Figma / Illustrator / Inkscape). Keep the two in sync.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="#FFFFFF"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630"
+     font-family="'Segoe UI', 'Hanken Grotesk', Arial, sans-serif">
+  <rect width="1200" height="630" fill="#F0EAE0"/>
+  <rect x="34" y="34" width="1132" height="562" rx="34" fill="#FFFFFF" stroke="#E4DDD2" stroke-width="2"/>
 
   <!-- App icon (from public/favicon.svg) -->
-  <svg x="484" y="92" width="232" height="232" viewBox="0 0 1024 1024">
-    <rect x="98.38" y="97.19" width="827.24" height="827.24" rx="164.23" ry="164.23" fill="#474787"/>
+  <svg x="84" y="78" width="196" height="196" viewBox="0 0 1024 1024">
+    <rect x="98.38" y="97.19" width="827.24" height="827.24" rx="164.23" fill="#474787"/>
     <path fill="#fff" d="M538.47,609.43h-69.38c-106.86,0-193.8-83.05-193.8-185.14s86.94-185.14,193.8-185.14h166.5v38.28h-166.5c-85.76,0-155.52,65.88-155.52,146.86s69.77,146.86,155.52,146.86h69.38v38.28Z"/>
     <path fill="#fff" d="M554.91,782.47h-166.5v-38.28h166.5c85.76,0,155.52-65.88,155.52-146.86s-69.77-146.86-155.52-146.86h-69.38v-38.28h69.38c106.86,0,193.8,83.05,193.8,185.14s-86.94,185.14-193.8,185.14Z"/>
     <path fill="#2a6bdd" d="M553.16,695.25h-164.75v-38.28h164.75c34.9,0,63.29-28.39,63.29-63.29v-.9c0-34.9-28.39-63.29-63.29-63.29h-82.32c-56,0-101.57-45.56-101.57-101.57s45.56-101.57,101.57-101.57h164.75v38.28h-164.75c-34.9,0-63.29,28.39-63.29,63.29s28.39,63.29,63.29,63.29h82.32c56,0,101.57,45.56,101.57,101.57v.9c0,56-45.56,101.57-101.57,101.57Z"/>
   </svg>
 
-  <!-- Name -->
-  <text x="600" y="408" text-anchor="middle"
-        font-family="'Segoe UI', 'Hanken Grotesk', Arial, sans-serif"
-        font-size="66" font-weight="700" fill="#1B2552">ZoikoSema</text>
-
-  <!-- Tagline -->
-  <text x="600" y="478" text-anchor="middle"
-        font-family="'Segoe UI', 'Hanken Grotesk', Arial, sans-serif"
-        font-size="31" font-weight="400" fill="#5A6472">Meetings, Chat, Webinars in one workspace</text>
-
-  <!-- Website -->
-  <g transform="translate(498, 528)">
-    <rect x="0" y="4" width="24" height="18" rx="9" fill="none" stroke="#2A6BDD" stroke-width="6"/>
-    <rect x="14" y="4" width="24" height="18" rx="9" fill="none" stroke="#2A6BDD" stroke-width="6"/>
+  <!-- Heading block -->
+  <text x="324" y="166" font-size="60" font-weight="700" fill="#1B2552">ZoikoSema</text>
+  <text x="324" y="212" font-size="28" fill="#5A6472">Meetings, Chat, Webinars in one workspace</text>
+  <g transform="translate(324,238)">
+    <rect x="0" y="6" width="24" height="18" rx="9" fill="none" stroke="#2A6BDD" stroke-width="6"/>
+    <rect x="14" y="6" width="24" height="18" rx="9" fill="none" stroke="#2A6BDD" stroke-width="6"/>
+    <text x="52" y="26" font-size="28" font-weight="700" fill="#2A6BDD">meet.zoikosema.com</text>
   </g>
-  <text x="552" y="546" text-anchor="start"
-        font-family="'Segoe UI', 'Hanken Grotesk', Arial, sans-serif"
-        font-size="30" font-weight="700" fill="#2A6BDD">meet.zoikosema.com</text>
+
+  <!-- Feature row (icons are simplified vector glyphs) -->
+  <g fill="none" stroke="#2A6BDD" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="291" y1="334" x2="291" y2="438" stroke="#E4DDD2" stroke-width="2"/>
+    <line x1="514" y1="334" x2="514" y2="438" stroke="#E4DDD2" stroke-width="2"/>
+    <line x1="737" y1="334" x2="737" y2="438" stroke="#E4DDD2" stroke-width="2"/>
+    <line x1="960" y1="334" x2="960" y2="438" stroke="#E4DDD2" stroke-width="2"/>
+    <!-- HD Video (people) -->
+    <g transform="translate(180,360)"><circle cx="-12" cy="-10" r="9"/><path d="M-26,16 a14,14 0 0 1 28,0"/><circle cx="11" cy="-9" r="8"/><path d="M0,14 a13,13 0 0 1 24,-1"/></g>
+    <!-- Screen Sharing (monitor) -->
+    <g transform="translate(393,360)"><rect x="-24" y="-18" width="48" height="26" rx="5"/><path d="M-13,8 l-4,12 M13,8 l4,12 M-16,20 h32 M0,-12 v13 M-7,-6 l7,8 7,-8"/></g>
+    <!-- Team Chat (bubble) -->
+    <g transform="translate(600,360)"><rect x="-24" y="-18" width="48" height="26" rx="9"/><path d="M-16,6 v14 l14,-14" fill="#2A6BDD" stroke="none"/><circle cx="-9" cy="-5" r="2.4" fill="#2A6BDD" stroke="none"/><circle cx="0" cy="-5" r="2.4" fill="#2A6BDD" stroke="none"/><circle cx="9" cy="-5" r="2.4" fill="#2A6BDD" stroke="none"/></g>
+    <!-- Schedule (calendar) -->
+    <g transform="translate(805,360)"><rect x="-22" y="-14" width="44" height="32" rx="5"/><path d="M-22,-3 h44 M-11,-22 v12 M11,-22 v12"/><circle cx="-11" cy="8" r="2.4" fill="#2A6BDD" stroke="none"/><circle cx="0" cy="8" r="2.4" fill="#2A6BDD" stroke="none"/><circle cx="11" cy="8" r="2.4" fill="#2A6BDD" stroke="none"/></g>
+    <!-- Secure (shield) -->
+    <g transform="translate(1010,360)"><path d="M0,-20 18,-12 18,3 0,21 -18,3 -18,-12 Z"/><rect x="-7" y="-1" width="14" height="12" rx="2" stroke-width="4"/><path d="M-5,-1 a5,6 0 0 1 10,0" stroke-width="4"/></g>
+  </g>
+  <g text-anchor="middle" font-weight="700" fill="#1B2552" font-size="21">
+    <text x="180" y="416">HD Video</text><text x="393" y="416">Screen</text>
+    <text x="600" y="416">Team</text><text x="805" y="416">Schedule</text><text x="1010" y="416">Secure</text>
+  </g>
+  <g text-anchor="middle" fill="#5A6472" font-size="18">
+    <text x="180" y="444">Meetings</text><text x="393" y="444">Sharing</text>
+    <text x="600" y="444">Chat</text><text x="805" y="444">Meetings</text><text x="1010" y="444">by Design</text>
+  </g>
+
+  <!-- Footer -->
+  <path d="M34,506 H1166 V562 a34,34 0 0 1 -34,34 H68 a34,34 0 0 1 -34,-34 Z" fill="#182040"/>
+  <text x="86" y="562" font-size="32" font-weight="700"><tspan fill="#FFFFFF">Zoiko</tspan><tspan fill="#2A6BDD">Sema</tspan></text>
+  <text x="1114" y="558" text-anchor="end" font-size="22" fill="#CBD2E0">AI-Powered  •  Secure  •  Collaboration</text>
 </svg>

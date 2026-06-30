@@ -48,7 +48,12 @@ function reducer(state, action) {
  * LiveKit data channel + echo locally → per-speaker state with a silence timer.
  */
 export default function CaptionProvider({ children }) {
-  const { localParticipant } = useLocalParticipant()
+  // `isMicrophoneEnabled` is reactive — it flips the instant the participant
+  // mutes/unmutes in the meeting. We gate capture on it so a muted mic never
+  // produces captions (the Web Speech engine taps the system mic on its own,
+  // independent of LiveKit, so without this it would keep transcribing — and
+  // broadcasting — while muted).
+  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant()
   const supported = speechRecognitionSupported
 
   const [enabled, setEnabled] = useState(() => {
@@ -97,6 +102,9 @@ export default function CaptionProvider({ children }) {
   // Local recognition result → throttle interims, broadcast, echo locally.
   const handleResult = useCallback(
     ({ text, isFinal }) => {
+      // Hard guard: never emit while muted. Catches the trailing final result
+      // some browsers fire immediately after the engine is stopped on mute.
+      if (!isMicrophoneEnabled) return
       const now = Date.now()
       if (!isFinal && now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) return
       lastInterimRef.current = now
@@ -106,12 +114,14 @@ export default function CaptionProvider({ children }) {
       ingest({ speakerId: id, name: localParticipant?.name || 'You', text: clean, isFinal })
       publish({ text: clean, isFinal })
     },
-    [ingest, publish, localParticipant],
+    [ingest, publish, localParticipant, isMicrophoneEnabled],
   )
 
-  // Capture runs only while CC is on, the API is supported, and the mic wasn't
-  // denied. Toggling off stops recognition immediately.
-  useSpeechRecognition(enabled && supported && !micError, {
+  // Capture runs only while CC is on, the API is supported, the mic wasn't
+  // denied, AND the participant's meeting mic is live. Muting in the meeting
+  // stops recognition immediately — no captions are generated or broadcast
+  // while muted.
+  useSpeechRecognition(enabled && supported && !micError && isMicrophoneEnabled, {
     lang: CAPTION_CONFIG.lang,
     onResult: handleResult,
     onError: () => setMicError(true),

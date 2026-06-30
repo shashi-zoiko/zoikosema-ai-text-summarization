@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertCircle, ArrowRight, Check, Eye, EyeOff, Sparkles } from 'lucide-react'
+import { AlertCircle, ArrowRight, Check, Eye, EyeOff, Lock, Mail, Sparkles, User } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Logo from '../components/ui/Logo'
 import { Input, Field } from '../components/ui/Input'
@@ -13,10 +13,19 @@ function passwordChecks(p) {
     upper: /[A-Z]/.test(p),
     lower: /[a-z]/.test(p),
     digit: /[0-9]/.test(p),
+    special: /[^A-Za-z0-9]/.test(p),
   }
 }
 
-const STRENGTH_LABELS = ['Weak', 'Weak', 'Okay', 'Good', 'Strong']
+const STRENGTH_LABELS = ['Weak', 'Weak', 'Okay', 'Good', 'Strong', 'Strong']
+
+const PASSWORD_RULES = [
+  { key: 'length', label: 'At least 8 characters' },
+  { key: 'upper', label: 'Uppercase letter' },
+  { key: 'lower', label: 'Lowercase letter' },
+  { key: 'digit', label: 'Number' },
+  { key: 'special', label: 'Special character' },
+]
 
 export default function Register() {
   const { register } = useAuth()
@@ -101,8 +110,8 @@ export default function Register() {
             <h1 className="mt-4 text-[26px] font-bold tracking-[-0.02em] text-[var(--c-fg)]">
               Create your workspace
             </h1>
-            <p className="mt-1.5 text-[13.5px] font-medium text-[var(--c-fg-muted)]">
-              <span className="bg-[linear-gradient(120deg,#1f7a54,#15936b_50%,#34d399)] bg-clip-text text-transparent">
+            <p className="mt-1.5 text-[13.5px] font-semibold">
+              <span className="bg-[linear-gradient(110deg,#15936b,#15936b_42%,#2563eb)] bg-clip-text text-transparent">
                 Meet · Chat · Collaborate
               </span>
             </p>
@@ -142,6 +151,7 @@ export default function Register() {
                   autoFocus
                   placeholder="Jane Doe"
                   autoComplete="name"
+                  leftIcon={<User />}
                 />
               </Field>
             </motion.div>
@@ -159,6 +169,7 @@ export default function Register() {
                   required
                   placeholder="you@company.com"
                   autoComplete="email"
+                  leftIcon={<Mail />}
                 />
               </Field>
             </motion.div>
@@ -177,6 +188,7 @@ export default function Register() {
                   minLength={8}
                   placeholder="Choose a strong password"
                   autoComplete="new-password"
+                  leftIcon={<Lock />}
                   rightAddon={
                     <motion.button
                       type="button"
@@ -202,89 +214,101 @@ export default function Register() {
                 />
               </Field>
 
-              {/* Strength meter slides in only when there is input */}
+              {/* Strength meter — slides in once there is input */}
               <AnimatePresence initial={false}>
                 {password.length > 0 && (
                   <motion.div
                     key="pwd-meter"
                     initial={{ opacity: 0, height: 0, marginTop: 0 }}
-                    animate={{ opacity: 1, height: 'auto', marginTop: 12 }}
+                    animate={{ opacity: 1, height: 'auto', marginTop: 10 }}
                     exit={{ opacity: 0, height: 0, marginTop: 0 }}
                     transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
                     className="overflow-hidden"
                   >
-                    <div className="space-y-2 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)]/60 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex h-1.5 flex-1 gap-1">
-                          {[0, 1, 2, 3].map((i) => (
-                            <motion.span
-                              key={i}
-                              initial={false}
-                              animate={{
-                                backgroundColor:
-                                  i < strength
-                                    ? strengthTone === 'danger'
-                                      ? 'var(--c-danger)'
-                                      : strengthTone === 'warn'
-                                      ? 'var(--c-warn)'
-                                      : 'var(--c-success)'
-                                    : 'var(--c-line-strong)',
-                              }}
-                              transition={{ duration: 0.25 }}
-                              className="h-full flex-1 rounded-full"
-                            />
-                          ))}
-                        </div>
-                        <AnimatePresence mode="wait" initial={false}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex h-1.5 flex-1 gap-1">
+                        {[0, 1, 2, 3, 4].map((i) => (
                           <motion.span
-                            key={strengthLabel + strengthTone}
-                            initial={{ opacity: 0, y: 4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -4 }}
-                            transition={{ duration: 0.18 }}
+                            key={i}
+                            initial={false}
+                            animate={{
+                              backgroundColor:
+                                i < strength
+                                  ? strengthTone === 'danger'
+                                    ? 'var(--c-danger)'
+                                    : strengthTone === 'warn'
+                                    ? 'var(--c-warn)'
+                                    : 'var(--c-success)'
+                                  : 'var(--c-line-strong)',
+                            }}
+                            transition={{ duration: 0.25 }}
+                            className="h-full flex-1 rounded-full"
+                          />
+                        ))}
+                      </div>
+                      <AnimatePresence mode="wait" initial={false}>
+                        <motion.span
+                          key={strengthLabel + strengthTone}
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={{ duration: 0.18 }}
+                          className="text-[11.5px] font-medium text-[var(--c-fg-muted)]"
+                        >
+                          Password strength:{' '}
+                          <span
                             className={cn(
-                              'text-[11px] font-semibold tracking-tight',
+                              'font-semibold',
                               strengthTone === 'danger' && 'text-[var(--c-danger)]',
                               strengthTone === 'warn' && 'text-[var(--c-warn)]',
                               strengthTone === 'success' && 'text-[var(--c-success)]'
                             )}
                           >
                             {strengthLabel}
-                          </motion.span>
-                        </AnimatePresence>
-                      </div>
-                      <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px]">
-                        {[
-                          { key: 'length', label: '8+ characters' },
-                          { key: 'upper', label: 'Uppercase letter' },
-                          { key: 'lower', label: 'Lowercase letter' },
-                          { key: 'digit', label: 'A number' },
-                        ].map((r) => {
-                          const ok = checks[r.key]
-                          return (
-                            <li
-                              key={r.key}
-                              className={cn(
-                                'flex items-center gap-1.5 transition-colors duration-200',
-                                ok ? 'text-[var(--c-success)]' : 'text-[var(--c-fg-muted)]'
-                              )}
-                            >
-                              <motion.span
-                                animate={{ scale: ok ? 1 : 0.85, opacity: ok ? 1 : 0.4 }}
-                                transition={{ type: 'spring', stiffness: 380, damping: 22 }}
-                                className="flex h-3.5 w-3.5 items-center justify-center"
-                              >
-                                <Check className="h-3.5 w-3.5" />
-                              </motion.span>
-                              {r.label}
-                            </li>
-                          )
-                        })}
-                      </ul>
+                          </span>
+                        </motion.span>
+                      </AnimatePresence>
                     </div>
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {/* Requirements — always visible */}
+              <div className="mt-3 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)]/60 p-3.5">
+                <p className="text-[12px] font-semibold text-[var(--c-fg-dim)]">Password must contain:</p>
+                <ul className="mt-2 space-y-1.5 text-[12px]">
+                  {PASSWORD_RULES.map((r) => {
+                    const ok = checks[r.key]
+                    return (
+                      <li
+                        key={r.key}
+                        className={cn(
+                          'flex items-center gap-2 transition-colors duration-200',
+                          ok ? 'text-[var(--c-success)]' : 'text-[var(--c-fg-muted)]'
+                        )}
+                      >
+                        <motion.span
+                          animate={{
+                            backgroundColor: ok ? 'var(--c-success)' : 'transparent',
+                            borderColor: ok ? 'var(--c-success)' : 'var(--c-line-strong)',
+                          }}
+                          transition={{ duration: 0.2 }}
+                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border"
+                        >
+                          <motion.span
+                            animate={{ scale: ok ? 1 : 0, opacity: ok ? 1 : 0 }}
+                            transition={{ type: 'spring', stiffness: 400, damping: 22 }}
+                            className="flex"
+                          >
+                            <Check className="h-2.5 w-2.5 text-white" strokeWidth={3.5} />
+                          </motion.span>
+                        </motion.span>
+                        {r.label}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
             </motion.div>
 
             <motion.div
@@ -297,7 +321,7 @@ export default function Register() {
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-x-3 -bottom-2 h-8 rounded-full opacity-40 blur-xl transition-opacity duration-300 group-hover/cta:opacity-90"
-                style={{ background: 'linear-gradient(90deg, #1f7a54, #34d399)' }}
+                style={{ background: 'linear-gradient(90deg, #13a06a, #2563eb)' }}
               />
               <motion.button
                 type="submit"
@@ -305,7 +329,7 @@ export default function Register() {
                 whileHover={{ scale: busy ? 1 : 1.015 }}
                 whileTap={{ scale: busy ? 1 : 0.985 }}
                 transition={{ type: 'spring', stiffness: 360, damping: 22 }}
-                className="group/cta relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(135deg,#1f7a54_0%,#15936b_55%,#34d399_100%)] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(31,122,84,0.55),inset_0_1px_0_rgba(255,255,255,0.22)] outline-none transition-[filter,box-shadow] duration-200 hover:brightness-[1.08] hover:saturate-110 hover:shadow-[0_18px_36px_-10px_rgba(31,122,84,0.65),inset_0_1px_0_rgba(255,255,255,0.28)] focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)] disabled:cursor-not-allowed disabled:opacity-80"
+                className="group/cta relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(115deg,#13a06a_0%,#1f8fb8_48%,#2563eb_100%)] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(37,99,235,0.5),inset_0_1px_0_rgba(255,255,255,0.22)] outline-none transition-[filter,box-shadow] duration-200 hover:brightness-[1.08] hover:saturate-110 hover:shadow-[0_18px_36px_-10px_rgba(37,99,235,0.6),inset_0_1px_0_rgba(255,255,255,0.28)] focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)] disabled:cursor-not-allowed disabled:opacity-80"
               >
                 {/* Shine sweep */}
                 <span

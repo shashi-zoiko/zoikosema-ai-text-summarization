@@ -142,6 +142,33 @@ def cleanup_blacklist() -> None:
             del _blacklist[jti]
 
 
+def generate_otp(digits: int = 4) -> str:
+    """Cryptographically-random numeric OTP, zero-padded to `digits`.
+
+    Uses secrets.randbelow over the full range so codes are uniformly random
+    (never sequential / predictable) while still allowing leading zeros.
+    """
+    upper = 10 ** digits
+    return str(secrets.randbelow(upper)).zfill(digits)
+
+
+def hash_otp(otp: str) -> str:
+    """Hash an OTP / reset token with the same bcrypt context as passwords."""
+    return pwd_context.hash(otp)
+
+
+def verify_otp(plain: str, hashed: str) -> bool:
+    try:
+        return pwd_context.verify(plain, hashed)
+    except Exception:
+        return False
+
+
+def generate_reset_token() -> str:
+    """Opaque one-time token handed to the client after OTP verification."""
+    return secrets.token_urlsafe(32)
+
+
 def validate_password_strength(password: str) -> str | None:
     """Return an error message if the password is too weak, else None."""
     if len(password) < 8:

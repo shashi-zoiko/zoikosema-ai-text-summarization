@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { CAPTION_CONFIG } from './config'
 import { useCaptionControls, useLiveCaptions } from './useCaptions'
 import CaptionBubble from './CaptionBubble'
+import { useRoomStore } from '../state/roomStore.js'
 
 /**
  * Bottom-centre caption stack, above the toolbar (Google-Meet placement). Shows
@@ -17,6 +18,11 @@ import CaptionBubble from './CaptionBubble'
 export default function CaptionOverlay() {
   const { enabled } = useCaptionControls()
   const { bySpeaker } = useLiveCaptions()
+  // In hero mode (screen share / speaker view) phones & portrait tablets show a
+  // horizontal participant carousel pinned to the BOTTOM of the stage column. The
+  // caption stack must clear it instead of painting over faces (Phase 8). On
+  // desktop the strip sits on the right, so captions stay at the normal bottom.
+  const heroActive = useRoomStore((s) => s.heroActive)
 
   const visible = useMemo(
     () =>
@@ -31,7 +37,11 @@ export default function CaptionOverlay() {
 
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex flex-col items-center gap-1.5 px-3"
+      className={
+        'pointer-events-none absolute inset-x-0 z-20 flex flex-col items-center gap-1.5 px-3 ' +
+        'transition-[bottom] duration-300 ' +
+        (heroActive ? 'bottom-38 sm:bottom-42 lg:bottom-3' : 'bottom-3')
+      }
       role="region"
       aria-label="Live captions"
       aria-live="polite"

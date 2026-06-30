@@ -458,6 +458,24 @@ h4 { line-height: 1.40; font-weight: 600; }
     100% { opacity: 1; transform: translateY(0)    scale(1);     }
   }
 
+  /* Side-drawer entrance (chat / people / settings / info). Transform + opacity
+     only, so the panel slides in over GPU while its flex width is reserved
+     instantly — the stage resizes ONCE and its tiles FLIP to the new size,
+     instead of a per-frame reflow. Slides up on the mobile full-screen overlay,
+     in from the right on the desktop docked panel. */
+  .zk-drawer-enter { animation: zk-drawer-enter-up 280ms cubic-bezier(0.16,1,0.3,1) both; }
+  @keyframes zk-drawer-enter-up {
+    0%   { opacity: 0; transform: translateY(18px); }
+    100% { opacity: 1; transform: translateY(0);    }
+  }
+  @media (min-width: 640px) {
+    .zk-drawer-enter { animation-name: zk-drawer-enter-right; }
+  }
+  @keyframes zk-drawer-enter-right {
+    0%   { opacity: 0; transform: translateX(20px); }
+    100% { opacity: 1; transform: translateX(0);    }
+  }
+
   /* Dark drawer / popover surface (chat, people, settings, menus). */
   .zk-glass {
     background: var(--zk-surface);
@@ -803,6 +821,7 @@ h4 { line-height: 1.40; font-weight: 600; }
     .zk-strip-tile,
     .zk-pointer-pulse,
     .zk-dock-enter,
+    .zk-drawer-enter,
     .zk-pop-in,
     .zk-icon-swap,
     .zk-toast-in,
