@@ -58,8 +58,12 @@ jobs:
           image: ${{ env.REGISTRY }}/app:latest
           # CORS_ORIGINS still configurable for any external clients, but
           # the SPA itself is same-origin now so CORS isn't on the hot path.
-          # DATABASE_URL points at Supabase (Session Pooler — Cloud Run is
-          # IPv4-only, the direct db.<ref>.supabase.co host won't work).
+          # DATABASE_URL MUST point at Supabase's TRANSACTION pooler (host
+          # ...pooler.supabase.com, port 6543) — Cloud Run is IPv4-only so the
+          # direct db.<ref>.supabase.co host won't work, and the SESSION pooler
+          # (port 5432) caps at 15 clients: with pool_size=20 (+10 overflow)
+          # across up to 2 instances it throws FATAL EMAXCONNSESSION and every
+          # DB route 500s. The secret value must use :6543, NOT :5432.
           #
           # IMPORTANT: this action REPLACES the service's full runtime env on
           # every deploy. Any var NOT listed here is wiped — so MEDIA_PROVIDER /
@@ -81,6 +85,7 @@ jobs:
             LIVEKIT_API_SECRET=${{ secrets.LIVEKIT_API_SECRET }}
             LIVEKIT_WS_URL=${{ secrets.LIVEKIT_URL }}
             LIVEKIT_PUBLIC_WS_URL=${{ secrets.LIVEKIT_PUBLIC_WS_URL }}
+            E2EE_SECRET=${{ secrets.E2EE_SECRET }}
           # min-instances=1 eliminates cold starts on the first request after
           # idle (default is 0 → ~5-10s pull+boot on each idle wake). 2 CPU
           # + 1Gi memory is the smallest tier that comfortably runs uvicorn +

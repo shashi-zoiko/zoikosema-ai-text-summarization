@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  BarChart3, ChevronDown, ChevronsUpDown, Home, LogOut, Menu, MessageSquareText,
-  Settings, ShieldCheck, Users2, Video, X,
+  BarChart3, CalendarClock, ChevronDown, ChevronsUpDown, Home, LogOut, Menu,
+  MessageSquareText, Settings, ShieldCheck, Users2, X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { cn } from '../lib/cn'
@@ -15,9 +15,9 @@ import NotificationBell from './NotificationBell'
 import DesktopStatus from './DesktopStatus'
 
 const NAV = [
-  { to: '/',          label: 'Home',      icon: Home,             end: true },
+  { to: '/',          label: 'Home',      icon: Home,             end: true, badge: 'Live' },
   { to: '/chat',      label: 'Chat',      icon: MessageSquareText },
-  { to: '/meet',      label: 'Meet',      icon: Video,            badge: 'Live' },
+  { to: '/scheduled', label: 'Scheduled', icon: CalendarClock },
   { to: '/dashboard', label: 'Analytics', icon: BarChart3 },
 ]
 
@@ -316,7 +316,7 @@ function SideLink({ to, label, icon: Icon, end, badge, disabled }) {
 const PATH_LABELS = {
   '/': 'Home',
   '/chat': 'Chat',
-  '/meet': 'Meetings',
+  '/scheduled': 'Scheduled meetings',
   '/dashboard': 'Analytics',
   '/admin': 'Workspace settings',
 }

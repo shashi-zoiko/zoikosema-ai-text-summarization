@@ -16,7 +16,10 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
-    smtp_from_email: str = "noreply@zoikomeet.com"
+    # Must be a real, existing domain — this address is used as the .ics
+    # ORGANIZER, so attendee RSVPs are delivered here. The old zoikomeet.com
+    # placeholder does not resolve (NXDOMAIN) and hard-bounced every RSVP.
+    smtp_from_email: str = "noreply@zoikosema.com"
     smtp_from_name: str = "ZoikoSema"
     smtp_use_tls: bool = True
 
@@ -37,6 +40,16 @@ class Settings(BaseSettings):
     # base64), so this points at the prod static asset by default; override
     # with BRAND_EMAIL_LOGO_URL if the logo lives elsewhere.
     brand_email_logo_url: str = "https://meet.zoikosema.com/email-logo.png"
+
+    # Absolute, publicly-reachable URL of the square ZoikoSema app icon (favicon)
+    # shown as the brand mark in transactional email headers. Same hosting
+    # constraint as the wordmark above; override with BRAND_EMAIL_ICON_URL.
+    brand_email_icon_url: str = "https://meet.zoikosema.com/icon-192.png"
+
+    # Base URL for the hosted meeting-email hero illustrations
+    # (email-hero-{invite,reminder,cancelled}.png in client/public/). Same host
+    # as the assets above by default; override with BRAND_EMAIL_ASSET_BASE_URL.
+    brand_email_asset_base_url: str = "https://meet.zoikosema.com"
 
     # Frontend base URL for invite links
     frontend_url: str = "http://localhost:5173"
@@ -62,6 +75,20 @@ class Settings(BaseSettings):
     # through a normal meeting could fail auth, since the client never re-mints.
     # 6h comfortably outlasts any real meeting while still bounding token replay.
     livekit_token_ttl_seconds: int = 21600
+
+    # End-to-end encryption. All meetings are E2E-encrypted: audio/video frames
+    # (LiveKit insertable-stream E2EE), in-call chat, and live captions are all
+    # encrypted with a per-meeting key the SFU/app-server relays but cannot read.
+    # The key is derived deterministically from this secret + the meeting code so
+    # every participant (incl. guests) derives the SAME key without the plaintext
+    # key ever crossing the wire. Falls back to jwt_secret when unset so local
+    # dev works out of the box; set a dedicated E2EE_SECRET in prod.
+    #
+    # NOTE: this is server-derived, so the crypto is real (frames are opaque to
+    # the SFU) but not "zero-knowledge" — the server COULD derive the key. To go
+    # zero-knowledge later, swap this for a host passphrase shared out-of-band;
+    # only the key-source changes, not the call sites.
+    e2ee_secret: str = ""
 
     # Redis (control-plane fanout + idempotency cache)
     redis_url: str = ""

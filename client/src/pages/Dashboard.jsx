@@ -60,9 +60,9 @@ function relativeDay(iso) {
  * tile is a neutral card with a small accented icon chip — the colour
  * lives on the icon, not the whole tile. */
 const ACTION_TILES = [
-  { key: 'new',        label: 'New meeting',    sub: 'Start an instant room',  icon: <Video />,    to: '/meet', tone: 'accent'  },
-  { key: 'schedule',   label: 'Schedule',       sub: 'Plan a meeting ahead',   icon: <Calendar />, to: '/meet', tone: 'success' },
-  { key: 'recordings', label: 'Recordings',     sub: 'Replay and share',       icon: <Disc />,     to: '/meet', tone: 'warn'    },
+  { key: 'new',        label: 'New meeting',    sub: 'Start an instant room',  icon: <Video />,    to: '/', tone: 'accent'  },
+  { key: 'schedule',   label: 'Schedule',       sub: 'Plan a meeting ahead',   icon: <Calendar />, to: '/', tone: 'success' },
+  { key: 'recordings', label: 'Recordings',     sub: 'Replay and share',       icon: <Disc />,     to: '/', tone: 'warn'    },
 ]
 
 /* ─────────────────────── stat strip ─────────────────────── */
@@ -223,7 +223,7 @@ export default function Dashboard() {
             asMotion
             size="md"
             leftIcon={<Plus className="h-4 w-4" />}
-            onClick={() => navigate('/meet')}
+            onClick={() => navigate('/')}
           >
             New meeting
           </Button>
@@ -271,7 +271,7 @@ export default function Dashboard() {
             whileHover={{ y: -4 }}
             whileTap={{ scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 360, damping: 22 }}
-            onClick={() => navigate('/meet')}
+            onClick={() => navigate('/')}
             className="group/tile relative flex aspect-[3/4] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[var(--c-line-strong)] bg-transparent text-[var(--c-fg-muted)] outline-none transition-colors hover:border-[var(--c-accent)] hover:text-[var(--c-accent)] focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)]"
           >
             <motion.span

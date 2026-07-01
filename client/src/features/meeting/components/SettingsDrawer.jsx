@@ -280,6 +280,7 @@ const PREVIEW_SOUNDS = [
   { kind: 'lobby', label: 'Join request' },
   { kind: 'join', label: 'Participant joined' },
   { kind: 'leave', label: 'Participant left' },
+  { kind: 'call-end', label: 'Left / meeting ended' },
   { kind: 'hand', label: 'Raised hand' },
   { kind: 'screenshare', label: 'Screen share' },
 ]

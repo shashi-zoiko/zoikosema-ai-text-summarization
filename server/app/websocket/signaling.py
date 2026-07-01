@@ -587,6 +587,11 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     body = (data.get("body") or "").strip()
                     if not body:
                         continue
+                    # `body` is an E2E-encrypted envelope ("zk1:iv.ct"), NOT
+                    # plaintext — the server relays it verbatim and cannot read
+                    # it. The cap is generous (base64 of AES-GCM is ~33% larger
+                    # than the plaintext) so a legit message is never truncated,
+                    # which would corrupt the ciphertext and fail decryption.
                     # Refresh to honour live permission changes mid-meeting.
                     db.refresh(meeting)
                     if not meeting.chat_enabled and not host_or_cohost:
@@ -605,7 +610,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                             "name": user.name,
                             "color": user.avatar_color,
                             "is_guest": user.is_guest,
-                            "body": body[:2000],
+                            "body": body[:8000],
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         },
                     )

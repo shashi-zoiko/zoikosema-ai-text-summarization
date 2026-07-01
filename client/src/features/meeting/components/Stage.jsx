@@ -5,6 +5,7 @@ import { ParticipantTile } from './ParticipantTile.jsx'
 import StageLayout from './StageLayout.jsx'
 import { useRoomStore } from '../state/roomStore.js'
 import { useActiveSpeaker } from '../hooks/useActiveSpeaker.js'
+import { useRecentSpeakers } from '../hooks/useRecentSpeakers.js'
 
 // Stable per-tile key. Keyed on the LiveKit IDENTITY (e.g. "u:42"), NOT the
 // track sid — sid changes on reconnect, which would remount the tile and break
@@ -39,6 +40,7 @@ function Stage({ layout = 'grid' }) {
   const setPinned = useRoomStore((s) => s.setPinned)
   const setHeroActive = useRoomStore((s) => s.setHeroActive)
   const activeSpeaker = useActiveSpeaker()
+  const recentSpeakers = useRecentSpeakers()
 
   const tracks = useTracks(
     [
@@ -221,18 +223,33 @@ function Stage({ layout = 'grid' }) {
     return tiles
   }, [cams, screen, pinnedIdentity, accentByIdentity])
 
-  // Keys to float onto the first gallery page when the room paginates — the
-  // active speaker (and any pin) so the person talking is always on screen. Only
-  // consumed by StageLayout while paginating; harmless otherwise.
-  const priorityKeys = useMemo(() => {
-    const keys = []
-    for (const id of [pinnedIdentity, activeSpeaker]) {
-      if (!id) continue
-      const t = cams.find((c) => c.participant.identity === id)
-      if (t) keys.push(tileKey(t))
+  // ── Priority order: WHO keeps a tile when the room overflows ────────────────
+  // A full ranking of every camera tile, most-important first. StageLayout keeps
+  // the top tiles on stage and folds the rest into a single "+N others" tile
+  // (Google-Meet big-room layout). The ranking is exactly Meet's promotion rule:
+  // pinned, then the presenter, then whoever is talking (active + recently
+  // active, so a speaker lingers a few seconds instead of flickering out), then
+  // anyone with their camera on, then camera-off. Yourself is nudged up so you
+  // never vanish into "+N others". Ties break on the stable identity string so
+  // the order never churns on equal-rank changes.
+  const presenterIdentity = screen?.participant?.identity || null
+  const priorityOrder = useMemo(() => {
+    const rank = (t) => {
+      const id = t.participant.identity
+      if (id && id === pinnedIdentity) return 0
+      if (presenterIdentity && id === presenterIdentity) return 1
+      if (id && id === activeSpeaker) return 2
+      if (id && recentSpeakers.has(id)) return 3
+      const camOn = !!t.publication && !t.publication.isMuted
+      let r = camOn ? 4 : 6
+      if (t.participant.isLocal) r = Math.min(r, 5) // keep yourself on stage
+      return r
     }
-    return keys
-  }, [pinnedIdentity, activeSpeaker, cams])
+    return [...cams]
+      .map((t) => ({ key: tileKey(t), r: rank(t), id: t.participant.identity ?? '' }))
+      .sort((a, b) => a.r - b.r || a.id.localeCompare(b.id))
+      .map((x) => x.key)
+  }, [cams, pinnedIdentity, presenterIdentity, activeSpeaker, recentSpeakers])
 
   return (
     <StageLayout
@@ -240,7 +257,7 @@ function Stage({ layout = 'grid' }) {
       heroKey={hero ? tileKey(hero) : null}
       heroFit={screen ? 'contain' : 'cover'}
       heroAspect={screen ? screenAspect : null}
-      priorityKeys={priorityKeys}
+      priorityOrder={priorityOrder}
       renderTile={(item, { isHero, fit, dense }) => (
         <ParticipantTile
           trackRef={item.track}
@@ -252,7 +269,63 @@ function Stage({ layout = 'grid' }) {
           onAspectRatio={item.track.source === Track.Source.ScreenShare ? setScreenAspect : undefined}
         />
       )}
+      renderOverflow={(overflowItems, { dense } = {}) => (
+        <OverflowTile items={overflowItems} dense={dense} />
+      )}
     />
+  )
+}
+
+// First letter of a participant's display name for the overflow avatars. Strips
+// a LiveKit identity scheme prefix (`u:`, `guest:`) so we key off the human name.
+function overflowInitial(participant) {
+  const raw = participant?.name || participant?.identity || ''
+  const stripped = raw.replace(/^[a-z]+:/i, '').trim()
+  return (stripped[0] || '?').toUpperCase()
+}
+
+/**
+ * The Google-Meet "+N others" tile: a stack of a few participant avatars and a
+ * count, occupying a single grid slot for everyone who didn't make the visible
+ * cut. Purely a summary — the people it represents are the lowest-priority
+ * (quiet, camera-off) participants, and any of them re-appears with their own
+ * tile the moment they speak or turn their camera on.
+ */
+function OverflowTile({ items, dense = false }) {
+  const shown = items.slice(0, 3)
+  const size = dense ? 34 : 'min(24cqmin, 92px)'
+  return (
+    <div
+      className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[28px] ring-1 ring-[#263244]"
+      style={{
+        background: 'linear-gradient(160deg, #1B2233 0%, #131824 100%)',
+        containerType: 'size',
+        gap: dense ? 8 : '5cqmin',
+      }}
+    >
+      <div className="flex items-center">
+        {shown.map((it, i) => {
+          const c = it.accent || '#3B82F6'
+          return (
+            <div
+              key={it.key}
+              className="grid aspect-square place-items-center rounded-full font-semibold leading-none text-white ring-2 ring-[#131824]"
+              style={{
+                width: size,
+                fontSize: dense ? 14 : 'min(11cqmin, 36px)',
+                marginLeft: i ? (dense ? -12 : '-6cqmin') : 0,
+                background: `linear-gradient(145deg, ${c} 0%, ${c}b3 100%)`,
+              }}
+            >
+              {overflowInitial(it.track?.participant)}
+            </div>
+          )
+        })}
+      </div>
+      <span className="font-semibold text-white" style={{ fontSize: dense ? 13 : 'clamp(13px, 4.6cqmin, 22px)' }}>
+        {items.length} {items.length === 1 ? 'other' : 'others'}
+      </span>
+    </div>
   )
 }
 

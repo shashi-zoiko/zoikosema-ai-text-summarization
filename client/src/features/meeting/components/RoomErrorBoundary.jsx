@@ -36,10 +36,10 @@ export default class RoomErrorBoundary extends Component {
               Reload
             </button>
             <button
-              onClick={() => { window.location.href = '/meet' }}
+              onClick={() => { window.location.href = '/' }}
               className="px-4 py-2 rounded bg-zinc-700 hover:bg-zinc-600 text-white"
             >
-              Back to meetings
+              Back to home
             </button>
           </div>
         </div>

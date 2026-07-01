@@ -62,6 +62,10 @@ class Meeting(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the host cancels a scheduled meeting (distinct from ended_at,
+    # which marks a meeting that actually ran). Drives the "cancelled" status
+    # and the cancellation-email flow.
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     participants: Mapped[list["MeetingParticipant"]] = relationship(
         back_populates="meeting", cascade="all, delete-orphan"

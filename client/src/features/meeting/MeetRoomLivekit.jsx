@@ -40,6 +40,10 @@ import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
 import { useLocalParticipant, useMediaDeviceSelect, useRoomContext } from '@livekit/components-react'
 import { useRoomStore } from './state/roomStore.js'
 import { NotificationProvider, useNotifications } from './notify/NotificationProvider.jsx'
+import { soundManager } from './notify/sounds.js'
+import MeetingCryptoProvider from './e2ee/MeetingCryptoProvider.jsx'
+import { createE2EERoom, armMediaE2EE, MediaE2EEStatus } from './e2ee/MediaE2EE.jsx'
+import { encryptMessage, decryptMessage, importMessageKey, mediaE2EESupported } from './e2ee/messageCrypto.js'
 
 // Flat enterprise canvas — one fixed dark theme, no meeting-wide theme picker,
 // no ambient green wash. The surface tokens live in index.css (.zk-room-bg etc.).
@@ -118,6 +122,60 @@ function MeetRoom() {
   const [wsUrl, setWsUrl] = useState(null)
   const [error, setError] = useState(null)
   const [phase, setPhase] = useState('joining') // joining | connecting | live | error | left
+
+  // ── End-to-end encryption ────────────────────────────────────────────────
+  // Per-meeting key from /media-token — the same value for every participant,
+  // derived server-side, never exchanged between clients. Drives BOTH the
+  // LiveKit media E2EE (via the key provider) and the AES-GCM text channels
+  // (chat + captions). When the browser can't do insertable-stream E2EE we
+  // refuse to connect rather than silently sending unencrypted media (E2EE is
+  // non-negotiable here).
+  const [e2eeKey, setE2eeKey] = useState(null)
+  // We OWN the Room so E2EE can be armed BEFORE it connects — otherwise the
+  // first mic/camera track would publish unencrypted in the window before
+  // setE2EEEnabled takes effect. `connect` on <LiveKitRoom> is gated on
+  // `e2eeArmed`, so no frame is ever sent in the clear.
+  const e2eeRoom = useMemo(
+    () => (mediaE2EESupported() ? createE2EERoom(ROOM_OPTIONS) : null),
+    [],
+  )
+  const [e2eeArmed, setE2eeArmed] = useState(false)
+  // Imported CryptoKey for chat (send + receive both live in this component, so
+  // chat crypto stays local; captions get the key through MeetingCryptoProvider).
+  const chatKeyRef = useRef(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!e2eeKey) { chatKeyRef.current = null; return undefined }
+    ;(async () => {
+      try {
+        const k = await importMessageKey(e2eeKey)
+        if (!cancelled) chatKeyRef.current = k
+      } catch { chatKeyRef.current = null }
+    })()
+    return () => { cancelled = true }
+  }, [e2eeKey])
+  // Arm media E2EE (set key + enable) as soon as the key lands, THEN allow the
+  // room to connect. If the browser refuses, surface an error instead of
+  // connecting unencrypted.
+  useEffect(() => {
+    if (!e2eeRoom || !e2eeKey) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        await armMediaE2EE(e2eeRoom.room, e2eeRoom.keyProvider, e2eeKey)
+        if (!cancelled) setE2eeArmed(true)
+      } catch (e) {
+        if (import.meta.env.DEV) console.error('[e2ee] failed to arm media E2EE', e)
+        if (!cancelled) {
+          setError('Could not enable end-to-end encryption on this device. The meeting was not joined unencrypted.')
+          setPhase('error')
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [e2eeRoom, e2eeKey])
+  // Terminate the E2EE crypto worker when the room unmounts.
+  useEffect(() => () => { try { e2eeRoom?.worker?.terminate() } catch { /* already gone */ } }, [e2eeRoom])
 
   // App state from the control WS
   const [isHost, setIsHost] = useState(false)
@@ -208,26 +266,32 @@ function MeetRoom() {
           })
         }
       } else if (t === 'chat') {
-        const msg = { ...data, _key: ++msgKeyRef.current }
-        setChatMessages((prev) => [...prev, msg])
-        // Sound + badge + toast only for OTHERS' messages (the server echoes the
-        // sender's own message back to them). When the chat panel is already
-        // open we stay silent unless it's a direct @mention — the user is
-        // already reading, so a sound/toast per message would just be noise.
-        if (data.user_id !== user?.id) {
-          const chatClosed = sidebar !== 'chat'
-          const mention = mentionsMe(data.body, user?.name)
-          if (chatClosed) setUnreadChat((n) => n + 1)
-          // Teams-style floating card (bottom-right) with avatar + preview. Fired
-          // when the chat drawer is closed, or on an @mention even if it's open.
-          if (chatClosed || mention) {
-            notifyChat({
-              name: data.name || 'Someone',
-              color: data.color,
-              body: data.body,
-              mention,
-            })
+        // Decrypt the E2E envelope before it enters app state. An undecryptable
+        // payload (wrong key / tampered) is dropped rather than shown as raw
+        // ciphertext. The notify/mention logic all runs on the decrypted text.
+        const showChat = (plainBody) => {
+          const msg = { ...data, body: plainBody, _key: ++msgKeyRef.current }
+          setChatMessages((prev) => [...prev, msg])
+          // Sound + badge + toast only for OTHERS' messages (the server echoes
+          // the sender's own message back to them). When the chat panel is
+          // already open we stay silent unless it's a direct @mention — the
+          // user is already reading, so a sound/toast per message would be noise.
+          if (data.user_id !== user?.id) {
+            const chatClosed = sidebar !== 'chat'
+            const mention = mentionsMe(plainBody, user?.name)
+            if (chatClosed) setUnreadChat((n) => n + 1)
+            // Teams-style floating card (bottom-right) with avatar + preview.
+            // Fired when chat is closed, or on an @mention even if it's open.
+            if (chatClosed || mention) {
+              notifyChat({ name: data.name || 'Someone', color: data.color, body: plainBody, mention })
+            }
           }
+        }
+        const key = chatKeyRef.current
+        if (key) {
+          decryptMessage(key, data.body).then((plain) => { if (plain != null) showChat(plain) })
+        } else {
+          showChat(data.body)
         }
       } else if (t === 'reaction') {
         pushReaction({ peer_id: data.peer_id, user_id: data.user_id, name: data.name, emoji: data.emoji })
@@ -261,9 +325,9 @@ function MeetRoom() {
       } else if (t === 'meeting-ended') {
         userLeftRef.current = true
         setToast({ kind: 'info', text: 'Meeting ended by host' })
-        // Guests have no app shell to return to (/meet is auth-gated), so send
+        // Guests have no app shell to return to (/ is auth-gated), so send
         // them back to the public lobby which will show the "ended" state.
-        const dest = isGuest ? meetingPath(code) : '/meet'
+        const dest = isGuest ? meetingPath(code) : '/'
         setTimeout(() => navigate(dest, { replace: true }), 1500)
       } else if (t === 'permission-denied') {
         setToast({ kind: 'error', text: data.reason || 'Action not allowed' })
@@ -279,6 +343,17 @@ function MeetRoom() {
   // ── Media-token mint flow ────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false
+    // Hard gate: this meeting is end-to-end encrypted, and a browser without
+    // insertable-stream support can't encrypt media frames. Refuse to join
+    // rather than downgrade to unencrypted media.
+    if (!e2eeRoom) {
+      setError(
+        'This meeting is end-to-end encrypted, which your browser doesn’t support. ' +
+        'Please join from an up-to-date Chrome, Edge, or Safari 15.4+.',
+      )
+      setPhase('error')
+      return
+    }
     ;(async () => {
       // Guest reconnect: if the guest's short-lived token expired (e.g. a long
       // background tab) the join/media-token calls 401. Re-mint silently using
@@ -303,6 +378,7 @@ function MeetRoom() {
         if (cancelled) return
         setToken(t.access_token)
         setWsUrl(t.ws_url)
+        setE2eeKey(t.e2ee_key || null)
         joinedAtRef.current = Date.now()
         setPhase('connecting')
         // Probe recording state (host UI uses this on mount)
@@ -327,7 +403,19 @@ function MeetRoom() {
   }, [code, navigate])
 
   // ── Actions ──────────────────────────────────────────────────────────────
-  const sendChat = useCallback((body) => ctrlSend({ type: 'chat', body }), [ctrlSend])
+  // Chat is end-to-end encrypted: encrypt the body with the per-meeting key
+  // before it touches the control WS. The server relays the ciphertext and
+  // never sees the plaintext. If the secure channel isn't ready yet we refuse
+  // to send rather than fall back to plaintext.
+  const sendChat = useCallback(async (body) => {
+    const key = chatKeyRef.current
+    if (!key) {
+      setToast({ kind: 'error', text: 'Secure channel not ready yet — try again in a moment.' })
+      return
+    }
+    const envelope = await encryptMessage(key, body)
+    ctrlSend({ type: 'chat', body: envelope })
+  }, [ctrlSend, setToast])
   const sendReaction = useCallback((emoji) => {
     ctrlSend({ type: 'reaction', emoji })
     setShowEmoji(false)
@@ -446,8 +534,12 @@ function MeetRoom() {
   const userLeftRef = useRef(false)
   const userLeave = useCallback(() => {
     userLeftRef.current = true
+    // Google-Meet-style hang-up tone. Played via the shared SoundManager (a
+    // detached <audio> element) so it keeps sounding after we navigate away and
+    // this component unmounts.
+    soundManager.play('call-end')
     setPhase('left')
-    navigate('/meet', { replace: true })
+    navigate('/', { replace: true })
   }, [navigate])
 
   const handleDisconnected = useCallback((reason) => {
@@ -455,7 +547,7 @@ function MeetRoom() {
     // rejected/kicked us. CLIENT_INITIATED with userLeftRef=false is the
     // Strict Mode double-mount case — stay put and let the remount reconnect.
     if (userLeftRef.current) {
-      navigate('/meet', { replace: true })
+      navigate('/', { replace: true })
       return
     }
     const remoteKick =
@@ -473,8 +565,12 @@ function MeetRoom() {
               ? 'Joined from another tab'
               : 'Server disconnected'
       )
+      // Play the hang-up tone when the meeting ends for everyone (host ended /
+      // server shut the room down) or we're removed — same goodbye cue as
+      // clicking Leave yourself. Skip the duplicate-tab case (not a real exit).
+      if (reason !== DisconnectReason.DUPLICATE_IDENTITY) soundManager.play('call-end')
       setPhase('left')
-      setTimeout(() => navigate('/meet', { replace: true }), 1500)
+      setTimeout(() => navigate('/', { replace: true }), 1500)
     }
     // Anything else (CLIENT_INITIATED w/o user leave) — silently ignored;
     // LiveKitRoom will reconnect if it can, or stay disconnected.
@@ -490,7 +586,7 @@ function MeetRoom() {
     return (
       <Splash text={error || 'Failed to join'}>
         <button
-          onClick={() => navigate('/meet')}
+          onClick={() => navigate('/')}
           className="mt-5 rounded-xl border border-[#263244] bg-[#1E293B] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#263244]"
         >
           Back to meetings
@@ -505,10 +601,10 @@ function MeetRoom() {
     // base `button` rule paints from the dark palette instead of light.
     <div data-theme="midnight" className="contents">
     <LiveKitRoom
+      room={e2eeRoom?.room}
       token={token}
       serverUrl={wsUrl}
-      options={ROOM_OPTIONS}
-      connect
+      connect={e2eeArmed}
       audio={joinPrefs.audio !== false}
       video={joinPrefs.video !== false}
       onDisconnected={handleDisconnected}
@@ -516,9 +612,15 @@ function MeetRoom() {
       className="zk-room-bg flex h-dvh w-screen flex-col overflow-hidden overscroll-none text-white"
       style={{ background: CANVAS }}
     >
-      {/* CaptionProvider must live inside <LiveKitRoom> (it uses the local
-          participant + data channel). It only renders context providers around
-          its children, so frequent caption updates never re-render the grid. */}
+      {/* Dev-only: reports the room's REAL E2EE status once the frame cryptor
+          engages (stripped from production builds). */}
+      <MediaE2EEStatus />
+      {/* MeetingCryptoProvider shares the text-channel key with captions (deep
+          in the tree). CaptionProvider must live inside <LiveKitRoom> (it uses
+          the local participant + data channel). Both only render context
+          providers around their children, so caption updates never re-render
+          the grid. */}
+      <MeetingCryptoProvider keyB64={e2eeKey}>
       <CaptionProvider>
       <MeetingHeader
         code={code}
@@ -641,6 +743,7 @@ function MeetRoom() {
         </div>
       )}
       </CaptionProvider>
+      </MeetingCryptoProvider>
     </LiveKitRoom>
     </div>
   )
@@ -784,9 +887,9 @@ function LivekitDockAdapter({
       isHostOrCohost={isHostOrCohost}
       startScreenShare={startShare}
       stopScreenShare={stopShare}
-      isRecording={isRecording}
-      startRecording={toggleRecording}
-      stopRecording={toggleRecording}
+      isRecording={false}
+      startRecording={undefined}
+      stopRecording={undefined}
       handRaised={handRaised}
       toggleHand={toggleHand}
       captionsOn={captionsOn}

@@ -63,12 +63,12 @@ function MeetMenuItem({ icon, label, onClick }) {
     <button
       role="menuitem"
       onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[14px] font-medium text-[var(--c-fg)] transition hover:bg-[var(--c-accent-soft)] hover:text-[var(--c-accent)]"
+      className="group/mi flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left text-[14px] font-medium text-[var(--c-fg)] transition hover:bg-[var(--c-accent-soft)] hover:text-[var(--c-accent)]"
     >
-      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--c-bg-2)] text-[var(--c-fg-dim)]">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--c-bg-2)] text-[var(--c-fg-dim)] transition-colors group-hover/mi:bg-[var(--c-accent-soft)] group-hover/mi:text-[var(--c-accent)] [&_svg]:h-[18px] [&_svg]:w-[18px]">
         {icon}
       </span>
-      <span className="truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate leading-none">{label}</span>
     </button>
   )
 }
@@ -469,14 +469,19 @@ export default function Home() {
                               className="fixed z-[61] w-[272px] overflow-hidden rounded-2xl border border-[var(--c-line-strong)] bg-[var(--c-surface)] p-1.5 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)]"
                             >
                               <MeetMenuItem
-                                icon={<Link2 className="h-[18px] w-[18px]" />}
+                                icon={<Link2 />}
                                 label="Create a meeting for later"
                                 onClick={createForLater}
                               />
                               <MeetMenuItem
-                                icon={<Plus className="h-[18px] w-[18px]" />}
+                                icon={<Plus />}
                                 label="Start an instant meeting"
                                 onClick={startInstant}
+                              />
+                              <MeetMenuItem
+                                icon={<Calendar />}
+                                label="Schedule a meeting"
+                                onClick={() => { setShowNewMenu(false); setShowSchedule(true) }}
                               />
                             </motion.div>
                           </>

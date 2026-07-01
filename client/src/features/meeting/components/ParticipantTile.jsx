@@ -308,7 +308,16 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
       )}
 
       {(!hasVideo || !videoReady) && (
-        <div className="absolute inset-0 grid place-items-center" style={{ background: tileBackground(tileAccent) }}>
+        // Reserve the bottom name band so the centred avatar + "Camera off"
+        // caption never overlaps the name label pinned to the bottom edge. Short
+        // tiles (desktop rail, mobile carousel, portrait grid) collided before —
+        // the placeholder centred in the FULL height, so its lower edge ran into
+        // the name. Padding the bottom recentres the content in the space ABOVE
+        // the name in every layout (dense fixed px; gallery/hero scale via cqmin).
+        <div
+          className={'absolute inset-0 grid place-items-center ' + (dense ? 'pb-8' : 'pb-[14cqmin]')}
+          style={{ background: tileBackground(tileAccent) }}
+        >
           <div className={'flex flex-col items-center ' + (dense ? 'gap-2' : 'gap-[4cqmin]')}>
             <div
               className="grid aspect-square shrink-0 place-items-center rounded-full font-semibold leading-none text-white"
@@ -330,10 +339,13 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
             </div>
             {speaking ? (
               <VoiceBars participant={trackRef.participant} accent={tileAccent} />
-            ) : (
+            ) : dense ? null : (
+              // Compact tiles (dense rail / carousel) show avatar + name only, like
+              // Meet — a third "Camera off" line would clip in the smallest rail
+              // tiles and duplicate the info the empty avatar already conveys.
               <span
                 className="font-medium text-[#94A3B8]"
-                style={{ fontSize: dense ? 11 : 'min(11cqmin,12.5px)' }}
+                style={{ fontSize: 'min(11cqmin,12.5px)' }}
               >
                 Camera off
               </span>

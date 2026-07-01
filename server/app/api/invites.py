@@ -101,6 +101,7 @@ def invite_to_meeting(
                 join_url=join_url,
                 scheduled_at=meeting.scheduled_at,
                 organizer_name=user.name,
+                organizer_email=user.email,
                 attendee_email=email,
             )
 
@@ -269,6 +270,7 @@ def download_calendar(
         join_url=meeting_url(meeting.code),
         scheduled_at=meeting.scheduled_at,
         organizer_name=host.name if host else "ZoikoSema",
+        organizer_email=host.email if host and host.email else None,
         attendee_email=user.email,
     )
 
