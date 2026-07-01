@@ -34,9 +34,11 @@ export function galleryGridOpts(count, portrait) {
     const maxCols = count <= 2 ? 1 : count <= 12 ? 2 : 3
     return { fill: true, maxCols, minTileH: 150 }
   }
-  // Landscape phones, tablets and desktops keep the cinematic 16:9 gallery; only
-  // a very large roster falls back to a capped, scrolling grid.
-  return { aspect: TILE_ASPECT, maxCols: count <= 20 ? Infinity : 6, minTileH: 110 }
+  // Landscape phones, tablets and desktops keep the cinematic 16:9 gallery. The
+  // legible floor is generous (Meet-sized tiles): once tiles would dip below it
+  // the surplus participants collapse into a "+N others" tile instead of the grid
+  // packing everyone into tiny specks — so the visible faces always stay large.
+  return { aspect: TILE_ASPECT, maxCols: count <= 20 ? Infinity : 6, minTileH: 150 }
 }
 
 /**

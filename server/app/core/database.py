@@ -158,6 +158,11 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("users", "is_guest", "BOOLEAN DEFAULT FALSE NOT NULL"),
     ("users", "guest_expires_at", "TIMESTAMP WITH TIME ZONE"),
     ("meetings", "guests_enabled", "BOOLEAN DEFAULT TRUE NOT NULL"),
+    # Tracks whether the "starts in 5 minutes" reminder email has gone out for
+    # a given invitee (see meeting_reminders.py) so the loop never sends twice.
+    ("meeting_invites", "reminder_sent", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    # Host-cancelled scheduled meetings (drives the "cancelled" status).
+    ("meetings", "cancelled_at", "TIMESTAMP WITH TIME ZONE"),
 ]
 
 # (table, column) pairs whose NOT NULL constraint must be dropped so guest rows

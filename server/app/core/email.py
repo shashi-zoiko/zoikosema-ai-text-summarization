@@ -116,6 +116,115 @@ def send_email(to: str, subject: str, html_body: str, attachments: list[tuple[st
         return False
 
 
+def _meeting_email_html(
+    *,
+    hero: str,
+    heading: str,
+    subheading: str,
+    card_html: str,
+    button_url: str | None = None,
+    button_label: str | None = None,
+    button_bg: str = "linear-gradient(135deg,#1f9d5a 0%,#12793f 100%)",
+) -> str:
+    """Shared ZoikoSema shell for all meeting emails.
+
+    Table-based + fully inline styles so it renders consistently across Gmail,
+    Outlook, and Apple Mail. The wordmark and the illustrated hero art (`hero`
+    is one of invite/reminder/cancelled) are pulled from the publicly-hosted
+    brand assets — email clients block SVG / strip base64, so hosted PNG is the
+    only reliable option.
+    """
+    s = get_settings()
+    logo_url = s.brand_email_logo_url
+    hero_url = f"{s.brand_email_asset_base_url}/email-hero-{hero}.png"
+
+    button_block = ""
+    if button_url and button_label:
+        button_block = f"""
+            <tr><td align="center" style="padding:8px 0 2px;">
+              <a href="{button_url}" style="display:inline-block;background:{button_bg};color:#ffffff;text-decoration:none;padding:16px 52px;border-radius:14px;font-weight:700;font-size:16px;box-shadow:0 14px 30px -12px rgba(16,120,70,0.6);">{button_label}</a>
+            </td></tr>"""
+
+    return f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background:#e9f4ee;">
+  <div style="background:#e9f4ee;padding:30px 16px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;">
+      <tr><td>
+        <!-- Header: ZoikoSema wordmark logo -->
+        <div style="padding:2px 4px 12px;">
+          <img src="{logo_url}" alt="ZoikoSema" width="168" style="display:block;width:168px;max-width:58%;height:auto;border:0;outline:none;text-decoration:none;" />
+        </div>
+        <!-- Illustrated hero -->
+        <div style="text-align:center;padding:6px 0 0;">
+          <img src="{hero_url}" alt="" width="272" style="display:inline-block;width:272px;max-width:82%;height:auto;border:0;outline:none;" />
+        </div>
+        <!-- Copy -->
+        <div style="text-align:center;padding:2px 24px 0;">
+          <h1 style="margin:6px 0 8px;font-size:29px;line-height:1.18;color:#0f3d28;font-weight:800;letter-spacing:-0.01em;">{heading}</h1>
+          <p style="margin:0 0 22px;font-size:15.5px;line-height:1.5;color:#5a6b62;">{subheading}</p>
+        </div>
+        <!-- Detail card -->
+        {card_html}
+        <!-- CTA -->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 0 6px;">
+          {button_block}
+        </table>
+        <!-- Footer -->
+        <div style="padding:16px 0 4px;text-align:center;">
+          <p style="margin:0;font-size:12.5px;line-height:1.6;color:#8ba296;">ZoikoSema &mdash; Secure video meetings for everyone</p>
+        </div>
+      </td></tr>
+    </table>
+  </div>
+</body>
+</html>"""
+
+
+def _meeting_detail_card(
+    *,
+    title: str,
+    icon_emoji: str = "📅",
+    code: str | None = None,
+    meta_label: str | None = None,
+    meta_value: str | None = None,
+    strike: bool = False,
+) -> str:
+    """The inner white info card (icon chip + meeting details)."""
+    title_style = "font-size:18px;font-weight:700;color:#0f3d28;margin:0;"
+    if strike:
+        title_style = "font-size:18px;font-weight:700;color:#94a3b8;text-decoration:line-through;margin:0;"
+
+    code_line = ""
+    if code:
+        code_line = (
+            f'<div style="margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
+            f'font-size:14px;font-weight:600;color:#178a52;">{code}</div>'
+        )
+    meta_line = ""
+    if meta_label or meta_value:
+        meta_line = (
+            f'<div style="margin-top:10px;font-size:13px;color:#7b8a82;">{meta_label or ""}</div>'
+            f'<div style="margin-top:2px;font-size:15px;font-weight:700;color:#1f2d27;">{meta_value or ""}</div>'
+        )
+
+    return f"""
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #dfeee6;border-radius:18px;box-shadow:0 18px 40px -28px rgba(15,60,40,0.35);">
+              <tr>
+                <td style="padding:22px;vertical-align:top;width:66px;">
+                  <div style="width:54px;height:54px;line-height:54px;text-align:center;border-radius:15px;background:#e3f3ea;font-size:25px;">{icon_emoji}</div>
+                </td>
+                <td style="padding:20px 20px 20px 4px;vertical-align:middle;">
+                  <div style="{title_style}">{title}</div>
+                  {code_line}
+                  {meta_line}
+                </td>
+              </tr>
+            </table>"""
+
+
 def send_meeting_invite_email(
     to_email: str,
     inviter_name: str,
@@ -126,28 +235,21 @@ def send_meeting_invite_email(
     ics_data: bytes | None = None,
 ) -> bool:
     """Send a meeting invite email with optional .ics attachment."""
-    schedule_line = ""
-    if scheduled_at:
-        schedule_line = f'<p style="color:#888;font-size:14px;">Scheduled for: <strong>{scheduled_at}</strong></p>'
-
-    html = f"""
-    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#0d0f17;color:#e8e9ed;border-radius:16px;">
-        <div style="text-align:center;margin-bottom:24px;">
-            <div style="display:inline-block;width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#7c8cff,#ff7bd9);color:#fff;font-size:24px;font-weight:700;line-height:48px;">Z</div>
-        </div>
-        <h2 style="text-align:center;font-size:22px;margin:0 0 8px;">You're invited to a meeting</h2>
-        <p style="text-align:center;color:#888;font-size:14px;margin:0 0 24px;">{inviter_name} invited you to join</p>
-        <div style="background:#161825;border:1px solid #2a2d3e;border-radius:12px;padding:20px;margin-bottom:24px;">
-            <h3 style="margin:0 0 8px;font-size:18px;">{meeting_title}</h3>
-            <p style="color:#7c8cff;font-size:14px;font-family:monospace;margin:0 0 4px;">{meeting_code}</p>
-            {schedule_line}
-        </div>
-        <div style="text-align:center;">
-            <a href="{join_url}" style="display:inline-block;background:linear-gradient(135deg,#7c8cff,#ff7bd9);color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;">Join Meeting</a>
-        </div>
-        <p style="text-align:center;color:#555;font-size:12px;margin-top:24px;">ZoikoSema &mdash; Secure video meetings for everyone</p>
-    </div>
-    """
+    card = _meeting_detail_card(
+        title=meeting_title,
+        icon_emoji="📅",
+        code=meeting_code,
+        meta_label="Scheduled for:" if scheduled_at else None,
+        meta_value=scheduled_at if scheduled_at else None,
+    )
+    html = _meeting_email_html(
+        hero="invite",
+        heading="You&rsquo;re invited to a meeting",
+        subheading=f"{inviter_name} invited you to join",
+        card_html=card,
+        button_url=join_url,
+        button_label="Join Meeting",
+    )
 
     attachments = []
     if ics_data:
@@ -165,23 +267,46 @@ def send_meeting_reminder_email(
     minutes_until: int,
 ) -> bool:
     """Send a meeting reminder email."""
-    html = f"""
-    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#0d0f17;color:#e8e9ed;border-radius:16px;">
-        <div style="text-align:center;margin-bottom:24px;">
-            <div style="display:inline-block;width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#7c8cff,#ff7bd9);color:#fff;font-size:24px;font-weight:700;line-height:48px;">Z</div>
-        </div>
-        <h2 style="text-align:center;font-size:22px;margin:0 0 8px;">Meeting starting soon</h2>
-        <p style="text-align:center;color:#fbbf24;font-size:14px;margin:0 0 24px;">Starting in {minutes_until} minute{'s' if minutes_until != 1 else ''}</p>
-        <div style="background:#161825;border:1px solid #2a2d3e;border-radius:12px;padding:20px;margin-bottom:24px;">
-            <h3 style="margin:0 0 8px;font-size:18px;">{meeting_title}</h3>
-            <p style="color:#888;font-size:14px;margin:0;">{scheduled_at}</p>
-        </div>
-        <div style="text-align:center;">
-            <a href="{join_url}" style="display:inline-block;background:linear-gradient(135deg,#7c8cff,#ff7bd9);color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;">Join Meeting</a>
-        </div>
-    </div>
-    """
+    plural = "s" if minutes_until != 1 else ""
+    card = _meeting_detail_card(
+        title=meeting_title,
+        icon_emoji="⏰",
+        code=meeting_code,
+        meta_label="Scheduled for:",
+        meta_value=scheduled_at,
+    )
+    html = _meeting_email_html(
+        hero="reminder",
+        heading=f"Starting in {minutes_until} minute{plural}",
+        subheading="Your ZoikoSema meeting is about to begin.",
+        card_html=card,
+        button_url=join_url,
+        button_label="Join Meeting",
+    )
     return send_email(to_email, f"Reminder: {meeting_title} in {minutes_until}min", html)
+
+
+def send_meeting_cancelled_email(
+    to_email: str,
+    organizer_name: str,
+    meeting_title: str,
+    scheduled_at: str | None = None,
+) -> bool:
+    """Notify an invitee that a scheduled meeting has been cancelled."""
+    card = _meeting_detail_card(
+        title=meeting_title,
+        icon_emoji="🚫",
+        meta_label="Was scheduled for:" if scheduled_at else None,
+        meta_value=scheduled_at if scheduled_at else None,
+        strike=True,
+    )
+    html = _meeting_email_html(
+        hero="cancelled",
+        heading="Meeting cancelled",
+        subheading=f"{organizer_name} cancelled this meeting",
+        card_html=card,
+    )
+    return send_email(to_email, f"Cancelled: {meeting_title}", html)
 
 
 def send_password_reset_email(to_email: str, user_name: str, otp_code: str, expiry_minutes: int = 10) -> bool:

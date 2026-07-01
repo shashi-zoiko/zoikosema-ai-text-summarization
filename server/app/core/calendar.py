@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta, timezone
 import uuid
 
+from app.core.config import get_settings
+
 
 def generate_ics(
     title: str,
@@ -10,14 +12,21 @@ def generate_ics(
     scheduled_at: datetime,
     duration_minutes: int = 60,
     organizer_name: str = "ZoikoSema",
-    organizer_email: str = "noreply@zoikomeet.com",
+    organizer_email: str | None = None,
     attendee_email: str | None = None,
     description: str | None = None,
 ) -> bytes:
     """Generate a .ics calendar event for a meeting.
     Returns UTF-8 encoded bytes suitable for email attachment or download."""
 
-    uid = f"{uuid.uuid4()}@zoikomeet.com"
+    # The ORGANIZER must be a real, deliverable address: because this is a
+    # METHOD:REQUEST invite, mail clients send the attendee's RSVP back to it.
+    # A non-existent placeholder (the old default) made every RSVP hard-bounce.
+    # Callers pass the meeting host's email; otherwise fall back to the
+    # configured, domain-verified sending identity.
+    organizer_email = organizer_email or get_settings().mail_from_email
+    uid_domain = organizer_email.split("@", 1)[-1] if "@" in organizer_email else "zoikosema.com"
+    uid = f"{uuid.uuid4()}@{uid_domain}"
     now = datetime.now(timezone.utc)
 
     start = scheduled_at if scheduled_at.tzinfo else scheduled_at.replace(tzinfo=timezone.utc)

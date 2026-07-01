@@ -3,7 +3,9 @@
     "allow": [
       "Bash(python -c ' *)",
       "Bash(docker run *)",
-      "Bash(./venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload)"
+      "Bash(./venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload)",
+      "Bash(curl -s --retry 20 --retry-delay 1 --retry-connrefused -m 40 -o /dev/null -w \"ready HTTP %{http_code}\\\\n\" \"http://127.0.0.1:8001/api/health/ready\")",
+      "Bash(curl -s -m 10 -w \"\\\\nHTTP %{http_code}\\\\n\" -X POST \"http://localhost:5173/api/auth/login\" -H \"Content-Type: application/x-www-form-urlencoded\" -d \"username=ashraf@zoikogroup.com&password=wrongpass\")"
     ]
   }
 }

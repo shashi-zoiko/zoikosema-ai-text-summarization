@@ -18,10 +18,10 @@ import Home from './pages/Home.jsx'
 // lucide trees that don't need to load until the user actually navigates.
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword.jsx'))
 const Chat = lazy(() => import('./pages/Chat.jsx'))
-const Meet = lazy(() => import('./pages/Meet.jsx'))
 const MeetLobby = lazy(() => import('./pages/MeetLobby.jsx'))
 const MeetRoomLivekit = lazy(() => import('./features/meeting/MeetRoomLivekit.jsx'))
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
+const ScheduledMeetings = lazy(() => import('./pages/ScheduledMeetings.jsx'))
 const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx'))
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
@@ -120,7 +120,7 @@ export default function App() {
             /:code/room-lk (SFU room), /:code/intelligence (below, auth-gated).
             Meeting codes are generated as xxx-xxxx-xxx (lowercase + hyphens),
             so they can never collide with the static routes (/login, /chat,
-            /meet, /dashboard, /admin, …); React Router also ranks those static
+            /dashboard, /admin, …); React Router also ranks those static
             routes above the dynamic /:code regardless. */}
         {/* Public lobby: MeetLobby branches internally — signed-in users get
             the existing pre-join flow, anonymous visitors get the guest-join
@@ -168,8 +168,8 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/chat/:channelId" element={<Chat />} />
-          <Route path="/meet" element={<Meet />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/scheduled" element={<ScheduledMeetings />} />
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
           <Route path="/admin" element={<Admin />} />

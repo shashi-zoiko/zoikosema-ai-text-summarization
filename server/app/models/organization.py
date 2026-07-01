@@ -21,6 +21,7 @@ INVITE_EXPIRED = "expired"
 NOTIF_MEETING_INVITE = "meeting_invite"
 NOTIF_MEETING_REMINDER = "meeting_reminder"
 NOTIF_MEETING_STARTED = "meeting_started"
+NOTIF_MEETING_CANCELLED = "meeting_cancelled"
 NOTIF_ORG_INVITE = "org_invite"
 NOTIF_CHAT_MENTION = "chat_mention"
 NOTIF_SYSTEM = "system"
@@ -71,6 +72,9 @@ class MeetingInvite(Base):
     invitee_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(24), default=INVITE_PENDING)
     token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # Set True once the "starts in 5 minutes" reminder has been dispatched for
+    # this invitee, so the per-minute reminder loop never emails twice.
+    reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

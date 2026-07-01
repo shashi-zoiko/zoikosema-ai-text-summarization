@@ -38,8 +38,10 @@ class MeetingOut(BaseModel):
     guests_enabled: bool = True
     password_protected: bool = False
     media_provider: str = "mesh"   # "mesh" | "livekit"
+    status: str = "live"           # "scheduled" | "live" | "ended" | "cancelled"
     created_at: datetime
     ended_at: datetime | None = None
+    cancelled_at: datetime | None = None
 
 
 class ParticipantOut(BaseModel):

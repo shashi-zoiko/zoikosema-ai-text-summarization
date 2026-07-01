@@ -14,8 +14,11 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/api': { target: 'http://localhost:8001', changeOrigin: true },
-      '/ws': { target: 'ws://localhost:8001', ws: true, changeOrigin: true },
+      // Target 127.0.0.1 (not localhost): on Windows, localhost resolves to
+      // IPv6 ::1 first, but uvicorn binds IPv4 127.0.0.1 only — a localhost
+      // target makes the proxy intermittently fail with ECONNREFUSED.
+      '/api': { target: 'http://127.0.0.1:8001', changeOrigin: true },
+      '/ws': { target: 'ws://127.0.0.1:8001', ws: true, changeOrigin: true },
     },
   },
   build: {

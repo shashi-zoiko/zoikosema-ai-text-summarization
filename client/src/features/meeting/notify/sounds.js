@@ -66,6 +66,15 @@ const VOICES = {
     { f: N.C6, t: 0, d: 0.1, type: 'sine', gain: 0.4 },
     { f: N.G5, t: 0.08, d: 0.16, type: 'sine', gain: 0.4 },
   ],
+  // Call ended — a soft, warm three-note descending hang-up tone (Google-Meet
+  // style). Plays for YOU when you leave the call or when the meeting is ended
+  // for everyone. Slower + rounder than the "someone left" blip so it reads as
+  // a deliberate goodbye rather than a passing roster change.
+  'call-end': [
+    { f: N.G5, t: 0, d: 0.16, type: 'sine', gain: 0.55 },
+    { f: N.E5, t: 0.14, d: 0.18, type: 'sine', gain: 0.55 },
+    { f: N.C5, t: 0.3, d: 0.34, type: 'sine', gain: 0.6 },
+  ],
   // Light double tap — a hand went up.
   hand: [
     { f: N.A5, t: 0, d: 0.09, type: 'triangle', gain: 0.55 },
@@ -100,6 +109,7 @@ const THROTTLE = {
   chat: 2000,
   join: 1200,
   leave: 1200,
+  'call-end': 0,
   hand: 800,
   screenshare: 1000,
   recording: 0,

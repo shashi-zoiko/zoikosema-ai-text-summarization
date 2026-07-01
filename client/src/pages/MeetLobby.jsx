@@ -57,6 +57,16 @@ function timeGreeting() {
   return 'Good evening'
 }
 
+// "01:23:45" / "04:18" countdown string from a positive millisecond delta.
+function formatCountdown(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n) => String(n).padStart(2, '0')
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
+}
+
 const GUEST_NAME_KEY = 'zoiko_guest_name'
 
 export default function MeetLobby() {
@@ -99,6 +109,8 @@ export default function MeetLobby() {
   const [waitingStatus, setWaitingStatus] = useState(null)
   const [copied, setCopied] = useState(false)
   const [joining, setJoining] = useState(false)
+  // Live clock — only ticks while there's a future start time to count down to.
+  const [nowTs, setNowTs] = useState(() => Date.now())
 
   const audioLevel = useAudioLevel(stream, audioOn && permState === PERM.granted)
 
@@ -451,9 +463,29 @@ export default function MeetLobby() {
   const initial = (displayName || '?').trim().charAt(0).toUpperCase() || '?'
   const firstName = (user?.name || '').trim().split(/\s+/)[0]
   const showVideo = permState === PERM.granted && videoOn
+
+  // ── Scheduled-start countdown gate (Google-Meet parity) ──────────────
+  // Non-hosts can join from 5 min before the scheduled start; the host may
+  // always open the room early. Until then we show a live countdown and keep
+  // the Join button disabled. Guests never see this (the public meeting payload
+  // omits scheduled_at), so their flow is unchanged.
+  const JOIN_LEAD_MS = 5 * 60 * 1000
+  const scheduledMs = meeting?.scheduled_at ? new Date(meeting.scheduled_at).getTime() : null
+  const isHost = !!(user && meeting && meeting.host_id === user.id)
+  const msToStart = scheduledMs != null ? scheduledMs - nowTs : null
+  const showCountdown = msToStart != null && msToStart > 0
+  const notYetOpen = scheduledMs != null && !isHost && msToStart > JOIN_LEAD_MS
+
+  // Tick once a second only while counting down to a future start.
+  useEffect(() => {
+    if (scheduledMs == null || nowTs >= scheduledMs) return undefined
+    const id = setInterval(() => setNowTs(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [scheduledMs, nowTs])
+
   const guestNameInvalid = isGuest && !!validateDisplayName(guestName)
   const joinDisabled =
-    !meeting || (needsPassword && !meetingPwd) || permState === PERM.pending || joining || guestNameInvalid
+    !meeting || (needsPassword && !meetingPwd) || permState === PERM.pending || joining || guestNameInvalid || notYetOpen
 
   // ─────────────────────────────────────────────────────────────────
   // Meeting-unavailable view — metadata fetch failed before anything loaded
@@ -716,6 +748,26 @@ export default function MeetLobby() {
               <Calendar className="h-3.5 w-3.5 text-[#34D399]" />
               {new Date(meeting.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
               {meeting.timezone_name ? ` · ${meeting.timezone_name}` : ''}
+            </div>
+          )}
+
+          {/* Countdown to the scheduled start. Non-hosts can't join until 5 min
+              before; the host sees the countdown but keeps an enabled button. */}
+          {showCountdown && (
+            <div className="mt-4 rounded-2xl border border-[#10B981]/20 bg-[#10B981]/[0.07] p-4 text-center">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#34D399]">
+                Meeting starts in
+              </div>
+              <div className="mt-1.5 font-mono text-[30px] font-bold leading-none tabular-nums text-[#F1F5F9] sm:text-[34px]">
+                {formatCountdown(msToStart)}
+              </div>
+              <div className="mt-2 text-[12px] text-[#94A3B8]">
+                {notYetOpen
+                  ? 'You can join from 5 minutes before the start time.'
+                  : isHost
+                    ? 'You can open the room now — attendees can join too.'
+                    : 'Join is open — come on in.'}
+              </div>
             </div>
           )}
 

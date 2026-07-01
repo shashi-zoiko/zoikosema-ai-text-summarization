@@ -1,4 +1,7 @@
+import base64
 import csv
+import hashlib
+import hmac
 import io
 import logging
 import secrets
@@ -8,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, desc, and_
+from sqlalchemy import select, desc, and_, func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -75,6 +78,21 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _meeting_status(meeting: Meeting) -> str:
+    """Derive a Google-Meet-style lifecycle status from the existing flags.
+
+    Kept derived (not a stored column) so it can never drift from is_active /
+    ended_at / cancelled_at / scheduled_at, which remain the source of truth.
+    """
+    if meeting.cancelled_at is not None:
+        return "cancelled"
+    if not meeting.is_active:
+        return "ended"
+    if meeting.scheduled_at is not None and meeting.scheduled_at > datetime.now(timezone.utc):
+        return "scheduled"
+    return "live"
+
+
 def _meeting_out(meeting: Meeting) -> dict:
     """Convert a Meeting to MeetingOut-compatible dict with password_protected."""
     return {
@@ -92,8 +110,10 @@ def _meeting_out(meeting: Meeting) -> dict:
         "guests_enabled": meeting.guests_enabled,
         "password_protected": meeting.password_hash is not None,
         "media_provider": meeting.media_provider or "mesh",
+        "status": _meeting_status(meeting),
         "created_at": meeting.created_at,
         "ended_at": meeting.ended_at,
+        "cancelled_at": meeting.cancelled_at,
     }
 
 
@@ -168,6 +188,52 @@ def recent_meetings(
         .limit(10)
     )
     return [_meeting_out(m) for m in db.scalars(stmt).all()]
+
+
+@router.get("/scheduled")
+def scheduled_meetings(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """All of the caller's scheduled meetings (upcoming, past, and cancelled).
+
+    Powers the dedicated Scheduled Meetings dashboard page. Includes the derived
+    status and an invitee count so the client can render tabs + columns without
+    a follow-up round-trip per row.
+    """
+    from app.models.organization import MeetingInvite
+
+    meetings = db.scalars(
+        select(Meeting)
+        .where(
+            Meeting.host_id == user.id,
+            Meeting.scheduled_at.is_not(None),
+        )
+        .order_by(desc(Meeting.scheduled_at))
+    ).all()
+    if not meetings:
+        return []
+
+    meeting_ids = [m.id for m in meetings]
+    # One grouped count query instead of N per-row lookups.
+    counts_rows = db.execute(
+        select(MeetingInvite.meeting_id, func.count())
+        .where(MeetingInvite.meeting_id.in_(meeting_ids))
+        .group_by(MeetingInvite.meeting_id)
+    ).all()
+    invite_counts = {mid: n for mid, n in counts_rows}
+
+    result = []
+    for m in meetings:
+        out = _meeting_out(m)
+        out["scheduled_at"] = m.scheduled_at.isoformat() if m.scheduled_at else None
+        out["created_at"] = m.created_at.isoformat() if m.created_at else None
+        out["ended_at"] = m.ended_at.isoformat() if m.ended_at else None
+        out["cancelled_at"] = m.cancelled_at.isoformat() if m.cancelled_at else None
+        out["invite_count"] = invite_counts.get(m.id, 0)
+        out["host_name"] = user.name
+        result.append(out)
+    return result
 
 
 @router.get("/{code}", response_model=MeetingOut)
@@ -404,6 +470,109 @@ async def end_meeting(
     return _meeting_out(meeting)
 
 
+# ── Cancel (scheduled meeting) ──────────────────────────────────────────────
+
+@router.post("/{code}/cancel", response_model=MeetingOut)
+async def cancel_meeting(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Host cancels a scheduled meeting.
+
+    Marks it cancelled (distinct from a meeting that actually ran), tears down
+    any allocated media room, and notifies every invitee by email + in-app
+    notification. Idempotent — cancelling an already-cancelled meeting is a
+    no-op that returns the current state.
+    """
+    from app.core.email import send_meeting_cancelled_email
+    from app.models.organization import (
+        MeetingInvite,
+        Notification,
+        NOTIF_MEETING_CANCELLED,
+    )
+
+    meeting = _get_meeting_or_404(code, db)
+    if meeting.host_id != user.id:
+        raise HTTPException(status_code=403, detail="Only the host can cancel the meeting")
+
+    if meeting.cancelled_at is not None:
+        return _meeting_out(meeting)
+
+    now = datetime.now(timezone.utc)
+    meeting.cancelled_at = now
+    meeting.is_active = False
+    if meeting.ended_at is None:
+        meeting.ended_at = now
+    room_ref = meeting.media_room_ref
+    meeting.media_room_ref = None
+
+    scheduled_str = None
+    if meeting.scheduled_at:
+        scheduled_str = meeting.scheduled_at.strftime("%b %d, %Y at %I:%M %p")
+        if meeting.timezone_name:
+            scheduled_str += f" ({meeting.timezone_name})"
+
+    invites = db.scalars(
+        select(MeetingInvite).where(MeetingInvite.meeting_id == meeting.id)
+    ).all()
+    for invite in invites:
+        send_meeting_cancelled_email(
+            to_email=invite.invitee_email,
+            organizer_name=user.name,
+            meeting_title=meeting.title,
+            scheduled_at=scheduled_str,
+        )
+        if invite.invitee_user_id:
+            db.add(
+                Notification(
+                    user_id=invite.invitee_user_id,
+                    type=NOTIF_MEETING_CANCELLED,
+                    title=f"Meeting cancelled: {meeting.title}",
+                    body=f"{user.name} cancelled \"{meeting.title}\".",
+                    data=None,
+                )
+            )
+
+    db.commit()
+    db.refresh(meeting)
+
+    if room_ref:
+        try:
+            await media.release_media_room(room_ref)
+        except Exception:
+            log.exception("release_media_room failed for %s", room_ref)
+
+    return _meeting_out(meeting)
+
+
+# ── Delete ──────────────────────────────────────────────────────────────────
+
+@router.delete("/{code}", status_code=204)
+async def delete_meeting(
+    code: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Permanently delete a meeting the caller hosts (participants, invites,
+    private notes cascade via FK ON DELETE CASCADE). Releases any live media
+    room first so a deleted meeting can't leave a zombie SFU room behind."""
+    meeting = _get_meeting_or_404(code, db)
+    if meeting.host_id != user.id:
+        raise HTTPException(status_code=403, detail="Only the host can delete the meeting")
+
+    room_ref = meeting.media_room_ref
+    db.delete(meeting)
+    db.commit()
+
+    if room_ref:
+        try:
+            await media.release_media_room(room_ref)
+        except Exception:
+            log.exception("release_media_room failed for %s", room_ref)
+    return None
+
+
 # ── Media token (LiveKit join) ──────────────────────────────────────────────
 
 class MediaTokenOut(BaseModel):
@@ -412,6 +581,26 @@ class MediaTokenOut(BaseModel):
     room: str
     identity: str
     expires_at: int
+    # Per-meeting end-to-end encryption key (base64, 32 bytes). Every admitted
+    # participant derives the SAME value from the server secret + meeting code,
+    # so it doubles as the LiveKit media-E2EE passphrase AND the AES-GCM key for
+    # in-call chat/captions. The SFU and app server relay ciphertext they can't
+    # read. Returned only to admitted participants over TLS.
+    e2ee_key: str
+
+
+def _derive_e2ee_key(code: str) -> str:
+    """Deterministic 256-bit per-meeting E2EE key, base64-encoded.
+
+    HMAC-SHA256(secret, "zoiko-e2ee-v1|<code>") is a PRF: stable across token
+    refreshes and identical for every participant in the meeting, while the
+    plaintext key never leaves the server (each client re-derives it from its
+    own token response). Bump the "v1" tag to rotate all keys at once.
+    """
+    settings = get_settings()
+    secret = (settings.e2ee_secret or settings.jwt_secret).encode()
+    digest = hmac.new(secret, b"zoiko-e2ee-v1|" + code.encode(), hashlib.sha256).digest()
+    return base64.b64encode(digest).decode()
 
 
 @router.post("/{code}/media-token", response_model=MediaTokenOut)
@@ -498,6 +687,7 @@ async def issue_media_token(
         room=token.room_name,
         identity=token.identity,
         expires_at=token.expires_at,
+        e2ee_key=_derive_e2ee_key(meeting.code),
     )
 
 
@@ -544,6 +734,17 @@ async def recording_start(
     zoiko_recordings volume so the FastAPI side can serve it after egress
     finishes (see webhooks.py / egress_ended)."""
     import uuid as _uuid
+
+    # Server-side recording is fundamentally incompatible with end-to-end
+    # encryption: RoomCompositeEgress joins the SFU as a participant and would
+    # only capture E2E-encrypted (opaque) frames. Since every meeting is now
+    # E2E-encrypted, recording is disabled. Refuse loudly rather than write a
+    # useless file. (If a "recorded meetings" product is needed later, it must
+    # be client-side capture, which can decrypt what that client already sees.)
+    raise HTTPException(
+        status_code=409,
+        detail="Recording is unavailable: this meeting is end-to-end encrypted.",
+    )
 
     settings = get_settings()
     if settings.media_provider.lower() != "livekit":

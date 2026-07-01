@@ -16,7 +16,7 @@ function CaptionBubble({ name, color, text }) {
       <div className="text-[11px] font-semibold uppercase tracking-wide opacity-90" style={{ color: color || '#cbd5e1' }}>
         {name}
       </div>
-      <div className="line-clamp-3 text-[15px] leading-snug text-white/95">{text}</div>
+      <div className="line-clamp-3 text-[15px] font-medium leading-snug text-white/95">{text}</div>
     </div>
   )
 }
