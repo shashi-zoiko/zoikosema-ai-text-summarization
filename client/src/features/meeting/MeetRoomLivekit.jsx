@@ -49,6 +49,14 @@ import { encryptMessage, decryptMessage, importMessageKey, mediaE2EESupported } 
 // no ambient green wash. The surface tokens live in index.css (.zk-room-bg etc.).
 const CANVAS = '#0B1220'
 
+// Cap the in-memory chat log so a long, busy meeting can't grow it without
+// bound (each append copies the whole array and ChatPanel re-diffs the full
+// list). In-call chat is ephemeral — it's never persisted server-side — so
+// dropping the oldest messages loses nothing durable; no one scrolls back
+// through hundreds of lines mid-call. Mirrors the existing caps on reactions
+// (roomStore.js) and captions (CaptionOverlay.jsx). Raise/lower here.
+const MAX_CHAT_MESSAGES = 500
+
 const ROOM_OPTIONS = {
   adaptiveStream: true,
   dynacast: true,
@@ -271,7 +279,14 @@ function MeetRoom() {
         // ciphertext. The notify/mention logic all runs on the decrypted text.
         const showChat = (plainBody) => {
           const msg = { ...data, body: plainBody, _key: ++msgKeyRef.current }
-          setChatMessages((prev) => [...prev, msg])
+          setChatMessages((prev) => {
+            const next = [...prev, msg]
+            // Keep only the most recent MAX_CHAT_MESSAGES so a 3-4h meeting
+            // can't grow this array (and the ChatPanel re-render cost) forever.
+            return next.length > MAX_CHAT_MESSAGES
+              ? next.slice(next.length - MAX_CHAT_MESSAGES)
+              : next
+          })
           // Sound + badge + toast only for OTHERS' messages (the server echoes
           // the sender's own message back to them). When the chat panel is
           // already open we stay silent unless it's a direct @mention — the
