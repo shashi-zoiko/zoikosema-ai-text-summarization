@@ -128,11 +128,13 @@ def _meeting_email_html(
 ) -> str:
     """Shared ZoikoSema shell for all meeting emails.
 
-    Table-based + fully inline styles so it renders consistently across Gmail,
-    Outlook, and Apple Mail. The wordmark and the illustrated hero art (`hero`
-    is one of invite/reminder/cancelled) are pulled from the publicly-hosted
-    brand assets — email clients block SVG / strip base64, so hosted PNG is the
-    only reliable option.
+    Everything lives inside one white rounded card centered on the page (same
+    structure as the password-reset email) so the mail reads as a compact card
+    instead of a full-bleed canvas. Table-based + fully inline styles so it
+    renders consistently across Gmail, Outlook, and Apple Mail. The wordmark
+    and the illustrated hero art (`hero` is one of invite/reminder/cancelled)
+    are pulled from the publicly-hosted brand assets — email clients block
+    SVG / strip base64, so hosted PNG is the only reliable option.
     """
     s = get_settings()
     logo_url = s.brand_email_logo_url
@@ -141,40 +143,42 @@ def _meeting_email_html(
     button_block = ""
     if button_url and button_label:
         button_block = f"""
-            <tr><td align="center" style="padding:8px 0 2px;">
-              <a href="{button_url}" style="display:inline-block;background:{button_bg};color:#ffffff;text-decoration:none;padding:16px 52px;border-radius:14px;font-weight:700;font-size:16px;box-shadow:0 14px 30px -12px rgba(16,120,70,0.6);">{button_label}</a>
+            <tr><td align="center" style="padding:20px 0 2px;">
+              <a href="{button_url}" style="display:inline-block;background:{button_bg};color:#ffffff;text-decoration:none;padding:13px 44px;border-radius:12px;font-weight:700;font-size:15px;box-shadow:0 12px 26px -12px rgba(16,120,70,0.6);">{button_label}</a>
             </td></tr>"""
 
     return f"""\
 <!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
-<body style="margin:0;padding:0;background:#e9f4ee;">
-  <div style="background:#e9f4ee;padding:30px 16px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;">
+<body style="margin:0;padding:0;background:#f1f5f3;">
+  <div style="background:#f1f5f3;padding:28px 16px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;">
       <tr><td>
-        <!-- Header: ZoikoSema wordmark logo -->
-        <div style="padding:2px 4px 12px;">
-          <img src="{logo_url}" alt="ZoikoSema" width="168" style="display:block;width:168px;max-width:58%;height:auto;border:0;outline:none;text-decoration:none;" />
-        </div>
-        <!-- Illustrated hero -->
-        <div style="text-align:center;padding:6px 0 0;">
-          <img src="{hero_url}" alt="" width="272" style="display:inline-block;width:272px;max-width:82%;height:auto;border:0;outline:none;" />
-        </div>
-        <!-- Copy -->
-        <div style="text-align:center;padding:2px 24px 0;">
-          <h1 style="margin:6px 0 8px;font-size:29px;line-height:1.18;color:#0f3d28;font-weight:800;letter-spacing:-0.01em;">{heading}</h1>
-          <p style="margin:0 0 22px;font-size:15.5px;line-height:1.5;color:#5a6b62;">{subheading}</p>
-        </div>
-        <!-- Detail card -->
-        {card_html}
-        <!-- CTA -->
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 0 6px;">
-          {button_block}
-        </table>
-        <!-- Footer -->
-        <div style="padding:16px 0 4px;text-align:center;">
-          <p style="margin:0;font-size:12.5px;line-height:1.6;color:#8ba296;">ZoikoSema &mdash; Secure video meetings for everyone</p>
+        <div style="background:#ffffff;border-radius:22px;border:1px solid #e3ece7;box-shadow:0 20px 50px -30px rgba(15,60,40,0.4);padding:26px 30px 24px;">
+          <!-- Header: ZoikoSema wordmark logo -->
+          <div style="text-align:center;padding:2px 0 4px;">
+            <img src="{logo_url}" alt="ZoikoSema" width="160" style="display:inline-block;width:160px;max-width:55%;height:auto;border:0;outline:none;text-decoration:none;" />
+          </div>
+          <!-- Illustrated hero -->
+          <div style="text-align:center;padding:10px 0 0;">
+            <img src="{hero_url}" alt="" width="180" style="display:inline-block;width:180px;max-width:55%;height:auto;border:0;outline:none;" />
+          </div>
+          <!-- Copy -->
+          <div style="text-align:center;padding:0 10px;">
+            <h1 style="margin:14px 0 6px;font-size:25px;line-height:1.2;color:#0f3d28;font-weight:800;letter-spacing:-0.01em;">{heading}</h1>
+            <p style="margin:0 0 20px;font-size:14.5px;line-height:1.5;color:#5a6b62;">{subheading}</p>
+          </div>
+          <!-- Detail card -->
+          {card_html}
+          <!-- CTA -->
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            {button_block}
+          </table>
+          <!-- Footer -->
+          <div style="padding:16px 0 2px;text-align:center;">
+            <p style="margin:0;font-size:12px;line-height:1.5;color:#8ba296;">ZoikoSema &mdash; Secure video meetings for everyone</p>
+          </div>
         </div>
       </td></tr>
     </table>
@@ -193,30 +197,30 @@ def _meeting_detail_card(
     strike: bool = False,
 ) -> str:
     """The inner white info card (icon chip + meeting details)."""
-    title_style = "font-size:18px;font-weight:700;color:#0f3d28;margin:0;"
+    title_style = "font-size:16px;font-weight:700;color:#0f3d28;margin:0;"
     if strike:
-        title_style = "font-size:18px;font-weight:700;color:#94a3b8;text-decoration:line-through;margin:0;"
+        title_style = "font-size:16px;font-weight:700;color:#94a3b8;text-decoration:line-through;margin:0;"
 
     code_line = ""
     if code:
         code_line = (
-            f'<div style="margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
-            f'font-size:14px;font-weight:600;color:#178a52;">{code}</div>'
+            f'<div style="margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
+            f'font-size:13px;font-weight:600;color:#178a52;">{code}</div>'
         )
     meta_line = ""
     if meta_label or meta_value:
         meta_line = (
-            f'<div style="margin-top:10px;font-size:13px;color:#7b8a82;">{meta_label or ""}</div>'
-            f'<div style="margin-top:2px;font-size:15px;font-weight:700;color:#1f2d27;">{meta_value or ""}</div>'
+            f'<div style="margin-top:8px;font-size:12px;color:#7b8a82;">{meta_label or ""}</div>'
+            f'<div style="margin-top:2px;font-size:14px;font-weight:700;color:#1f2d27;">{meta_value or ""}</div>'
         )
 
     return f"""
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #dfeee6;border-radius:18px;box-shadow:0 18px 40px -28px rgba(15,60,40,0.35);">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fbf9;border:1px solid #e0ede6;border-radius:14px;">
               <tr>
-                <td style="padding:22px;vertical-align:top;width:66px;">
-                  <div style="width:54px;height:54px;line-height:54px;text-align:center;border-radius:15px;background:#e3f3ea;font-size:25px;">{icon_emoji}</div>
+                <td style="padding:16px;vertical-align:top;width:56px;">
+                  <div style="width:44px;height:44px;line-height:44px;text-align:center;border-radius:12px;background:#e3f3ea;font-size:21px;">{icon_emoji}</div>
                 </td>
-                <td style="padding:20px 20px 20px 4px;vertical-align:middle;">
+                <td style="padding:14px 16px 14px 4px;vertical-align:middle;">
                   <div style="{title_style}">{title}</div>
                   {code_line}
                   {meta_line}

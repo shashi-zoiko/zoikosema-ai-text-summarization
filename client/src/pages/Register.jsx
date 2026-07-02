@@ -111,7 +111,7 @@ export default function Register() {
               Create your workspace
             </h1>
             <p className="mt-1.5 text-[13.5px] font-semibold">
-              <span className="bg-[linear-gradient(110deg,#15936b,#15936b_42%,#2563eb)] bg-clip-text text-transparent">
+              <span className="bg-[linear-gradient(110deg,#2563eb,#4f46e5_50%,#7c3aed)] bg-clip-text text-transparent">
                 Meet · Chat · Collaborate
               </span>
             </p>
@@ -321,7 +321,7 @@ export default function Register() {
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-x-3 -bottom-2 h-8 rounded-full opacity-40 blur-xl transition-opacity duration-300 group-hover/cta:opacity-90"
-                style={{ background: 'linear-gradient(90deg, #13a06a, #2563eb)' }}
+                style={{ background: 'linear-gradient(90deg, #2563eb, #7c3aed)' }}
               />
               <motion.button
                 type="submit"
@@ -329,7 +329,7 @@ export default function Register() {
                 whileHover={{ scale: busy ? 1 : 1.015 }}
                 whileTap={{ scale: busy ? 1 : 0.985 }}
                 transition={{ type: 'spring', stiffness: 360, damping: 22 }}
-                className="group/cta relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(115deg,#13a06a_0%,#1f8fb8_48%,#2563eb_100%)] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(37,99,235,0.5),inset_0_1px_0_rgba(255,255,255,0.22)] outline-none transition-[filter,box-shadow] duration-200 hover:brightness-[1.08] hover:saturate-110 hover:shadow-[0_18px_36px_-10px_rgba(37,99,235,0.6),inset_0_1px_0_rgba(255,255,255,0.28)] focus-visible:ring-4 focus-visible:ring-[var(--c-accent-ring)] disabled:cursor-not-allowed disabled:opacity-80"
+                className="group/cta relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(115deg,#2563eb_0%,#4f46e5_50%,#7c3aed_100%)] px-6 text-[15px] font-semibold text-white shadow-[0_12px_28px_-10px_rgba(79,70,229,0.5),inset_0_1px_0_rgba(255,255,255,0.22)] outline-none transition-[filter,box-shadow] duration-200 hover:brightness-[1.08] hover:saturate-110 hover:shadow-[0_18px_36px_-10px_rgba(124,58,237,0.6),inset_0_1px_0_rgba(255,255,255,0.28)] focus-visible:ring-4 focus-visible:ring-[rgba(124,58,237,0.35)] disabled:cursor-not-allowed disabled:opacity-80"
               >
                 {/* Shine sweep */}
                 <span

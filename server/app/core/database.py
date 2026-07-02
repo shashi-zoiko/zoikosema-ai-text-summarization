@@ -30,8 +30,14 @@ if _db_url.startswith(("postgresql", "postgres")):
     # switching to short-lived sessions, the chat list + bulk loaders fan out
     # ~6 concurrent queries on a busy request, so 5 isn't enough headroom.
     # pool_recycle keeps the Supabase Session Pooler from killing idle conns
-    # under us (it disconnects after ~30 min of inactivity).
-    _engine_kwargs.update(pool_size=20, max_overflow=10, pool_recycle=1800)
+    # under us (it disconnects after ~30 min of inactivity). pool_size /
+    # max_overflow come from settings (DB_POOL_SIZE / DB_MAX_OVERFLOW) so a
+    # large-meeting event can raise them from deploy env without a code change.
+    _engine_kwargs.update(
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_recycle=1800,
+    )
 
 try:
     engine = create_engine(_db_url, **_engine_kwargs)
