@@ -86,42 +86,18 @@ jobs:
             LIVEKIT_WS_URL=${{ secrets.LIVEKIT_URL }}
             LIVEKIT_PUBLIC_WS_URL=${{ secrets.LIVEKIT_PUBLIC_WS_URL }}
             E2EE_SECRET=${{ secrets.E2EE_SECRET }}
-            DB_POOL_SIZE=40
-          # === SINGLE-MEETING EVENT CONFIG (50-60 participants, 3-4h) ===
-          # The meeting control WebSocket (meet_manager) is in-memory per
-          # process with NO Redis fanout, so every participant MUST land on the
-          # SAME instance or chat/roster/reactions/raise-hand/waiting-room split
-          # in two. To guarantee that without a Redis rebuild we pin to ONE
-          # instance and make it big enough to hold the whole meeting:
-          #   max-instances=1  -> hard guarantee of a single instance (no
-          #                       scale-out => no signaling split-brain). A 2nd
-          #                       instance can't inherit in-memory WS state, so
-          #                       it would fragment the room, not rescue it.
-          #   concurrency=250  -> must exceed ~60 long-lived WS + REST/join
-          #                       bursts so Cloud Run never wants a 2nd instance.
-          #   cpu=4 / memory=2Gi -> 60-way WS fanout + REST on one box; 1Gi was
-          #                       tight. min-instances=1 keeps it warm (no cold
-          #                       start on first join).
-          #   timeout=3600     -> a control WS is one long-lived request; the
-          #                       default 300s ceiling would drop every WS at
-          #                       5 min. 3600s is the Cloud Run max.
-          # Trade-off: single point of failure (instance restart drops the
-          # meeting for a few seconds; media survives on LiveKit). Safe ONLY
-          # while exactly one large meeting runs at a time.
-          #
-          # REVERT after the event to the normal autoscaled steady-state:
-          #   --max-instances=10  --cpu=2  --memory=1Gi
-          #   --concurrency=40    --timeout=300
-          # (min-instances=1 and --cpu-boost stay the same in both configs.)
-          # ALSO remove the DB_POOL_SIZE=40 line from env_vars above on revert
-          # (drops back to the code default of 20). A high per-instance pool is
-          # fine on ONE instance, but multiplied across max-instances=10 it
-          # raises the total connection count against Supabase.
+          # min-instances=1 eliminates cold starts on the first request after
+          # idle (default is 0 → ~5-10s pull+boot on each idle wake). 2 CPU
+          # + 1Gi memory is the smallest tier that comfortably runs uvicorn +
+          # active WebSocket fanout without GC churn. concurrency=40 keeps
+          # any single instance from hoarding DB pool connections (pool_size
+          # defaults to 20 — env DB_POOL_SIZE — so >40 concurrent requests
+          # would queue on the pool).
           flags: |
             --min-instances=1
-            --max-instances=1
-            --cpu=4
-            --memory=2Gi
-            --concurrency=250
-            --timeout=3600
+            --max-instances=10
+            --cpu=2
+            --memory=1Gi
+            --concurrency=40
+            --timeout=300
             --cpu-boost
