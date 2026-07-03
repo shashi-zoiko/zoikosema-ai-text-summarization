@@ -32,6 +32,20 @@ jobs:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+      # Self-provision the AR repo so a fresh region (or project) needs no manual
+      # Cloud Shell step — a direct pkg.dev push does NOT auto-create it, so the
+      # first deploy to a new region 500s with "Repository not found" otherwise.
+      # Idempotent: describe first, create only if absent. Needs the deploy SA to
+      # have artifactregistry.repositories.create (Artifact Registry Admin).
+      - name: Ensure Artifact Registry repo exists
+        run: |
+          gcloud artifacts repositories describe zoiko-meet \
+            --location=${{ env.REGION }} \
+            --project=project-4b10b0ae-f69d-47e2-90d >/dev/null 2>&1 || \
+          gcloud artifacts repositories create zoiko-meet \
+            --repository-format=docker \
+            --location=${{ env.REGION }} \
+            --project=project-4b10b0ae-f69d-47e2-90d
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Build and push unified app image
@@ -101,7 +115,7 @@ jobs:
           # any single instance from hoarding DB pool connections (pool_size
           # defaults to 20 — env DB_POOL_SIZE — so >40 concurrent requests
           # would queue on the pool).
-          flags: |
+          flags: | 
             --min-instances=1
             --max-instances=10
             --cpu=2
