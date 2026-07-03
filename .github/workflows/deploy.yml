@@ -6,16 +6,22 @@ on:
   workflow_dispatch: {}
 
 env:
-  # Cloud Run + Artifact Registry live in asia-south1 (Mumbai) to co-locate the
-  # app server with BOTH the users (India) and the Supabase DB (ap-south-1,
-  # Mumbai). The service ran in europe-west1 until 2026-07, which put ~150ms
-  # between Cloud Run and the DB on EVERY query (paid 4-5x per request) and made
-  # joins/admits take 2-3s. Same-region collapses that DB leg to ~1-5ms.
-  # PREREQUISITE: the asia-south1 `zoiko-meet` AR repo must exist before the
-  # first push here, else the image push fails (gcloud artifacts repositories
-  # create zoiko-meet --repository-format=docker --location=asia-south1).
-  REGISTRY: asia-south1-docker.pkg.dev/project-4b10b0ae-f69d-47e2-90d/zoiko-meet
-  REGION: asia-south1
+  # Cloud Run + Artifact Registry live in asia-southeast1 (Singapore). Chosen
+  # over europe-west1 (~150ms from users+DB) AND over asia-south1 (Mumbai): while
+  # Mumbai co-locates with the Supabase DB (ap-south-1) for the lowest DB latency,
+  # neither Indian region (asia-south1/asia-south2) supports Cloud Run domain
+  # mappings, so a custom domain there needs a global Load Balancer. Singapore
+  # DOES support domain mappings (native custom-domain, no LB), is ~50ms from the
+  # Mumbai DB (still ~5x better than Europe on the per-query DB leg), and is well
+  # placed for the mix of India + global users. Trade: ~50ms/query to the DB vs
+  # Mumbai's ~2ms, accepted in exchange for domain-mapping simplicity.
+  # PREREQUISITE: the asia-southeast1 `zoiko-meet` AR repo must exist before the
+  # first push here, else the image push fails — the deploy SA lacks
+  # artifactregistry.repositories.create, so create it once in Cloud Shell:
+  # gcloud artifacts repositories create zoiko-meet --repository-format=docker \
+  #   --location=asia-southeast1 --project=project-4b10b0ae-f69d-47e2-90d
+  REGISTRY: asia-southeast1-docker.pkg.dev/project-4b10b0ae-f69d-47e2-90d/zoiko-meet
+  REGION: asia-southeast1
 
 jobs:
   build-and-push:
@@ -31,7 +37,7 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
       # Self-provision the AR repo so a fresh region (or project) needs no manual
       # Cloud Shell step — a direct pkg.dev push does NOT auto-create it, so the
       # first deploy to a new region 500s with "Repository not found" otherwise.
@@ -115,7 +121,14 @@ jobs:
           # any single instance from hoarding DB pool connections (pool_size
           # defaults to 20 — env DB_POOL_SIZE — so >40 concurrent requests
           # would queue on the pool).
-          flags: | 
+          # --allow-unauthenticated grants allUsers the Cloud Run Invoker role so
+          # the public SPA/API is reachable in a browser. A fresh service (new
+          # region) defaults to REQUIRE-auth and returns 403 "client does not have
+          # permission" until this is set; the old europe-west1 service had the
+          # public IAM binding set once and kept it across redeploys, which is why
+          # only the new Mumbai service 403'd.
+          flags: |
+            --allow-unauthenticated
             --min-instances=1
             --max-instances=10
             --cpu=2
