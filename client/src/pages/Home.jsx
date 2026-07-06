@@ -78,6 +78,13 @@ const EMERALD_BTN =
   'bg-[linear-gradient(135deg,#1f7a54_0%,#0f4a34_100%)] ' +
   'shadow-[0_10px_26px_-10px_rgba(16,83,52,0.65)] hover:brightness-[1.06]'
 
+/* ZoikoSema brand gradient — matches the Login page "Sign In" CTA
+   (blue → indigo → purple), used for the primary "New meeting" button. */
+const BRAND_BTN =
+  'bg-[linear-gradient(115deg,#2563eb_0%,#4f46e5_50%,#7c3aed_100%)] ' +
+  'shadow-[0_12px_28px_-10px_rgba(79,70,229,0.5),inset_0_1px_0_rgba(255,255,255,0.22)] ' +
+  'hover:brightness-[1.08] hover:saturate-110'
+
 /* Layered mountain/pine scene — the signature visual of Style 3. Pure SVG so
    it scales crisply and ships no image asset. */
 function MountainScene() {
@@ -428,7 +435,7 @@ export default function Home() {
                   <div ref={newBtnRef} className="relative inline-block">
                     <Button
                       size="lg"
-                      className={EMERALD_BTN}
+                      className={BRAND_BTN}
                       loading={busy || creatingLater}
                       onClick={() => (showNewMenu ? setShowNewMenu(false) : openNewMenu())}
                       asMotion

@@ -6,21 +6,23 @@ on:
   workflow_dispatch: {}
 
 env:
-  # Cloud Run + Artifact Registry live in asia-southeast1 (Singapore). Chosen
-  # over europe-west1 (~150ms from users+DB) AND over asia-south1 (Mumbai): while
-  # Mumbai co-locates with the Supabase DB (ap-south-1) for the lowest DB latency,
-  # neither Indian region (asia-south1/asia-south2) supports Cloud Run domain
-  # mappings, so a custom domain there needs a global Load Balancer. Singapore
-  # DOES support domain mappings (native custom-domain, no LB), is ~50ms from the
-  # Mumbai DB (still ~5x better than Europe on the per-query DB leg), and is well
-  # placed for the mix of India + global users. Trade: ~50ms/query to the DB vs
-  # Mumbai's ~2ms, accepted in exchange for domain-mapping simplicity.
-  # PREREQUISITE: the asia-southeast1 `zoiko-meet` AR repo must exist before the
-  # first push here, else the image push fails — the deploy SA lacks
-  # artifactregistry.repositories.create, so create it once in Cloud Shell:
-  # gcloud artifacts repositories create zoiko-meet --repository-format=docker \
-  #   --location=asia-southeast1 --project=project-4b10b0ae-f69d-47e2-90d
-  REGISTRY: asia-southeast1-docker.pkg.dev/project-4b10b0ae-f69d-47e2-90d/zoiko-meet
+  # PROJECT / REGION for the whole pipeline. Migrated 2026-07 from the old
+  # project (project-4b10b0ae-f69d-47e2-90d, europe-west1) to the `zoiko-sema`
+  # project in asia-southeast1 (Singapore) — the old project hit the Cloud Run
+  # "number of regions used" quota (5/5). Singapore supports Cloud Run domain
+  # mappings (native custom-domain, no Load Balancer) and sits ~50ms from the
+  # Supabase DB (ap-south-1). Every project reference below derives from
+  # PROJECT_ID so there is a single source of truth and no path can silently
+  # target the old project.
+  #
+  # PREREQUISITE: the `zoiko-meet` Artifact Registry repo must exist in zoiko-sema
+  # before the first push, or the image push fails ("Repository not found"). The
+  # deploy SA may lack artifactregistry.repositories.create; if the self-provision
+  # step below is denied, create it once in Cloud Shell:
+  #   gcloud artifacts repositories create zoiko-meet --repository-format=docker \
+  #     --location=asia-southeast1 --project=zoiko-sema
+  PROJECT_ID: zoiko-sema
+  REGISTRY: asia-southeast1-docker.pkg.dev/zoiko-sema/zoiko-meet
   REGION: asia-southeast1
 
 jobs:
@@ -36,6 +38,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ env.PROJECT_ID }}
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
       # Self-provision the AR repo so a fresh region (or project) needs no manual
@@ -47,11 +50,11 @@ jobs:
         run: |
           gcloud artifacts repositories describe zoiko-meet \
             --location=${{ env.REGION }} \
-            --project=project-4b10b0ae-f69d-47e2-90d >/dev/null 2>&1 || \
+            --project=${{ env.PROJECT_ID }} >/dev/null 2>&1 || \
           gcloud artifacts repositories create zoiko-meet \
             --repository-format=docker \
             --location=${{ env.REGION }} \
-            --project=project-4b10b0ae-f69d-47e2-90d
+            --project=${{ env.PROJECT_ID }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Build and push unified app image
@@ -78,9 +81,11 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ env.PROJECT_ID }}
       - name: Deploy to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
         with:
+          project_id: ${{ env.PROJECT_ID }}
           service: zoiko-meet-git
           region: ${{ env.REGION }}
           image: ${{ env.REGISTRY }}/app:latest
