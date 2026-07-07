@@ -7,6 +7,7 @@ Run from anywhere:  python client/scripts/gen_social_assets.py
 Outputs (og-image.png + favicon set) land in client/public/. Re-run after
 changing the logo or the card layout, then rebuild the client.
 """
+import math
 import os
 from PIL import Image, ImageDraw, ImageFont
 
@@ -18,16 +19,16 @@ PUBLIC = os.path.join(CLIENT, "public")
 FONTS = r"C:/Windows/Fonts"
 F_BOLD = os.path.join(FONTS, "segoeuib.ttf")
 F_REG = os.path.join(FONTS, "segoeui.ttf")
-F_SEMI = os.path.join(FONTS, "segoeuib.ttf")  # Segoe has no semibold ttf; bold is fine
+F_SEMI = os.path.join(FONTS, "seguisb.ttf")  # Segoe UI Semibold
 
-NAVY = (27, 37, 82)        # title — dark navy
-GRAY = (90, 100, 114)      # tagline
-BLUE = (42, 107, 221)      # brand blue (#2a6bdd)
+NAVY = (26, 34, 62)         # title — near-black navy
+GRAY = (100, 109, 125)      # tagline / subtitle
+BLUE = (42, 107, 221)       # brand blue (#2a6bdd)
 WHITE = (255, 255, 255)
-BEIGE = (240, 234, 224)    # warm background, like the marketing card
-CARD_BORDER = (228, 221, 210)
-FOOTER = (24, 32, 64)      # dark navy footer bar
-FOOTER_TXT = (203, 210, 224)
+PILL = (241, 244, 250)      # url chip background
+CIRCLE = (231, 238, 252)    # light-blue feature icon disc
+DIVIDER = (233, 236, 243)
+DOTS = (224, 231, 245)      # decorative dot grid
 
 icon = Image.open(ICON_SRC).convert("RGBA")
 
@@ -39,121 +40,134 @@ def _text_w(draw, text, font):
 
 # --- minimal line icons (brand blue), drawn centered on (cx, cy) ------------
 
-def _ic_people(d, cx, cy, c, w=5):
-    d.ellipse([cx - 20, cy - 18, cx - 4, cy - 2], outline=c, width=w)      # head L
-    d.arc([cx - 28, cy - 2, cx + 4, cy + 28], 180, 360, fill=c, width=w)    # body L
-    d.ellipse([cx + 4, cy - 16, cx + 18, cy - 2], outline=c, width=w)       # head R
-    d.arc([cx - 2, cy - 1, cx + 26, cy + 26], 200, 340, fill=c, width=w)    # body R
+def _ic_video(d, cx, cy, c, w=5):
+    d.rounded_rectangle([cx - 22, cy - 14, cx + 6, cy + 14], radius=6, outline=c, width=w)
+    # lens / prism on the right
+    d.line([(cx + 9, cy - 9), (cx + 22, cy - 15), (cx + 22, cy + 15), (cx + 9, cy + 9)],
+           fill=c, width=w, joint="curve")
 
 
 def _ic_monitor(d, cx, cy, c, w=5):
-    d.rounded_rectangle([cx - 24, cy - 18, cx + 24, cy + 8], radius=5, outline=c, width=w)
-    d.line([cx - 9, cy + 8, cx - 13, cy + 20], fill=c, width=w)
-    d.line([cx + 9, cy + 8, cx + 13, cy + 20], fill=c, width=w)
-    d.line([cx - 16, cy + 20, cx + 16, cy + 20], fill=c, width=w)
-    # download arrow inside
-    d.line([cx, cy - 12, cx, cy + 1], fill=c, width=w)
-    d.line([cx - 7, cy - 6, cx, cy + 2], fill=c, width=w)
-    d.line([cx + 7, cy - 6, cx, cy + 2], fill=c, width=w)
+    d.rounded_rectangle([cx - 22, cy - 16, cx + 22, cy + 8], radius=5, outline=c, width=w)
+    d.line([cx, cy + 8, cx, cy + 17], fill=c, width=w)
+    d.line([cx - 11, cy + 18, cx + 11, cy + 18], fill=c, width=w)
 
 
 def _ic_chat(d, cx, cy, c, w=5):
-    d.rounded_rectangle([cx - 24, cy - 18, cx + 24, cy + 8], radius=9, outline=c, width=w)
-    d.polygon([(cx - 16, cy + 6), (cx - 16, cy + 20), (cx - 2, cy + 6)], fill=c)
+    d.rounded_rectangle([cx - 22, cy - 16, cx + 22, cy + 8], radius=10, outline=c, width=w)
+    d.polygon([(cx - 14, cy + 5), (cx - 14, cy + 20), (cx - 1, cy + 6)], fill=c)
     for dx in (-9, 0, 9):
-        d.ellipse([cx + dx - 2, cy - 7, cx + dx + 2, cy - 3], fill=c)
+        d.ellipse([cx + dx - 2.6, cy - 7, cx + dx + 2.6, cy - 2], fill=c)
 
 
-def _ic_calendar(d, cx, cy, c, w=5):
-    d.rounded_rectangle([cx - 22, cy - 14, cx + 22, cy + 18], radius=5, outline=c, width=w)
-    d.line([cx - 22, cy - 3, cx + 22, cy - 3], fill=c, width=w)
-    d.line([cx - 11, cy - 22, cx - 11, cy - 10], fill=c, width=w)
-    d.line([cx + 11, cy - 22, cx + 11, cy - 10], fill=c, width=w)
-    for ddx in (-11, 0, 11):
-        d.ellipse([cx + ddx - 2, cy + 6, cx + ddx + 2, cy + 10], fill=c)
+def _ic_sparkle(d, cx, cy, c, w=5):
+    def star(ox, oy, ro, ri):
+        pts = []
+        for k in range(8):
+            ang = math.radians(90 - k * 45)
+            r = ro if k % 2 == 0 else ri
+            pts.append((ox + r * math.cos(ang), oy - r * math.sin(ang)))
+        d.line(pts + [pts[0]], fill=c, width=w, joint="curve")
+    star(cx - 3, cy + 2, 19, 6)
+    star(cx + 15, cy - 14, 8, 2.6)
 
 
-def _ic_shield(d, cx, cy, c, w=5):
-    pts = [(cx, cy - 20), (cx + 18, cy - 12), (cx + 18, cy + 3),
-           (cx, cy + 21), (cx - 18, cy + 3), (cx - 18, cy - 12), (cx, cy - 20)]
-    d.line(pts, fill=c, width=w, joint="curve")
-    d.rounded_rectangle([cx - 7, cy - 1, cx + 7, cy + 11], radius=2, outline=c, width=4)
-    d.arc([cx - 5, cy - 9, cx + 5, cy + 3], 180, 360, fill=c, width=4)
+def _globe(d, cx, cy, c, w=3, r=11):
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=c, width=w)
+    d.ellipse([cx - r * 0.45, cy - r, cx + r * 0.45, cy + r], outline=c, width=max(2, w - 1))
+    d.line([cx - r, cy, cx + r, cy], fill=c, width=max(2, w - 1))
 
 
+# Each feature: (icon drawer, [label lines]).
 FEATURES = [
-    (_ic_people, "HD Video", "Meetings"),
-    (_ic_monitor, "Screen", "Sharing"),
-    (_ic_chat, "Team", "Chat"),
-    (_ic_calendar, "Schedule", "Meetings"),
-    (_ic_shield, "Secure", "by Design"),
+    (_ic_video, ["HD Video & Audio"]),
+    (_ic_monitor, ["Screen Share"]),
+    (_ic_chat, ["Team Chat"]),
+    (_ic_sparkle, ["AI Meeting", "Summaries"]),
 ]
 
 
 def make_og():
+    # Full-bleed white card — content fills the whole frame, no outer background.
     W, H = 1200, 630
-    img = Image.new("RGB", (W, H), BEIGE)
+    cy1 = H
+    img = Image.new("RGB", (W, H), WHITE)
     draw = ImageDraw.Draw(img)
 
-    # White rounded content card on the warm background.
-    m = 34
-    draw.rounded_rectangle([m, m, W - m, H - m], radius=34, fill=WHITE, outline=CARD_BORDER, width=2)
+    # Decorative dot grid, top-right.
+    for r in range(4):
+        for cc in range(6):
+            dx = W - 150 + cc * 22
+            dy = 60 + r * 22
+            draw.ellipse([dx - 2.5, dy - 2.5, dx + 2.5, dy + 2.5], fill=DOTS)
 
     # Logo — left.
-    isize = 196
+    isize = 150
     ic = icon.resize((isize, isize), Image.LANCZOS)
-    ix, iy = 84, 78
+    ix, iy = 100, 100
     img.paste(ic, (ix, iy), ic)
 
-    title_font = ImageFont.truetype(F_BOLD, 60)
-    tag_font = ImageFont.truetype(F_REG, 28)
-    url_font = ImageFont.truetype(F_BOLD, 28)
+    title_font = ImageFont.truetype(F_BOLD, 56)
+    tag_font = ImageFont.truetype(F_REG, 26)
+    url_font = ImageFont.truetype(F_SEMI, 25)
 
-    tx = ix + isize + 44
-    draw.text((tx, 104), "ZoikoSema", font=title_font, fill=NAVY)
-    draw.text((tx, 182), "Meetings, Chat, Webinars in one workspace", font=tag_font, fill=GRAY)
+    tx = ix + isize + 40
+    draw.text((tx, 116), "Zoiko Sema Meet", font=title_font, fill=NAVY)
+    draw.text((tx + 2, 190), "Secure real-time meetings by Zoiko Sema", font=tag_font, fill=GRAY)
 
-    # Website with a small "link" glyph.
-    uy = 232
-    gx = tx
-    draw.rounded_rectangle([gx, uy + 6, gx + 24, uy + 24], radius=9, outline=BLUE, width=6)
-    draw.rounded_rectangle([gx + 14, uy + 6, gx + 38, uy + 24], radius=9, outline=BLUE, width=6)
-    draw.text((gx + 52, uy), "meet.zoikosema.com", font=url_font, fill=BLUE)
+    # URL pill: globe glyph + address on a soft grey chip.
+    url = "meet.zoikosema.com"
+    uw = _text_w(draw, url, url_font)
+    pill_h = 48
+    pad_l, gap, pad_r = 22, 14, 24
+    globe_d = 22
+    pill_w = pad_l + globe_d + gap + uw + pad_r
+    py = 236
+    px = tx
+    draw.rounded_rectangle([px, py, px + pill_w, py + pill_h], radius=pill_h // 2, fill=PILL)
+    gcx = px + pad_l + globe_d // 2
+    gcy = py + pill_h // 2
+    _globe(draw, gcx, gcy, BLUE)
+    draw.text((px + pad_l + globe_d + gap, py + (pill_h - 34) // 2), url, font=url_font, fill=BLUE)
 
-    # Feature row — five evenly spaced columns with divider lines.
-    lab_font = ImageFont.truetype(F_BOLD, 21)
-    sub_font = ImageFont.truetype(F_REG, 18)
+    # Divider between header and features.
+    draw.line([100, 320, W - 100, 320], fill=DIVIDER, width=2)
+
+    # Feature row — four discs with line icons + centred labels.
+    lab_font = ImageFont.truetype(F_SEMI, 22)
     n = len(FEATURES)
-    left, right = 86, W - 86
+    left, right = 100, W - 100
     span = (right - left) / n
-    icon_cy = 360
-    for i, (drawer, lab, sub) in enumerate(FEATURES):
+    icon_cy = 392
+    disc_r = 37
+    for i, (drawer, lines) in enumerate(FEATURES):
         cx = int(left + span * (i + 0.5))
-        if i:  # divider before all but the first
-            dx = int(left + span * i)
-            draw.line([dx, icon_cy - 26, dx, icon_cy + 78], fill=CARD_BORDER, width=2)
+        draw.ellipse([cx - disc_r, icon_cy - disc_r, cx + disc_r, icon_cy + disc_r], fill=CIRCLE)
         drawer(draw, cx, icon_cy, BLUE)
-        lw = _text_w(draw, lab, lab_font)
-        draw.text((cx - lw // 2, icon_cy + 34), lab, font=lab_font, fill=NAVY)
-        sw = _text_w(draw, sub, sub_font)
-        draw.text((cx - sw // 2, icon_cy + 62), sub, font=sub_font, fill=GRAY)
+        ly = icon_cy + disc_r + 17
+        for line in lines:
+            lw = _text_w(draw, line, lab_font)
+            draw.text((cx - lw // 2, ly), line, font=lab_font, fill=NAVY)
+            ly += 29
 
-    # Dark footer bar (rounded bottom corners only).
-    fy = 506
-    draw.rounded_rectangle([m, fy, W - m, H - m], radius=34,
-                           corners=(False, False, True, True), fill=FOOTER)
-    fcy = (fy + H - m) // 2
-    # Wordmark: "Zoiko" white + "Sema" blue.
-    wm_font = ImageFont.truetype(F_BOLD, 32)
-    wx = 86
-    draw.text((wx, fcy - 20), "Zoiko", font=wm_font, fill=WHITE)
+    # Footer: wordmark left, "Join meeting" CTA right, on a hairline rule.
+    fy = 518
+    draw.line([100, fy, W - 100, fy], fill=DIVIDER, width=2)
+    fcy = (fy + cy1) // 2
+
+    wm_font = ImageFont.truetype(F_BOLD, 30)
+    tm_font = ImageFont.truetype(F_SEMI, 16)
+    wx = 100
+    draw.text((wx, fcy - 19), "Zoiko", font=wm_font, fill=NAVY)
     zw = _text_w(draw, "Zoiko", wm_font)
-    draw.text((wx + zw, fcy - 20), "Sema", font=wm_font, fill=BLUE)
-    # Right-aligned strapline.
-    strap_font = ImageFont.truetype(F_REG, 22)
-    strap = "AI-Powered  •  Secure  •  Collaboration"
-    sw = _text_w(draw, strap, strap_font)
-    draw.text((W - 86 - sw, fcy - 14), strap, font=strap_font, fill=FOOTER_TXT)
+    draw.text((wx + zw, fcy - 19), "Sema", font=wm_font, fill=BLUE)
+    sw = _text_w(draw, "Sema", wm_font)
+    draw.text((wx + zw + sw + 3, fcy - 20), "™", font=tm_font, fill=GRAY)
+
+    cta_font = ImageFont.truetype(F_SEMI, 26)
+    cta = "Join meeting  →"
+    cw = _text_w(draw, cta, cta_font)
+    draw.text((right - cw, fcy - 16), cta, font=cta_font, fill=BLUE)
 
     out = os.path.join(PUBLIC, "og-image.png")
     img.save(out, "PNG", optimize=True)

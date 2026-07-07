@@ -25,3 +25,14 @@ export function isGuestParticipant(participant) {
     return false
   }
 }
+
+/** Read the uploaded profile-photo URL off a participant's metadata (set
+ *  server-side in generate_token). Returns null when absent or unparseable. */
+export function participantAvatarUrl(participant) {
+  try {
+    const meta = participant?.metadata ? JSON.parse(participant.metadata) : null
+    return meta?.avatarUrl || null
+  } catch {
+    return null
+  }
+}

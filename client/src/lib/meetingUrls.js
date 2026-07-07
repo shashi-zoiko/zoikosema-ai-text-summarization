@@ -35,3 +35,15 @@ export function meetingIntelligencePath(code) {
 export function meetingUrl(code, origin = window.location.origin) {
   return `${origin}${meetingPath(code)}`
 }
+
+/**
+ * Ready-to-paste invite message for chat apps (WhatsApp, SMS, …). The URL sits
+ * on its own line so link-preview crawlers still unfurl it into the meeting card.
+ */
+export function meetingShareText(code, origin = window.location.origin) {
+  const url = meetingUrl(code, origin)
+  return (
+    `To join the meeting on Zoiko Sema, click this link:\n${url}\n\n` +
+    `Or open Zoiko Sema and enter this code:\n${code}`
+  )
+}

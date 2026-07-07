@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import {
   api,
+  uploadFile,
   requestGuestToken,
   setGuestSession,
   clearGuestSession,
@@ -168,6 +169,18 @@ export function AuthProvider({ children }) {
     return updated
   }, [])
 
+  const uploadAvatar = useCallback(async (file) => {
+    const updated = await uploadFile('/api/auth/avatar', file)
+    setUser(updated)
+    return updated
+  }, [])
+
+  const removeAvatar = useCallback(async () => {
+    const updated = await api('/api/auth/avatar', { method: 'DELETE' })
+    setUser(updated)
+    return updated
+  }, [])
+
   const deleteAccount = useCallback(async () => {
     await api('/api/auth/account', { method: 'DELETE' })
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
@@ -179,7 +192,7 @@ export function AuthProvider({ children }) {
   return (
     <AuthContext.Provider value={{
       user, loading, login, register, logout, refresh,
-      changePassword, updateProfile, deleteAccount,
+      changePassword, updateProfile, uploadAvatar, removeAvatar, deleteAccount,
       // Guest session: `guest` is the active anonymous session (or null);
       // isGuest is true only when there's a guest session AND no real account.
       guest, isGuest: !!guest && !user, joinAsGuest, clearGuest,

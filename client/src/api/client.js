@@ -4,6 +4,13 @@ export function getApiBase() {
   return API_BASE
 }
 
+/** Resolve a server-relative upload path (e.g. /api/uploads/x.png) against the
+ *  API base. Passes absolute/external URLs and empty values through unchanged. */
+export function assetUrl(path) {
+  if (!path || /^https?:\/\//.test(path)) return path
+  return `${API_BASE}${path}`
+}
+
 export function getWsBase() {
   if (!API_BASE) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'

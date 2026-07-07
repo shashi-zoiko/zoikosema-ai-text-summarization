@@ -373,7 +373,8 @@ def list_messages(
 ):
     mem = _membership(db, channel_id, user.id)
     if not mem:
-        raise HTTPException(status_code=403, detail="Not a channel member")
+        # 404, not 403: a non-member must not be able to tell a channel exists.
+        raise HTTPException(status_code=404, detail="Channel not found")
     if mem.is_muted:
         raise HTTPException(status_code=403, detail="You are muted in this channel")
     stmt = select(Message).where(Message.channel_id == channel_id)
@@ -406,7 +407,8 @@ def post_message(
 ):
     mem = _membership(db, channel_id, user.id)
     if not mem:
-        raise HTTPException(status_code=403, detail="Not a channel member")
+        # 404, not 403: a non-member must not be able to tell a channel exists.
+        raise HTTPException(status_code=404, detail="Channel not found")
     if mem.is_muted:
         raise HTTPException(status_code=403, detail="You are muted in this channel")
 
@@ -465,7 +467,8 @@ def delete_message(
     user: User = Depends(get_current_user),
 ):
     if not _membership(db, channel_id, user.id):
-        raise HTTPException(status_code=403, detail="Not a channel member")
+        # 404, not 403: a non-member must not be able to tell a channel exists.
+        raise HTTPException(status_code=404, detail="Channel not found")
     msg = db.get(Message, message_id)
     if not msg or msg.channel_id != channel_id:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -491,7 +494,8 @@ def add_reaction(
     user: User = Depends(get_current_user),
 ):
     if not _membership(db, channel_id, user.id):
-        raise HTTPException(status_code=403, detail="Not a channel member")
+        # 404, not 403: a non-member must not be able to tell a channel exists.
+        raise HTTPException(status_code=404, detail="Channel not found")
     msg = db.get(Message, message_id)
     if not msg or msg.channel_id != channel_id or msg.deleted_at:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -521,7 +525,8 @@ def remove_reaction(
     user: User = Depends(get_current_user),
 ):
     if not _membership(db, channel_id, user.id):
-        raise HTTPException(status_code=403, detail="Not a channel member")
+        # 404, not 403: a non-member must not be able to tell a channel exists.
+        raise HTTPException(status_code=404, detail="Channel not found")
     reaction = db.scalar(
         select(MessageReaction).where(
             MessageReaction.message_id == message_id,
@@ -546,7 +551,8 @@ async def upload_file(
 ):
     mem = _membership(db, channel_id, user.id)
     if not mem:
-        raise HTTPException(status_code=403, detail="Not a channel member")
+        # 404, not 403: a non-member must not be able to tell a channel exists.
+        raise HTTPException(status_code=404, detail="Channel not found")
     if mem.is_muted:
         raise HTTPException(status_code=403, detail="You are muted in this channel")
 
@@ -592,7 +598,8 @@ def mark_read(
     user: User = Depends(get_current_user),
 ):
     if not _membership(db, channel_id, user.id):
-        raise HTTPException(status_code=403, detail="Not a channel member")
+        # 404, not 403: a non-member must not be able to tell a channel exists.
+        raise HTTPException(status_code=404, detail="Channel not found")
     receipt = db.scalar(
         select(MessageReadReceipt).where(
             MessageReadReceipt.channel_id == channel_id,
@@ -621,7 +628,8 @@ def get_read_receipts(
     user: User = Depends(get_current_user),
 ):
     if not _membership(db, channel_id, user.id):
-        raise HTTPException(status_code=403, detail="Not a channel member")
+        # 404, not 403: a non-member must not be able to tell a channel exists.
+        raise HTTPException(status_code=404, detail="Channel not found")
     receipts = db.scalars(
         select(MessageReadReceipt).where(MessageReadReceipt.channel_id == channel_id)
     ).all()
@@ -648,10 +656,10 @@ def mute_user(
     user: User = Depends(get_current_user),
 ):
     channel = db.get(Channel, channel_id)
-    if not channel:
+    # Non-creators (and non-existent channels) both get 404 so a channel's
+    # existence can't be probed through this endpoint.
+    if not channel or channel.created_by != user.id:
         raise HTTPException(status_code=404, detail="Channel not found")
-    if channel.created_by != user.id:
-        raise HTTPException(status_code=403, detail="Only channel creator can mute users")
     target_mem = _membership(db, channel_id, target_user_id)
     if not target_mem:
         raise HTTPException(status_code=404, detail="User not in channel")
@@ -668,10 +676,8 @@ def unmute_user(
     user: User = Depends(get_current_user),
 ):
     channel = db.get(Channel, channel_id)
-    if not channel:
+    if not channel or channel.created_by != user.id:
         raise HTTPException(status_code=404, detail="Channel not found")
-    if channel.created_by != user.id:
-        raise HTTPException(status_code=403, detail="Only channel creator can unmute users")
     target_mem = _membership(db, channel_id, target_user_id)
     if not target_mem:
         raise HTTPException(status_code=404, detail="User not in channel")

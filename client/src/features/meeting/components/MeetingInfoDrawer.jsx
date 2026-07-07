@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParticipants } from '@livekit/components-react'
 import { Check, Copy, Hash, ShieldCheck, Timer, Users } from 'lucide-react'
 import DrawerShell from './DrawerShell.jsx'
-import { meetingUrl } from '../../../lib/meetingUrls.js'
+import { meetingUrl, meetingShareText } from '../../../lib/meetingUrls.js'
 
 /**
  * Meeting details drawer — the read-only "about this call" panel. Shows live
@@ -38,7 +38,7 @@ export default function MeetingInfoDrawer({ code, joinedAt, onClose }) {
             <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-white/90">{link}</span>
             <button
               type="button"
-              onClick={() => copy(link)}
+              onClick={() => copy(meetingShareText(code))}
               className={
                 'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[12.5px] font-medium transition ' +
                 (copied ? 'bg-[#10B981]/15 text-[#34D399]' : 'bg-[#1E293B] text-white hover:bg-[#263244]')

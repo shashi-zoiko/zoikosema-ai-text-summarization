@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     jwt_secret: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
+
+    # Comma-separated list of emails granted platform-admin access to the
+    # /api/admin/* dashboard. Synced to users.is_admin on startup and also
+    # checked live on each admin request, so adding an email here (+ restart)
+    # is enough to grant access without touching the database.
+    admin_emails: str = ""
     access_token_expire_minutes: int = 60 * 24 * 7
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
@@ -105,6 +111,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def admin_email_list(self) -> list[str]:
+        return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
 
     @property
     def smtp_enabled(self) -> bool:

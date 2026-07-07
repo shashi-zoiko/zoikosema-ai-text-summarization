@@ -25,7 +25,7 @@ class MediaProvider(ABC):
     @abstractmethod
     async def generate_token(
         self, *, media_room_ref: str, user_id: int, display_name: str, role: str,
-        is_guest: bool = False,
+        is_guest: bool = False, metadata: dict | None = None,
     ) -> MediaToken:
         ...
 

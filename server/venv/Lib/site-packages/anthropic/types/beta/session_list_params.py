@@ -31,6 +31,9 @@ class SessionListParams(TypedDict, total=False):
     created_at_lte: Annotated[Union[str, datetime], PropertyInfo(alias="created_at[lte]", format="iso8601")]
     """Return sessions created at or before this time (inclusive)."""
 
+    deployment_id: str
+    """Filter sessions created by this deployment ID."""
+
     include_archived: bool
     """When true, includes archived sessions. Default: false (exclude archived)."""
 
@@ -50,7 +53,7 @@ class SessionListParams(TypedDict, total=False):
     """
 
     page: str
-    """Opaque pagination cursor from a previous response's next_page."""
+    """Opaque pagination cursor from a previous response."""
 
     statuses: List[Literal["rescheduling", "running", "idle", "terminated"]]
     """Filter by session status.

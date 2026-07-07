@@ -61,6 +61,7 @@ async def issue_token(
         user_id=user.id,
         display_name=user.name,
         role=member.role,
+        avatar_url=user.avatar_url if user.show_photo_in_meetings else None,
     )
     return TokenResponse(
         access_token=token.access_token,

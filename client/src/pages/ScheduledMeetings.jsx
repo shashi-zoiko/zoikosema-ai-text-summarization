@@ -6,7 +6,7 @@ import {
   Globe, Pencil, Trash2, Users2, Video, XCircle,
 } from 'lucide-react'
 import { api, getApiBase } from '../api/client'
-import { meetingPath, meetingUrl } from '../lib/meetingUrls.js'
+import { meetingPath, meetingShareText } from '../lib/meetingUrls.js'
 import { fadeUp, stagger } from '../lib/motion'
 import { cn } from '../lib/cn'
 import Button from '../components/ui/Button'
@@ -113,7 +113,7 @@ export default function ScheduledMeetings() {
 
   const copyLink = async (m) => {
     try {
-      await navigator.clipboard.writeText(meetingUrl(m.code))
+      await navigator.clipboard.writeText(meetingShareText(m.code))
       setCopiedCode(m.code)
       setTimeout(() => setCopiedCode((c) => (c === m.code ? null : c)), 1600)
     } catch {
