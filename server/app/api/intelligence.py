@@ -336,3 +336,79 @@ def list_intelligence_history(
         .limit(25)
     ).all()
     return [_intel_to_out(r, meeting) for r in rows]
+
+
+# ── Action items (cross-meeting aggregation) ───────────────────────────────
+# Action items aren't a table of their own — they're generated per meeting and
+# live inside each MeetingIntelligence.payload["action_items"]. The Actions page
+# flattens them across every meeting the caller hosted or joined.
+actions_router = APIRouter(prefix="/api/action-items", tags=["action-items"])
+
+_PRIORITY_ORDER = {"high": 0, "med": 1, "medium": 1, "low": 2}
+
+
+@actions_router.get("")
+def list_action_items(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Every action item across the caller's meetings, high-priority first.
+
+    ponytail: naive per-request scan of the caller's ready intelligence rows,
+    no pagination. Fine for a personal action list; add a materialized
+    action_items table + paging if a workspace ever has thousands of meetings.
+    """
+    hosted = db.scalars(select(Meeting.id).where(Meeting.host_id == user.id)).all()
+    joined = db.scalars(
+        select(MeetingParticipant.meeting_id).where(MeetingParticipant.user_id == user.id)
+    ).all()
+    meeting_ids = set(hosted) | set(joined)
+    if not meeting_ids:
+        return []
+
+    # Newest ready row per meeting: rows come back newest-first, so the first
+    # one seen for a meeting_id is the latest.
+    ready = db.scalars(
+        select(MeetingIntelligence)
+        .where(
+            MeetingIntelligence.meeting_id.in_(meeting_ids),
+            MeetingIntelligence.status == INTEL_STATUS_READY,
+        )
+        .order_by(desc(MeetingIntelligence.created_at))
+    ).all()
+    latest_by_meeting: dict[int, MeetingIntelligence] = {}
+    for r in ready:
+        latest_by_meeting.setdefault(r.meeting_id, r)
+    if not latest_by_meeting:
+        return []
+
+    meetings = {
+        m.id: m
+        for m in db.scalars(
+            select(Meeting).where(Meeting.id.in_(latest_by_meeting.keys()))
+        ).all()
+    }
+
+    out: list[dict] = []
+    for mid, rec in latest_by_meeting.items():
+        m = meetings.get(mid)
+        for idx, it in enumerate((rec.payload or {}).get("action_items") or []):
+            if not isinstance(it, dict) or not (it.get("task") or "").strip():
+                continue
+            when = (m.scheduled_at or m.created_at) if m else None
+            out.append({
+                "id": f"{rec.id}:{idx}",
+                "task": it.get("task"),
+                "owner": it.get("owner"),
+                "due": it.get("due"),
+                "priority": (it.get("priority") or "med").lower(),
+                "depends_on": it.get("depends_on"),
+                "meeting_code": m.code if m else None,
+                "meeting_title": (m.title if m else None) or "Meeting",
+                "meeting_date": when.isoformat() if when else None,
+            })
+
+    # Priority-major, newest-meeting-minor. Stable sort keeps the date order.
+    out.sort(key=lambda a: a["meeting_date"] or "", reverse=True)
+    out.sort(key=lambda a: _PRIORITY_ORDER.get(a["priority"], 1))
+    return out

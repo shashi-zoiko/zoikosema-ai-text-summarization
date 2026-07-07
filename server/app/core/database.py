@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import bindparam, create_engine, inspect, text
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 
@@ -60,6 +60,14 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        # A request that raises mid-transaction must roll back before the
+        # connection returns to the pool — otherwise the next request checks
+        # out a connection with an invalid transaction and fails with
+        # PendingRollbackError ("every join 500s"). FastAPI re-raises the
+        # endpoint's exception here at the yield point, so this catches it.
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -163,6 +171,14 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # per-meeting kill-switch (default TRUE so existing links accept guests).
     ("users", "is_guest", "BOOLEAN DEFAULT FALSE NOT NULL"),
     ("users", "guest_expires_at", "TIMESTAMP WITH TIME ZONE"),
+    # Platform admin flag — gates /api/admin/*. See _sync_admin_flags() below.
+    ("users", "is_admin", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    ("users", "avatar_url", "VARCHAR(500)"),
+    ("users", "job_title", "VARCHAR(120)"),
+    ("users", "pronouns", "VARCHAR(40)"),
+    ("users", "bio", "VARCHAR(300)"),
+    ("users", "show_photo_in_meetings", "BOOLEAN DEFAULT TRUE NOT NULL"),
+    ("users", "show_photo_on_dashboard", "BOOLEAN DEFAULT TRUE NOT NULL"),
     ("meetings", "guests_enabled", "BOOLEAN DEFAULT TRUE NOT NULL"),
     # Tracks whether the "starts in 5 minutes" reminder email has gone out for
     # a given invitee (see meeting_reminders.py) so the loop never sends twice.
@@ -218,8 +234,28 @@ def _apply_additive_migrations() -> None:
                 log.exception("additive index failed: %s", _index_name)
 
 
+def _sync_admin_flags() -> None:
+    """Grant users.is_admin to every account whose email is listed in the
+    ADMIN_EMAILS setting. Idempotent and runs after the is_admin column exists.
+    Emails not present in the DB are simply ignored."""
+    emails = get_settings().admin_email_list
+    if not emails:
+        return
+    try:
+        stmt = (
+            text("UPDATE users SET is_admin = TRUE WHERE lower(email) IN :emails")
+            .bindparams(bindparam("emails", expanding=True))
+        )
+        with engine.begin() as conn:
+            conn.execute(stmt, {"emails": emails})
+    except Exception:
+        # Never let admin-seeding take startup down; log and continue.
+        log.exception("admin flag sync failed")
+
+
 def init_db() -> None:
     from app import models  # noqa: F401  ensure models are imported
     Base.metadata.create_all(bind=engine)
     _apply_additive_migrations()
+    _sync_admin_flags()
 

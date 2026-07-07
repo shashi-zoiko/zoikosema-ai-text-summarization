@@ -18,12 +18,14 @@ import Home from './pages/Home.jsx'
 // lucide trees that don't need to load until the user actually navigates.
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword.jsx'))
 const Chat = lazy(() => import('./pages/Chat.jsx'))
+const Actions = lazy(() => import('./pages/Actions.jsx'))
 const MeetLobby = lazy(() => import('./pages/MeetLobby.jsx'))
 const MeetRoomLivekit = lazy(() => import('./features/meeting/MeetRoomLivekit.jsx'))
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
 const ScheduledMeetings = lazy(() => import('./pages/ScheduledMeetings.jsx'))
 const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx'))
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
+const AccountSettings = lazy(() => import('./pages/AccountSettings.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
 const SharedRecording = lazy(() => import('./pages/SharedRecording.jsx'))
 
@@ -168,10 +170,13 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/chat/:channelId" element={<Chat />} />
+          <Route path="/actions" element={<Actions />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/scheduled" element={<ScheduledMeetings />} />
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
+          <Route path="/settings" element={<AccountSettings section="workspace" />} />
+          <Route path="/security" element={<AccountSettings section="security" />} />
           <Route path="/admin" element={<Admin />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

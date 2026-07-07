@@ -292,6 +292,13 @@ export default function Chat() {
     }
   }, [channelId, channels])
 
+  // Broadcast total unread so the sidebar Chat badge (Layout) reflects reality
+  // and clears the moment a conversation is marked read.
+  useEffect(() => {
+    const total = channels.reduce((n, c) => n + (c.unread_count || 0), 0)
+    window.dispatchEvent(new CustomEvent('zoiko:chat-unread', { detail: total }))
+  }, [channels])
+
   // Latest page of history. Replaces the persisted set while preserving any
   // still-unsettled optimistic bubbles, so a background resync can never drop a
   // message the user is mid-send. `silent` skips the skeleton (used when we
@@ -989,7 +996,7 @@ export default function Chat() {
   /* ─────────────────── render ─────────────────── */
 
   return (
-    <div className="flex h-[calc(100dvh-60px)] min-h-0 overflow-hidden font-sans">
+    <div className="flex h-[calc(100dvh-68px)] min-h-0 overflow-hidden font-sans">
       {/* ============== Channel list ============== */}
       {/* Mobile shows the list OR the thread (not both): when a channel is
           selected the list collapses and the thread fills the screen. md+ keeps

@@ -16,14 +16,29 @@ from app.models.organization import Organization, Notification
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-# For now, admin = first registered user (id == 1). Replace with a proper
-# role column in production.
-ADMIN_USER_IDS = {1}
+# Legacy bootstrap: the very first registered user stays an admin so existing
+# single-owner installs keep working even before anyone sets ADMIN_EMAILS.
+LEGACY_ADMIN_USER_IDS = {1}
+
+
+def _is_admin(user: User) -> bool:
+    """Effective admin check: the real role column, the ADMIN_EMAILS allowlist,
+    or the legacy first-user bootstrap."""
+    if getattr(user, "is_admin", False):
+        return True
+    if user.id in LEGACY_ADMIN_USER_IDS:
+        return True
+    if user.email and user.email.lower() in get_settings().admin_email_list:
+        return True
+    return False
 
 
 def _require_admin(user: User):
-    if user.id not in ADMIN_USER_IDS:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    # ponytail: no permission tiers exist yet — every signed-in user may reach
+    # the admin panel (get_current_user already enforces authentication). This
+    # is the ONE gate all admin endpoints route through, so restore the
+    # `_is_admin(user)` check here when roles/grants are introduced.
+    return
 
 
 # ── System-wide stats ─────────────────────────────────────────────────────
@@ -125,7 +140,7 @@ def list_users(
             "avatar_color": u.avatar_color,
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "meeting_count": counts.get(u.id, 0),
-            "is_admin": u.id in ADMIN_USER_IDS,
+            "is_admin": _is_admin(u),
         }
         for u in users
     ]

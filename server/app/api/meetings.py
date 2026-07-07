@@ -672,6 +672,7 @@ async def issue_media_token(
         display_name=user.name,
         role=participant.role,
         is_guest=user.is_guest,
+        avatar_url=user.avatar_url if user.show_photo_in_meetings else None,
     )
 
     # Public WS URL the browser dials. server-side LIVEKIT_WS_URL points at
@@ -920,11 +921,15 @@ def join_meeting(
     except HTTPException:
         raise
     except SQLAlchemyError:
+        # Roll back FIRST. The session's transaction is invalid at this point;
+        # touching any ORM attribute (e.g. user.id below) before rollback
+        # triggers a lazy reload that raises PendingRollbackError, masking the
+        # real error and escaping this handler unhandled.
+        db.rollback()
         # Surface DB problems with a logged traceback so future 500s on this
         # path show up in Cloud Run logs instead of an opaque "HTTP 500" chip
         # on the lobby.
         log.exception("join_meeting DB error (code=%s user=%s)", code, getattr(user, "id", None))
-        db.rollback()
         raise HTTPException(status_code=500, detail="Could not join meeting — please retry")
     except Exception:
         log.exception("join_meeting unexpected error (code=%s user=%s)", code, getattr(user, "id", None))

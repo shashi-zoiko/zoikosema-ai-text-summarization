@@ -67,11 +67,19 @@
   --c-line: rgba(255, 255, 255, 0.07);
   --c-line-strong: rgba(255, 255, 255, 0.13);
 
-  --c-accent: #10b981;
-  --c-accent-2: #34d399;
-  --c-accent-3: #6ee7b7;
-  --c-accent-soft: rgba(16, 185, 129, 0.15);
-  --c-accent-ring: rgba(16, 185, 129, 0.35);
+  /* Sema brand blue (#2a6bdd from the wordmark), brightened for dark surfaces. */
+  --c-accent: #2a6bdd;
+  --c-accent-2: #4f83f1;
+  --c-accent-3: #7aa5f7;
+  --c-accent-soft: rgba(42, 107, 221, 0.16);
+  --c-accent-ring: rgba(42, 107, 221, 0.38);
+
+  /* Brand blue — primary/active accent used by nav + hero CTAs. Brightened
+     for dark surfaces so active states stay legible against #11141d. */
+  --c-brand: #4f83f1;
+  --c-brand-strong: #6b9bff;
+  --c-brand-soft: color-mix(in srgb, #4f83f1 15%, transparent);
+  --c-brand-line: color-mix(in srgb, #4f83f1 32%, transparent);
 
   --c-success: #22c55e;
   --c-success-soft: rgba(34, 197, 94, 0.15);
@@ -113,11 +121,18 @@
   --c-line: #e7eaf2;
   --c-line-strong: #d6dbe8;
 
-  --c-accent: #1f7a54;
-  --c-accent-2: #15936b;
-  --c-accent-3: #34d399;
-  --c-accent-soft: #e7f6ef;
-  --c-accent-ring: rgba(31, 122, 84, 0.28);
+  /* Sema brand blue (#2a6bdd from the wordmark). */
+  --c-accent: #2a6bdd;
+  --c-accent-2: #2560c9;
+  --c-accent-3: #4f83f1;
+  --c-accent-soft: #e9f0fd;
+  --c-accent-ring: rgba(42, 107, 221, 0.28);
+
+  /* Brand blue — primary/active accent used by nav + hero CTAs. */
+  --c-brand: #2563eb;
+  --c-brand-strong: #1d4ed8;
+  --c-brand-soft: #eef4ff;
+  --c-brand-line: #dbe6ff;
 
   --c-success: #16a34a;
   --c-success-soft: #f0fdf4;
@@ -989,8 +1004,14 @@ button.outline:hover {
   color: var(--c-accent);
 }
 
-button.sm { padding: 6px 12px; font-size: 12.5px; border-radius: 8px; }
+button.sm { padding: 6px 12px; font-size: 12.5px; }
 button.lg { padding: 12px 22px; font-size: 15px; }
+
+/* Tighter, consistent corners on every button app-wide. Unlayered so it wins
+   over both @layer base and Tailwind's layered rounded-* utilities without
+   !important. Circular buttons (avatars, dock controls, theme toggle) opt out
+   via rounded-full; anything needing a custom radius can still use !rounded-[…]. */
+button:not([class*="rounded-full"]) { border-radius: 10px; }
 
 @layer base {
 input, textarea, select {

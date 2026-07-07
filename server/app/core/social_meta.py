@@ -24,8 +24,8 @@ import re
 # code; anything after it (/room-lk, /intelligence, …) is still the same meeting.
 _CODE_RE = re.compile(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$")
 
-_MEETING_TITLE = "ZoikoSema Meeting"
-_MEETING_DESC = "Join this ZoikoSema meeting securely in your browser."
+_MEETING_TITLE = "Zoiko Sema Meet"
+_MEETING_DESC = "Secure real-time meetings by Zoiko Sema"
 
 
 def meeting_code_from_path(full_path: str) -> str | None:

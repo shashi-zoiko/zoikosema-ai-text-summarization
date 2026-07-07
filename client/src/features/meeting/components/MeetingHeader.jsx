@@ -3,7 +3,7 @@ import { useConnectionState, useLocalParticipant } from '@livekit/components-rea
 import { ConnectionQuality, ConnectionState } from 'livekit-client'
 import { Check, Copy, Info } from 'lucide-react'
 import HostMenu from './HostMenu.jsx'
-import { meetingUrl } from '../../../lib/meetingUrls.js'
+import { meetingShareText } from '../../../lib/meetingUrls.js'
 
 /**
  * Sticky enterprise meeting header (64px). Dark, chromeless, information-dense:
@@ -174,7 +174,7 @@ function CopyLinkButton({ code }) {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(meetingUrl(code))
+      await navigator.clipboard.writeText(meetingShareText(code))
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     } catch { /* clipboard blocked — ignore */ }

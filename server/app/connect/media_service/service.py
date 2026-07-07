@@ -28,11 +28,12 @@ async def create_media_room(*, session_id: str, tenant_id: str) -> str:
 
 async def generate_token(
     *, media_room_ref: str, user_id: int, display_name: str, role: str,
-    is_guest: bool = False,
+    is_guest: bool = False, avatar_url: str | None = None,
 ) -> MediaToken:
     return await _provider().generate_token(
         media_room_ref=media_room_ref, user_id=user_id,
         display_name=display_name, role=role, is_guest=is_guest,
+        metadata={"avatarUrl": avatar_url} if avatar_url else None,
     )
 
 

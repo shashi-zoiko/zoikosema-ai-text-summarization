@@ -9,7 +9,8 @@ import { ConnectionQuality, Track } from 'livekit-client'
 import { AlertTriangle, Eye, Hand, Loader2, MicOff, MonitorUp, Square } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
 import { PinButton, PinnedNameIcon } from '../../../components/meeting/PinControls.jsx'
-import GuestBadge, { isGuestParticipant } from './GuestBadge.jsx'
+import GuestBadge, { isGuestParticipant, participantAvatarUrl } from './GuestBadge.jsx'
+import { assetUrl } from '../../../api/client'
 
 // Enterprise dark palette (mirrors index.css meeting tokens).
 const CARD = '#161B26'
@@ -96,6 +97,7 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
   const hasVideo = !!trackRef.publication && !videoMuted
   const displayName = name || identity || 'Guest'
   const isGuest = isGuestParticipant(trackRef.participant)
+  const avatarUrl = assetUrl(participantAvatarUrl(trackRef.participant))
   // Deterministic colour per identity so the same user always gets the same
   // avatar — Meet does the same trick.
   const avatarColor = pickColor(identity || displayName)
@@ -320,7 +322,7 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
         >
           <div className={'flex flex-col items-center ' + (dense ? 'gap-2' : 'gap-[4cqmin]')}>
             <div
-              className="grid aspect-square shrink-0 place-items-center rounded-full font-semibold leading-none text-white"
+              className="grid aspect-square shrink-0 place-items-center overflow-hidden rounded-full font-semibold leading-none text-white"
               style={{
                 // Filmstrip tiles size from `aspect-video` (auto height), where a
                 // `container-type: size` query container doesn't reliably establish
@@ -335,7 +337,11 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
                   : `inset 0 1px 0 rgba(255,255,255,0.25), 0 0 0 4px ${withAlpha(tileAccent, 0.12)}, 0 8px 24px -8px ${withAlpha(tileAccent, 0.5)}`,
               }}
             >
-              {displayName.slice(0, 1).toUpperCase()}
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                displayName.slice(0, 1).toUpperCase()
+              )}
             </div>
             {speaking ? (
               <VoiceBars participant={trackRef.participant} accent={tileAccent} />

@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  Calendar, Camera, CameraOff, Check, ChevronDown, Clock, Copy, Info, Link as LinkIcon,
-  Loader2, Lock, Mic, MicOff, Monitor, ShieldCheck, User as UserIcon, Video, VideoOff, X,
+  ArrowRight, Calendar, Camera, CameraOff, Check, ChevronDown, Circle, Clock, Copy,
+  ExternalLink, HelpCircle, Info, Loader2, Lock, Mic, MicOff, Monitor, MoreHorizontal,
+  MoreVertical, Settings, ShieldCheck, Sparkles, Triangle, User as UserIcon, Users,
+  Video, VideoOff, X,
 } from 'lucide-react'
 import { api, fetchPublicMeeting, getWsBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { cleanDisplayName, validateDisplayName } from '../features/meeting/guestName'
 import useMediaDevices from '../hooks/useMediaDevices'
 import useAudioLevel from '../hooks/useAudioLevel'
-import LobbyLeaves from '../components/LobbyLeaves'
+import Avatar from '../components/ui/Avatar'
 import Logo from '../components/ui/Logo'
-import { meetingRoomPath, meetingUrl } from '../lib/meetingUrls.js'
+import { cn } from '../lib/cn'
+import { meetingRoomPath, meetingShareText } from '../lib/meetingUrls.js'
 
 /**
- * Meeting pre-join lobby — Google Meet–style.
+ * Meeting pre-join lobby — enterprise "managed workspace" layout.
  *
  * CRITICAL: the <video> element is ALWAYS mounted so `videoRef.current` is
  * stable. Stream attachment happens in a useEffect keyed on `stream`. The
@@ -22,6 +25,11 @@ import { meetingRoomPath, meetingUrl } from '../lib/meetingUrls.js'
  * root cause of the black-preview bug — the conditional render meant the
  * video element didn't exist yet at the moment of assignment, the ref was
  * null, and the stream was never re-attached after the render mounted it.
+ *
+ * ponytail: the "managed workspace" chrome — Confidential Mode copy, policy
+ * banners, stat-tile values, connection quality, host waiting count — is
+ * static presentation matching the approved design, not backend-driven. Wire
+ * to real fields when those features ship server-side.
  */
 
 const PERM = {
@@ -48,13 +56,6 @@ function readJoinPrefs(code) {
   } catch {
     return { audio: true, video: true }
   }
-}
-
-function timeGreeting() {
-  const h = new Date().getHours()
-  if (h < 12) return 'Good morning'
-  if (h < 18) return 'Good afternoon'
-  return 'Good evening'
 }
 
 // "01:23:45" / "04:18" countdown string from a positive millisecond delta.
@@ -109,6 +110,14 @@ export default function MeetLobby() {
   const [waitingStatus, setWaitingStatus] = useState(null)
   const [copied, setCopied] = useState(false)
   const [joining, setJoining] = useState(false)
+  const [devicesOpen, setDevicesOpen] = useState(false)
+  // In-preview control popovers. `barPanel` is which one is open ('effects' |
+  // 'more' | null); `previewBlur` is a real, zero-dependency privacy blur on
+  // the local preview. ponytail: true background segmentation would need a
+  // LiveKit track processor — this blurs the whole frame, which is fine as a
+  // pre-join privacy toggle. Wire to the room's processor when that ships.
+  const [barPanel, setBarPanel] = useState(null)
+  const [previewBlur, setPreviewBlur] = useState(false)
   // Live clock — only ticks while there's a future start time to count down to.
   const [nowTs, setNowTs] = useState(() => Date.now())
 
@@ -450,7 +459,7 @@ export default function MeetLobby() {
 
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(meetingUrl(code))
+      await navigator.clipboard.writeText(meetingShareText(code))
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     } catch {}
@@ -459,9 +468,7 @@ export default function MeetLobby() {
   // Identity for the preview chrome — the signed-in user, or the guest's typed
   // name (falls back to "You" before they type).
   const displayName = isGuest ? (cleanDisplayName(guestName) || 'You') : (user?.name || '')
-  const avatarColor = isGuest ? '#b45309' : (user?.avatar_color || '#0F8A5F')
-  const initial = (displayName || '?').trim().charAt(0).toUpperCase() || '?'
-  const firstName = (user?.name || '').trim().split(/\s+/)[0]
+  const hostName = meeting?.host_name || (isHostSafe(user, meeting) ? user?.name : null) || 'Host'
   const showVideo = permState === PERM.granted && videoOn
 
   // ── Scheduled-start countdown gate (Google-Meet parity) ──────────────
@@ -488,22 +495,20 @@ export default function MeetLobby() {
     !meeting || (needsPassword && !meetingPwd) || permState === PERM.pending || joining || guestNameInvalid || notYetOpen
 
   // ─────────────────────────────────────────────────────────────────
-  // Meeting-unavailable view — metadata fetch failed before anything loaded
-  // (bad/expired code, network). A dedicated screen beats a half-rendered
-  // lobby with an inline error.
+  // Meeting-unavailable view
   // ─────────────────────────────────────────────────────────────────
   if (err && !meeting) {
     return (
-      <Shell>
-        <div className="zk-glass-card zk-dock-enter w-full max-w-md rounded-[24px] bg-[#111A28]/80 p-8 text-center shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#F87171]/15 text-[#F87171] ring-1 ring-[#F87171]/25">
+      <Shell user={user} meeting={null}>
+        <div className="mx-auto mt-8 w-full max-w-md rounded-3xl border border-[#E5E7EB] bg-white p-8 text-center shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)]">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#FEE2E2] text-[#DC2626]">
             <X className="h-7 w-7" />
           </div>
-          <h2 className="mt-5 text-xl font-semibold text-[#F1F5F9]">Meeting unavailable</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-[#94A3B8]">{err}</p>
+          <h2 className="mt-5 text-xl font-bold text-[#111827]">Meeting unavailable</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-[#6B7280]">{err}</p>
           <button
             onClick={() => navigate('/')}
-            className="zk-press mt-6 inline-flex h-11 items-center justify-center rounded-2xl bg-gradient-to-br from-[#10B981] to-[#059669] px-6 text-[14px] font-semibold text-white shadow-[0_12px_30px_-10px_rgba(16,185,129,0.6)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B1220]"
+            className="zk-press mt-6 inline-flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] px-6 text-[14px] font-semibold text-white shadow-[0_12px_30px_-10px_rgba(124,58,237,0.6)]"
           >Back to home</button>
         </div>
       </Shell>
@@ -515,24 +520,26 @@ export default function MeetLobby() {
   // ─────────────────────────────────────────────────────────────────
   if (waitingStatus === 'pending') {
     return (
-      <Shell>
-        <div className="zk-glass-card zk-dock-enter w-full max-w-md rounded-[24px] bg-[#111A28]/80 p-8 text-center shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_12px_30px_-8px_rgba(16,185,129,0.55)]">
+      <Shell user={user} meeting={meeting}>
+        <div className="mx-auto mt-8 w-full max-w-md rounded-3xl border border-[#E5E7EB] bg-white p-8 text-center shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)]">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-[#6D28D9] to-[#7C3AED] text-white shadow-[0_12px_30px_-8px_rgba(124,58,237,0.5)]">
             <Loader2 className="h-7 w-7 animate-spin" />
           </div>
-          <h2 className="mt-5 text-xl font-semibold text-[#F1F5F9]">Asking to be let in</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-[#94A3B8]">
+          <h2 className="mt-5 text-xl font-bold text-[#111827]">Asking to be let in</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-[#6B7280]">
             You'll join automatically once the host lets you in. This usually takes a few seconds.
           </p>
-          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[#10B981]/25 bg-[#10B981]/10 px-3 py-1.5 text-[12px]">
-            <ShieldCheck className="h-3.5 w-3.5 text-[#34D399]" />
-            <span className="text-[#94A3B8]">Code</span>
-            <span className="font-mono font-semibold text-[#F1F5F9]">{code}</span>
+          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[#DDD6FE] bg-[#F5F3FF] px-3 py-1.5 text-[12px]">
+            <ShieldCheck className="h-3.5 w-3.5 text-[#7C3AED]" />
+            <span className="text-[#6B7280]">Code</span>
+            <span className="font-mono font-semibold text-[#111827]">{code}</span>
           </div>
-          <button
-            onClick={cancelWaiting}
-            className="zk-press mt-6 rounded-full bg-white/[0.05] px-5 py-2 text-sm font-medium text-[#E2E8F0] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)] transition hover:bg-white/[0.1] hover:shadow-[inset_0_0_0_1px_rgba(16,185,129,0.4)]"
-          >Cancel</button>
+          <div>
+            <button
+              onClick={cancelWaiting}
+              className="zk-press mt-6 rounded-full border border-[#E5E7EB] bg-white px-5 py-2 text-sm font-medium text-[#374151] transition hover:bg-[#F9FAFB]"
+            >Cancel</button>
+          </div>
         </div>
       </Shell>
     )
@@ -541,316 +548,426 @@ export default function MeetLobby() {
   // ─────────────────────────────────────────────────────────────────
   // Main lobby
   // ─────────────────────────────────────────────────────────────────
-  const meetingLink = meetingUrl(code)
-
   return (
-    <Shell>
-      <div className="zk-dock-enter mx-auto grid w-full max-w-[1240px] grid-cols-1 gap-6 lg:gap-10 lg:grid-cols-[minmax(0,1.86fr)_minmax(0,1fr)] lg:items-stretch">
-        {/* ── Left: device preview (65%) ──────────────────────────── */}
-        <section className="flex min-w-0 flex-col gap-5">
-          <div className="zk-glass-card relative isolate aspect-video w-full overflow-hidden rounded-[20px] bg-[#0A0F18] shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)] sm:rounded-[24px]">
-            {/* Video — ALWAYS mounted so the ref is stable. Visibility is
-                controlled with classes, not conditional rendering. */}
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className={
-                'absolute inset-0 h-full w-full -scale-x-100 object-cover transition-opacity duration-200 ' +
-                (showVideo ? 'opacity-100' : 'opacity-0')
-              }
-            />
+    <Shell user={user} meeting={meeting}>
+      <div className="zk-dock-enter mx-auto w-full max-w-[1320px]">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:items-start">
+          {/* ── Left: device preview ──────────────────────────────── */}
+          <section className="min-w-0">
+            <div className="relative isolate aspect-[4/3] w-full overflow-hidden rounded-[24px] bg-[#0A0F1A] shadow-[0_24px_60px_-28px_rgba(15,23,42,0.5)] ring-1 ring-black/5 sm:aspect-[3/2]">
+              {/* Video — ALWAYS mounted so the ref is stable. */}
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                style={{ filter: previewBlur ? 'blur(14px)' : undefined }}
+                className={
+                  'absolute inset-0 h-full w-full -scale-x-100 object-cover transition-opacity duration-200 ' +
+                  (showVideo ? 'opacity-100' : 'opacity-0')
+                }
+              />
 
-            {/* Cinematic bottom vignette so overlay chrome always reads */}
-            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/55 to-transparent" />
-
-            {/* Fallback layer */}
-            {!showVideo && (
-              <div role="status" aria-live="polite" className="absolute inset-0 grid place-items-center bg-[radial-gradient(120%_120%_at_50%_0%,#13203099,transparent_70%),linear-gradient(180deg,#0E1521,#080C13)]">
-                {permState === PERM.granted && !videoOn && (
-                  <div className="flex flex-col items-center gap-4 text-[#F1F5F9]">
-                    <div
-                      className="grid h-28 w-28 place-items-center rounded-full text-4xl font-semibold text-white shadow-[0_18px_50px_-12px_rgba(0,0,0,0.7)] ring-4 ring-white/10"
-                      style={{ backgroundColor: avatarColor }}
-                    >{initial}</div>
-                    <div className="inline-flex items-center gap-2 rounded-full bg-white/[0.06] px-3 py-1.5 text-[13px] font-medium text-[#94A3B8] ring-1 ring-white/10 backdrop-blur-md">
-                      <CameraOff className="h-4 w-4" /> Camera is off
-                    </div>
-                  </div>
-                )}
-                {permState === PERM.pending && (
-                  <div className="flex flex-col items-center gap-3 text-[#34D399]">
-                    <Loader2 className="h-7 w-7 animate-spin" />
-                    <span className="text-[13px] font-medium text-[#94A3B8]">Starting camera…</span>
-                  </div>
-                )}
-                {permState === PERM.denied && (
-                  <PermError
-                    icon={<CameraOff className="h-7 w-7 text-[#F87171]" />}
-                    title="Camera and mic are blocked"
-                    detail={permDetail}
-                    onRetry={acquire}
-                  />
-                )}
-                {permState === PERM.unavailable && (
-                  <PermError
-                    icon={<Monitor className="h-7 w-7 text-[#94A3B8]" />}
-                    title="Can't reach your camera"
-                    detail={permDetail}
-                    onRetry={acquire}
-                  />
-                )}
-              </div>
-            )}
-
-            {/* Name pill (bottom-left) */}
-            {(user || isGuest) && (
-              <div className="pointer-events-none absolute bottom-4 left-4 flex items-center gap-2 rounded-xl bg-black/45 px-3 py-1.5 text-[12.5px] font-medium text-white shadow-sm ring-1 ring-white/10 backdrop-blur-md">
-                {displayName}{isGuest && <span className="text-white/55">(Guest)</span>}
-              </div>
-            )}
-
-            {/* Audio meter (top-right) — decorative, hidden from AT */}
-            {permState === PERM.granted && (
-              <div aria-hidden="true" className="pointer-events-none absolute top-4 right-4 flex h-8 items-center gap-1.5 rounded-xl bg-black/45 px-2.5 ring-1 ring-white/10 backdrop-blur-md">
-                {audioOn ? <Mic className="h-3.5 w-3.5 text-[#34D399]" /> : <MicOff className="h-3.5 w-3.5 text-[#F87171]" />}
-                <AudioMeter level={audioOn ? audioLevel : 0} />
-              </div>
-            )}
-
-            {/* Mic + Camera toggle pill (center bottom) */}
-            <div className="absolute inset-x-0 bottom-5 flex justify-center">
-              <div className="flex items-center gap-2.5 rounded-full bg-black/55 p-2 shadow-[0_12px_40px_-8px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
-                <ToggleButton
-                  on={audioOn}
-                  onClick={toggleAudio}
-                  disabled={permState !== PERM.granted}
-                  label={audioOn ? 'Turn off microphone' : 'Turn on microphone'}
-                  iconOn={<Mic />}
-                  iconOff={<MicOff />}
+              {/* Dark room ambience when the camera is off */}
+              {!showVideo && (
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 bg-[radial-gradient(130%_120%_at_50%_-10%,#1b2740,transparent_62%),linear-gradient(180deg,#0d1526,#070b13)]"
                 />
-                <ToggleButton
-                  on={videoOn}
-                  onClick={toggleVideo}
-                  disabled={permState !== PERM.granted}
-                  label={videoOn ? 'Turn off camera' : 'Turn on camera'}
-                  iconOn={<Video />}
-                  iconOff={<VideoOff />}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Device pickers (below preview) */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <DevicePicker
-              label="Microphone"
-              icon={<Mic className="h-4 w-4" />}
-              devices={devices.audio}
-              value={audioDeviceId}
-              onChange={setAudioDeviceId}
-              disabled={permState !== PERM.granted}
-              fallbackLabel="Default microphone"
-            />
-            <DevicePicker
-              label="Camera"
-              icon={<Camera className="h-4 w-4" />}
-              devices={devices.video}
-              value={videoDeviceId}
-              onChange={setVideoDeviceId}
-              disabled={permState !== PERM.granted}
-              fallbackLabel="Default camera"
-            />
-          </div>
-
-          {/* Keyboard hint — desktop only (touch devices have no modifier keys) */}
-          <p className="hidden items-center justify-center gap-1.5 text-[12px] text-[#7A8AA0] sm:flex">
-            <Kbd>Ctrl</Kbd><span className="text-[#4B586B]">/</span><Kbd>⌘</Kbd>
-            <span className="ml-0.5">+</span><Kbd>D</Kbd>
-            <span className="mx-1 text-[#39465A]">·</span> mic
-            <span className="mx-2 text-[#39465A]">|</span>
-            <Kbd>Ctrl</Kbd><span className="text-[#4B586B]">/</span><Kbd>⌘</Kbd>
-            <span className="ml-0.5">+</span><Kbd>E</Kbd>
-            <span className="mx-1 text-[#39465A]">·</span> camera
-          </p>
-        </section>
-
-        {/* ── Right: meeting info panel (35%) ─────────────────────── */}
-        <aside className="zk-glass-card flex min-w-0 flex-col justify-center rounded-[24px] bg-[#111A28]/75 p-5 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)] backdrop-blur-2xl sm:p-8">
-          <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[#34D399]">
-            {isGuest ? 'Joining as guest' : (firstName ? `${timeGreeting()}, ${firstName}` : 'Ready to join')}
-          </span>
-          {meeting ? (
-            <h1
-              style={{ color: '#F8FAFC', WebkitTextFillColor: '#F8FAFC' }}
-              className="mt-2 text-[26px] font-bold leading-[1.1] tracking-tight sm:text-[40px]"
-            >
-              {meeting.title || 'Meeting'}
-            </h1>
-          ) : (
-            <div className="skeleton mt-3 h-9 w-3/4 rounded-lg sm:h-11" aria-hidden="true" />
-          )}
-          {meeting?.description && (
-            <p className="mt-3 text-[15px] leading-relaxed text-[#94A3B8]">{meeting.description}</p>
-          )}
-          {user && (
-            <p className="mt-3 text-[14px] text-[#94A3B8]">
-              Joining as <span className="font-semibold text-[#E2E8F0]">{user.name}</span>
-            </p>
-          )}
-          {isGuest && meeting?.host_name && (
-            <p className="mt-3 text-[14px] text-[#94A3B8]">
-              Hosted by <span className="font-semibold text-[#E2E8F0]">{meeting.host_name}</span>
-            </p>
-          )}
-
-          {/* Guest display-name entry (anonymous join) */}
-          {isGuest && (
-            <div className="mt-5">
-              <label htmlFor="guest-name" className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8696A7]">
-                Your name
-              </label>
-              <div className="zk-field mt-2 flex items-center gap-2 rounded-2xl px-3 py-2.5">
-                <UserIcon className="h-4 w-4 shrink-0 text-[#8696A7]" />
-                <input
-                  id="guest-name"
-                  type="text"
-                  inputMode="text"
-                  maxLength={60}
-                  placeholder="Enter your name"
-                  value={guestName}
-                  onChange={(e) => { setGuestName(e.target.value); if (nameError) setNameError('') }}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !joinDisabled) join() }}
-                  autoComplete="name"
-                  aria-invalid={!!nameError}
-                  aria-describedby={nameError ? 'guest-name-error' : undefined}
-                  className="min-w-0 flex-1 bg-transparent text-sm text-[#F1F5F9] outline-none placeholder:text-[#5B6878]"
-                />
-              </div>
-              {nameError && (
-                <p id="guest-name-error" role="alert" className="mt-1.5 text-[12px] font-medium text-[#F87171]">{nameError}</p>
               )}
-              <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-[#94A3B8]">
-                <input
-                  type="checkbox"
-                  checked={rememberName}
-                  onChange={(e) => setRememberName(e.target.checked)}
-                  className="h-4 w-4 rounded border-white/20 bg-transparent text-[#10B981] focus:ring-[#10B981]/40"
-                />
-                Remember my name on this device
-              </label>
-            </div>
-          )}
+              <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/60 to-transparent" />
 
-          {meeting?.scheduled_at && (
-            <div className="mt-5 inline-flex w-fit items-center gap-2 rounded-full border border-[#10B981]/25 bg-[#10B981]/10 px-3 py-1.5 text-[12.5px] text-[#E2E8F0]">
-              <Calendar className="h-3.5 w-3.5 text-[#34D399]" />
-              {new Date(meeting.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
-              {meeting.timezone_name ? ` · ${meeting.timezone_name}` : ''}
-            </div>
-          )}
-
-          {/* Countdown to the scheduled start. Non-hosts can't join until 5 min
-              before; the host sees the countdown but keeps an enabled button. */}
-          {showCountdown && (
-            <div className="mt-4 rounded-2xl border border-[#10B981]/20 bg-[#10B981]/[0.07] p-4 text-center">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#34D399]">
-                Meeting starts in
+              {/* Top-left workspace chip */}
+              <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-xl bg-black/45 px-3 py-1.5 text-[13px] font-medium text-white ring-1 ring-white/10 backdrop-blur-md">
+                <span className="grid h-5 w-5 place-items-center rounded-md bg-[#10B981]">
+                  <Triangle className="h-3 w-3 text-white" fill="currentColor" />
+                </span>
+                Zoiko Group
               </div>
-              <div className="mt-1.5 font-mono text-[30px] font-bold leading-none tabular-nums text-[#F1F5F9] sm:text-[34px]">
-                {formatCountdown(msToStart)}
-              </div>
-              <div className="mt-2 text-[12px] text-[#94A3B8]">
-                {notYetOpen
-                  ? 'You can join from 5 minutes before the start time.'
-                  : isHost
-                    ? 'You can open the room now — attendees can join too.'
-                    : 'Join is open — come on in.'}
+
+              {/* Top-right overflow */}
+              <button
+                type="button"
+                aria-label="More options"
+                className="absolute right-4 top-4 grid h-9 w-9 place-items-center rounded-full bg-black/45 text-white ring-1 ring-white/10 backdrop-blur-md transition hover:bg-black/60"
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+
+              {/* Center state (camera off / starting / errors) */}
+              {!showVideo && (
+                <div role="status" aria-live="polite" className="absolute inset-x-0 top-0 bottom-36 grid place-items-center px-4 sm:bottom-40">
+                  {permState === PERM.granted && !videoOn && (
+                    <div className="flex flex-col items-center text-center">
+                      <div className="grid h-24 w-24 place-items-center rounded-full ring-2 ring-[#7C3AED]/70">
+                        <VideoOff className="h-9 w-9 text-[#A78BFA]" />
+                      </div>
+                      <div className="mt-4 text-[22px] font-semibold text-white">Camera off</div>
+                      <div className="mt-1 text-[13.5px] text-white/60">Your camera will stay off when you enter.</div>
+                      <button
+                        type="button"
+                        onClick={toggleVideo}
+                        className="zk-press mt-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-[13.5px] font-semibold text-[#C4B5FD] ring-1 ring-white/15 backdrop-blur transition hover:bg-white/15"
+                      >
+                        <Video className="h-4 w-4" /> Turn on camera
+                      </button>
+                    </div>
+                  )}
+                  {permState === PERM.pending && (
+                    <div className="flex flex-col items-center gap-3 text-[#A78BFA]">
+                      <Loader2 className="h-7 w-7 animate-spin" />
+                      <span className="text-[13px] font-medium text-white/60">Starting camera…</span>
+                    </div>
+                  )}
+                  {permState === PERM.denied && (
+                    <PermError
+                      icon={<CameraOff className="h-7 w-7 text-[#F87171]" />}
+                      title="Camera and mic are blocked"
+                      detail={permDetail}
+                      onRetry={acquire}
+                    />
+                  )}
+                  {permState === PERM.unavailable && (
+                    <PermError
+                      icon={<Monitor className="h-7 w-7 text-white/70" />}
+                      title="Can't reach your camera"
+                      detail={permDetail}
+                      onRetry={acquire}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Name pill (bottom-left) while previewing video */}
+              {showVideo && (user || isGuest) && (
+                <div className="pointer-events-none absolute bottom-24 left-4 flex items-center gap-1.5 rounded-xl bg-black/45 px-3 py-1.5 text-[12.5px] font-medium text-white ring-1 ring-white/10 backdrop-blur-md">
+                  {displayName}{isGuest && <span className="text-white/55">(Guest)</span>}
+                </div>
+              )}
+
+              {/* Bottom overlay: control bar + connection quality */}
+              <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2.5 p-3 sm:p-4">
+                <div className="relative flex w-fit items-center gap-0.5 rounded-2xl bg-black/55 p-1.5 ring-1 ring-white/10 backdrop-blur-xl">
+                  {/* Click-away backdrop for the popovers */}
+                  {barPanel && (
+                    <button
+                      type="button"
+                      aria-label="Close menu"
+                      className="fixed inset-0 z-0 cursor-default"
+                      onClick={() => setBarPanel(null)}
+                    />
+                  )}
+
+                  {barPanel === 'effects' && (
+                    <BarPopover>
+                      <PopoverHeading>Effects</PopoverHeading>
+                      <MenuItem active={!previewBlur} onClick={() => { setPreviewBlur(false); setBarPanel(null) }}>
+                        No effect
+                      </MenuItem>
+                      <MenuItem active={previewBlur} onClick={() => { setPreviewBlur(true); setBarPanel(null) }}>
+                        Blur my video
+                      </MenuItem>
+                    </BarPopover>
+                  )}
+
+                  {barPanel === 'more' && (
+                    <BarPopover>
+                      <MenuItem onClick={() => { copyLink(); setBarPanel(null) }}>
+                        <Copy className="h-4 w-4" /> {copied ? 'Link copied' : 'Copy invite link'}
+                      </MenuItem>
+                      <div className="my-1 h-px bg-white/10" />
+                      <PopoverHeading>Keyboard shortcuts</PopoverHeading>
+                      <ShortcutRow keys="Ctrl / ⌘ + D" label="Toggle mic" />
+                      <ShortcutRow keys="Ctrl / ⌘ + E" label="Toggle camera" />
+                    </BarPopover>
+                  )}
+
+                  <ControlItem
+                    icon={audioOn ? <Mic /> : <MicOff />}
+                    label="Mic"
+                    value={audioOn ? 'On' : 'Off'}
+                    active={audioOn}
+                    onClick={toggleAudio}
+                    disabled={permState !== PERM.granted}
+                    extra={audioOn && permState === PERM.granted ? <AudioMeter level={audioLevel} /> : null}
+                  />
+                  <ControlItem
+                    icon={videoOn ? <Video /> : <CameraOff />}
+                    label="Camera"
+                    value={videoOn ? 'On' : 'Off'}
+                    active={videoOn}
+                    onClick={toggleVideo}
+                    disabled={permState !== PERM.granted}
+                  />
+                  <span className="mx-1 h-8 w-px bg-white/10" />
+                  <ControlItem
+                    icon={<Monitor />}
+                    label="Devices"
+                    value="All good"
+                    valueClass="text-[#34D399]"
+                    onClick={() => { setBarPanel(null); setDevicesOpen((v) => !v) }}
+                  />
+                  <ControlItem
+                    icon={<Sparkles />}
+                    label="Effects"
+                    value={previewBlur ? 'Blur' : 'None'}
+                    onClick={() => setBarPanel((p) => (p === 'effects' ? null : 'effects'))}
+                  />
+                  <ControlItem
+                    icon={<MoreHorizontal />}
+                    label="More"
+                    hasChevron={false}
+                    onClick={() => setBarPanel((p) => (p === 'more' ? null : 'more'))}
+                  />
+                </div>
+
+                <div className="flex items-center gap-2.5 rounded-2xl bg-white/95 px-3.5 py-2 text-[12.5px] shadow-[0_10px_30px_-14px_rgba(0,0,0,0.5)] backdrop-blur">
+                  <SignalBars />
+                  <span className="font-semibold text-[#111827]">Strong connection</span>
+                  <span className="font-medium text-[#059669]">HD available</span>
+                  <span className="ml-auto hidden text-[#6B7280] sm:inline">Your network supports high quality video.</span>
+                  <Info className="h-3.5 w-3.5 shrink-0 text-[#9CA3AF]" />
+                </div>
               </div>
             </div>
-          )}
+          </section>
 
-          {meeting?.waiting_room_enabled && (isGuest || meeting?.host_id !== user?.id) && (
-            <div className="mt-5 flex items-start gap-2.5 rounded-2xl border border-[#F59E0B]/25 bg-[#F59E0B]/10 p-3 text-left text-[12.5px] text-[#FCD34D]">
-              <Info className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>This meeting uses a waiting room — the host will let you in.</span>
+          {/* ── Right: meeting info card ───────────────────────────── */}
+          <aside className="min-w-0 rounded-[24px] border border-[#E5E7EB] bg-white p-5 shadow-[0_24px_60px_-34px_rgba(15,23,42,0.3)] sm:p-6">
+            {meeting ? (
+              <h1 className="text-[24px] font-bold leading-tight tracking-tight text-[#111827] sm:text-[26px]">
+                {meeting.title || 'Meeting'}
+              </h1>
+            ) : (
+              <div className="skeleton h-8 w-3/4 rounded-lg" aria-hidden="true" />
+            )}
+
+            {/* Host + waiting count */}
+            <div className="mt-4 flex items-center gap-3">
+              <Avatar name={hostName} src={meeting?.host_avatar_url} size="md" />
+              <div className="min-w-0">
+                <div className="truncate text-[14px] font-semibold text-[#111827]">Host: {hostName}</div>
+                <div className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[#6B7280]">
+                  <Users className="h-3.5 w-3.5" /> 3 people waiting
+                </div>
+              </div>
             </div>
-          )}
 
-          {needsPassword && (
-            <div className="mt-5">
-              <div className="zk-field flex items-center gap-2 rounded-2xl px-3 py-2.5">
-                <Lock className="h-4 w-4 shrink-0 text-[#8696A7]" />
+            {meeting?.description && (
+              <p className="mt-3 text-[13.5px] leading-relaxed text-[#6B7280]">{meeting.description}</p>
+            )}
+
+            <div className="my-4 h-px bg-[#EEF0F3]" />
+
+            {/* Confidential Mode */}
+            <div className="relative rounded-2xl bg-[#F5F3FF] p-4 ring-1 ring-[#E7E0FB]">
+              <Info className="absolute right-3 top-3 h-4 w-4 text-[#A78BFA]" />
+              <div className="flex items-start gap-2.5">
+                <Lock className="mt-0.5 h-5 w-5 shrink-0 text-[#7C3AED]" />
+                <div className="pr-5">
+                  <div className="text-[14px] font-bold text-[#6D28D9]">Confidential Mode</div>
+                  <div className="mt-1 text-[12.5px] leading-relaxed text-[#6B7280]">
+                    End-to-end encrypted. AI notes, cloud recording, and phone dial-in are disabled.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {meeting?.scheduled_at && (
+              <div className="mt-3 inline-flex w-fit items-center gap-2 rounded-full border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-1.5 text-[12.5px] text-[#374151]">
+                <Calendar className="h-3.5 w-3.5 text-[#7C3AED]" />
+                {new Date(meeting.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                {meeting.timezone_name ? ` · ${meeting.timezone_name}` : ''}
+              </div>
+            )}
+
+            {/* Scheduled-start countdown */}
+            {showCountdown && (
+              <div className="mt-4 rounded-2xl border border-[#DDD6FE] bg-[#F5F3FF] p-4 text-center">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7C3AED]">Meeting starts in</div>
+                <div className="mt-1.5 font-mono text-[30px] font-bold leading-none tabular-nums text-[#111827]">
+                  {formatCountdown(msToStart)}
+                </div>
+                <div className="mt-1.5 text-[12px] text-[#6B7280]">
+                  {notYetOpen
+                    ? 'You can join from 5 minutes before the start time.'
+                    : isHost
+                      ? 'You can open the room now — attendees can join too.'
+                      : 'Join is open — come on in.'}
+                </div>
+              </div>
+            )}
+
+            {/* Guest display-name entry */}
+            {isGuest && (
+              <div className="mt-4">
+                <label htmlFor="guest-name" className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#6B7280]">
+                  Your name
+                </label>
+                <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-3 py-2.5 focus-within:border-[#7C3AED] focus-within:ring-2 focus-within:ring-[#7C3AED]/20">
+                  <UserIcon className="h-4 w-4 shrink-0 text-[#9CA3AF]" />
+                  <input
+                    id="guest-name"
+                    type="text"
+                    inputMode="text"
+                    maxLength={60}
+                    placeholder="Enter your name"
+                    value={guestName}
+                    onChange={(e) => { setGuestName(e.target.value); if (nameError) setNameError('') }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !joinDisabled) join() }}
+                    autoComplete="name"
+                    aria-invalid={!!nameError}
+                    aria-describedby={nameError ? 'guest-name-error' : undefined}
+                    className="min-w-0 flex-1 bg-transparent text-sm text-[#111827] outline-none placeholder:text-[#9CA3AF]"
+                  />
+                </div>
+                {nameError && (
+                  <p id="guest-name-error" role="alert" className="mt-1.5 text-[12px] font-medium text-[#DC2626]">{nameError}</p>
+                )}
+                <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12.5px] text-[#6B7280]">
+                  <input
+                    type="checkbox"
+                    checked={rememberName}
+                    onChange={(e) => setRememberName(e.target.checked)}
+                    className="h-4 w-4 rounded border-[#D1D5DB] text-[#7C3AED] focus:ring-[#7C3AED]/40"
+                  />
+                  Remember my name on this device
+                </label>
+              </div>
+            )}
+
+            {needsPassword && (
+              <div className="mt-4 flex items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-3 py-2.5 focus-within:border-[#7C3AED] focus-within:ring-2 focus-within:ring-[#7C3AED]/20">
+                <Lock className="h-4 w-4 shrink-0 text-[#9CA3AF]" />
                 <input
                   type="password"
                   placeholder="Enter meeting password"
                   value={meetingPwd}
                   onChange={(e) => setMeetingPwd(e.target.value)}
                   autoComplete="off"
-                  className="min-w-0 flex-1 bg-transparent text-sm text-[#F1F5F9] outline-none placeholder:text-[#5B6878]"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[#111827] outline-none placeholder:text-[#9CA3AF]"
                 />
               </div>
-            </div>
-          )}
+            )}
 
-          {err && (
-            <div role="alert" className="mt-5 flex items-start gap-2.5 rounded-2xl border border-[#F87171]/25 bg-[#F87171]/10 p-3 text-left text-[12.5px] text-[#FCA5A5]">
-              <X className="mt-0.5 h-4 w-4 shrink-0" />
-              <span className="font-medium">{err}</span>
-            </div>
-          )}
+            {meeting?.waiting_room_enabled && (isGuest || meeting?.host_id !== user?.id) && (
+              <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-[#F5E4C0] bg-[#FDF7EC] p-3 text-[12.5px] text-[#8A6516]">
+                <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>This meeting uses a waiting room — the host will let you in.</span>
+              </div>
+            )}
 
-          {/* Action buttons */}
-          <div className="mt-6 flex flex-col gap-3">
+            {err && (
+              <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] p-3 text-[12.5px] text-[#DC2626]">
+                <X className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="font-medium">{err}</span>
+              </div>
+            )}
+
+            {/* Join */}
             <button
               onClick={join}
               disabled={joinDisabled}
               aria-busy={joining}
-              className="zk-press zk-sheen inline-flex h-14 items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-[#4F46E5] via-[#6D28D9] to-[#9333EA] px-6 text-[15px] font-semibold text-white shadow-[0_16px_36px_-12px_rgba(124,58,237,0.7),inset_0_1px_0_rgba(255,255,255,0.22)] transition hover:from-[#6366F1] hover:via-[#7C3AED] hover:to-[#A855F7] hover:shadow-[0_20px_48px_-12px_rgba(124,58,237,0.85)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B1220] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+              className="zk-press zk-sheen mt-4 flex h-14 w-full items-center justify-between rounded-2xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] px-6 text-[15px] font-semibold text-white shadow-[0_16px_36px_-14px_rgba(124,58,237,0.7)] transition hover:from-[#5B21B6] hover:to-[#6D28D9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
-              {joining
-                ? <><Loader2 className="h-[18px] w-[18px] animate-spin" /> Joining…</>
-                : <><Video className="h-[18px] w-[18px]" /> Join Meeting</>}
+              <span className="flex items-center gap-2">
+                {joining && <Loader2 className="h-[18px] w-[18px] animate-spin" />}
+                {joining ? 'Joining…' : 'Join meeting'}
+              </span>
+              {!joining && <ArrowRight className="h-5 w-5" />}
             </button>
+
+            {/* Options */}
             <button
-              onClick={() => navigate('/')}
-              className="zk-press inline-flex h-14 items-center justify-center rounded-2xl bg-white/[0.05] px-6 text-[15px] font-semibold text-[#CBD5E1] shadow-[0_2px_12px_-6px_rgba(0,0,0,0.6)] transition hover:bg-white/[0.09] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/15"
-            >Cancel</button>
-          </div>
+              type="button"
+              onClick={() => setDevicesOpen((v) => !v)}
+              aria-expanded={devicesOpen}
+              className="zk-press mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-[#E5E7EB] bg-white text-[14px] font-semibold text-[#374151] transition hover:bg-[#F9FAFB]"
+            >
+              <Settings className="h-4 w-4" /> Options
+              <ChevronDown className={'h-4 w-4 transition-transform ' + (devicesOpen ? 'rotate-180' : '')} />
+            </button>
 
-          {/* Share link */}
-          <div className="mt-6">
-            <div className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8696A7]">Meeting link</div>
-            <div className="zk-field mt-2 flex items-center gap-2 rounded-2xl py-1.5 pl-3 pr-1.5">
-              <LinkIcon className="h-4 w-4 shrink-0 text-[#34D399]" />
-              <code className="min-w-0 flex-1 truncate text-left font-mono text-[12.5px] text-[#94A3B8]">
-                {meetingLink}
-              </code>
-              <button
-                onClick={copyLink}
-                aria-label={copied ? 'Link copied' : 'Copy meeting link'}
-                className={
-                  'zk-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-3 text-[12.5px] font-semibold transition ' +
-                  (copied
-                    ? 'bg-[#10B981] text-white shadow-[0_6px_16px_-6px_rgba(16,185,129,0.7)]'
-                    : 'bg-white/[0.07] text-[#E2E8F0] hover:bg-white/[0.12] hover:text-white')
-                }
-              >
-                {copied ? <><Check className="h-3.5 w-3.5" /> Copied</> : <><Copy className="h-3.5 w-3.5" /> Copy</>}
-              </button>
+            {devicesOpen && (
+              <div className="mt-3 space-y-2.5 rounded-2xl border border-[#E5E7EB] bg-[#F9FAFB] p-3">
+                <DevicePicker
+                  label="Microphone"
+                  icon={<Mic className="h-4 w-4" />}
+                  devices={devices.audio}
+                  value={audioDeviceId}
+                  onChange={setAudioDeviceId}
+                  disabled={permState !== PERM.granted}
+                  fallbackLabel="Default microphone"
+                />
+                <DevicePicker
+                  label="Camera"
+                  icon={<Camera className="h-4 w-4" />}
+                  devices={devices.video}
+                  value={videoDeviceId}
+                  onChange={setVideoDeviceId}
+                  disabled={permState !== PERM.granted}
+                  fallbackLabel="Default camera"
+                />
+              </div>
+            )}
+
+            <div className="mt-2 text-center text-[12px] text-[#9CA3AF]">audio only · present · dial in</div>
+
+            {/* Stat tiles */}
+            <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-[#E5E7EB] bg-[#E5E7EB] sm:grid-cols-4">
+              <StatTile icon={<Sparkles />} iconClass="text-[#7C3AED]" label="AI notes" value="Off · E2EE" />
+              <StatTile icon={<Circle />} iconClass="text-[#059669]" label="Recording" value="Off" />
+              <StatTile icon={<Users />} iconClass="text-[#EA580C]" label="Guests" value="1 external" />
+              <StatTile icon={<ShieldCheck />} iconClass="text-[#059669]" label="Admission" value="Not required" />
             </div>
-            <span className="sr-only" role="status" aria-live="polite">
-              {copied ? 'Meeting link copied to clipboard' : ''}
-            </span>
-          </div>
 
-          {/* Trust signal */}
-          <div className="mt-5 flex items-center gap-2 text-[12px] text-[#7A8AA0]">
-            <ShieldCheck className="h-4 w-4 shrink-0 text-[#34D399]" />
-            <span>Secured by Zoiko · your camera and mic stay private until you join.</span>
-          </div>
-        </aside>
+            <button
+              type="button"
+              onClick={copyLink}
+              className="zk-press mt-3 inline-flex w-full items-center justify-center gap-1.5 text-[12.5px] font-medium text-[#6B7280] transition hover:text-[#7C3AED]"
+            >
+              {copied ? <><Check className="h-3.5 w-3.5" /> Link copied</> : <><Copy className="h-3.5 w-3.5" /> Copy invite link</>}
+            </button>
+            <span className="sr-only" role="status" aria-live="polite">{copied ? 'Meeting link copied to clipboard' : ''}</span>
+          </aside>
+        </div>
+
+        {/* ── Managed-workspace policy banners ────────────────────── */}
+        <div className="mt-4 space-y-2.5">
+          <Banner
+            tone="amber"
+            icon={<ShieldCheck className="text-[#B45309]" />}
+            bold="Managed under Zoiko Group policy."
+            text="Confidential Mode is enforced. Break-glass audit available to admins."
+            action={<span className="inline-flex items-center gap-1 font-semibold text-[#C2410C] hover:underline">View policy <ExternalLink className="h-3 w-3" /></span>}
+          />
+          <Banner
+            tone="teal"
+            icon={<ShieldCheck className="text-[#0F766E]" />}
+            bold="Workspace-protected meeting."
+            text="Zoiko Sema never stores meeting content in Confidential Mode."
+            action={<span className="inline-flex items-center gap-1 font-semibold text-[#0F766E] hover:underline">Trust Center <ExternalLink className="h-3 w-3" /></span>}
+          />
+          <Banner
+            tone="violet"
+            icon={<Sparkles className="text-[#7C3AED]" />}
+            bold="Sema will draft follow-ups and action items"
+            text="for you after the meeting."
+            action={(
+              <span className="inline-flex items-center gap-2">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#ECFDF5] text-[#059669]">
+                  <Clock className="h-4 w-4" />
+                </span>
+                <span className="leading-tight text-left">
+                  <span className="block text-[11px] text-[#9CA3AF]">Connected to</span>
+                  <span className="block font-semibold text-[#1F2937]">ZoikoTime</span>
+                </span>
+                <ExternalLink className="h-3 w-3 text-[#9CA3AF]" />
+              </span>
+            )}
+          />
+        </div>
       </div>
     </Shell>
   )
@@ -860,108 +977,184 @@ export default function MeetLobby() {
 // Sub-components
 // ────────────────────────────────────────────────────────────────────────
 
-function Shell({ children }) {
+// Guard used in a field initializer above where `isHost` isn't computed yet.
+function isHostSafe(user, meeting) {
+  return !!(user && meeting && meeting.host_id === user.id)
+}
+
+function Shell({ user, meeting, children }) {
   return (
-    <div
-      className="zk-lobby-root relative flex min-h-dvh flex-col overflow-x-hidden text-[#E2E8F0]"
-      style={{
-        background:
-          'radial-gradient(1200px 640px at 85% -12%, rgba(16,185,129,0.16), transparent 60%),' +
-          'radial-gradient(960px 560px at -8% 112%, rgba(5,150,105,0.13), transparent 58%),' +
-          'linear-gradient(135deg, #070B12 0%, #0B1220 52%, #0A1018 100%)',
-      }}
-    >
-      <LobbyLeaves />
+    <div className="relative flex min-h-dvh flex-col bg-[#F3F4F6] text-[#1F2937]">
       <header
-        className="zk-fade-divider relative z-10 flex h-14 shrink-0 items-center justify-between bg-white/[0.02] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl sm:px-6"
+        className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-[#E5E7EB] bg-white/90 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl sm:px-6"
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
       >
-        <div className="flex items-center gap-2">
-          <Logo size={30} withWordmark />
+        <div className="flex min-w-0 items-center gap-3 sm:gap-5">
+          <Logo size={32} withWordmark />
+          {meeting && (
+            <div className="hidden min-w-0 border-l border-[#E5E7EB] pl-3 sm:block sm:pl-5">
+              <div className="truncate text-[15px] font-bold text-[#111827]">{meeting.title || 'Meeting'}</div>
+              <div className="mt-0.5 flex items-center gap-2 text-[12px] text-[#6B7280]">
+                <span className="inline-flex items-center gap-1">
+                  Zoiko Group Workspace <ShieldCheck className="h-3.5 w-3.5 text-[#059669]" />
+                </span>
+                <span className="rounded-md bg-[#EEF2FF] px-1.5 py-0.5 text-[11px] font-medium text-[#4F46E5]">Managed by Zoiko Group</span>
+              </div>
+            </div>
+          )}
         </div>
-        <div className="inline-flex items-center gap-1.5 text-[12.5px] text-[#8696A7]">
-          <Clock className="h-3.5 w-3.5" />
-          {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        <div className="flex items-center gap-3 sm:gap-5">
+          <button type="button" className="hidden items-center gap-1.5 text-[13px] font-medium text-[#4B5563] transition hover:text-[#111827] sm:inline-flex">
+            <HelpCircle className="h-4 w-4" /> Help
+          </button>
+          {user && (
+            <div className="flex items-center gap-2">
+              <Avatar name={user.name} src={user.avatar_url} color={user.avatar_color} size="sm" />
+              <div className="hidden leading-tight sm:block">
+                <div className="text-[13px] font-semibold text-[#111827]">{user.name}</div>
+                <div className="text-[11.5px] text-[#6B7280]">{user.email}</div>
+              </div>
+              <ChevronDown className="hidden h-4 w-4 text-[#9CA3AF] sm:block" />
+            </div>
+          )}
         </div>
       </header>
-      <main className="relative z-10 flex flex-1 items-start justify-center py-6 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:items-center sm:px-8 sm:py-12 lg:px-12">
+      <main className="relative flex flex-1 flex-col items-center px-3 py-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-8">
         {children}
       </main>
     </div>
   )
 }
 
-function Kbd({ children }) {
-  return (
-    <kbd className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-md bg-white/[0.05] px-1.5 font-sans text-[11px] font-semibold text-[#B7C2D0] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),inset_0_-1px_0_rgba(0,0,0,0.3)]">
-      {children}
-    </kbd>
-  )
-}
-
-// Production-grade media toggles. On = a refined near-black control with a white
-// glyph and a faint emerald edge (matches the in-room dock). Off = a solid
-// danger fill so a muted mic / stopped camera reads instantly, Google-Meet style.
-// Motion lives in the `.zk-media-btn` utility (spring scale + expanding glow
-// ring) so the press feels instant and fluid, uiverse-style — the per-state
-// glow colour is handed in via the --zk-btn-glow custom property.
-function ToggleButton({ on, onClick, disabled, label, iconOn, iconOff }) {
-  const onPalette =
-    'bg-[#161D29] text-white ring-1 ring-inset ring-white/12 hover:bg-[#1C2533] ' +
-    'shadow-[0_8px_22px_-10px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.07)]'
-  const offPalette =
-    'bg-[#EF4444] text-white ring-1 ring-inset ring-white/15 hover:bg-[#F05252] ' +
-    'shadow-[0_10px_26px_-10px_rgba(239,68,68,0.7),inset_0_1px_0_rgba(255,255,255,0.2)]'
+// One control in the in-preview bar: circular glyph + label/value stack. On
+// mobile the label collapses to just the glyph. `active` = white fill (like
+// image 2's "Mic On"); otherwise a translucent dark chip.
+function ControlItem({ icon, label, value, valueClass, active, onClick, disabled, hasChevron = true, extra }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
-      aria-label={label}
-      title={label}
-      aria-pressed={!on}
-      style={{ '--zk-btn-glow': on ? 'rgba(16,185,129,0.55)' : 'rgba(239,68,68,0.6)' }}
-      className={
-        'zk-media-btn grid h-[54px] w-[54px] place-items-center rounded-full disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-[22px] [&_svg]:w-[22px] [&_svg]:transition-transform [&_svg]:duration-200 active:[&_svg]:scale-90 ' +
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0A0F18] ' +
-        (on ? onPalette : offPalette)
-      }
-    >{on ? iconOn : iconOff}</button>
+      className="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-left transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <span className={cn(
+        'grid h-9 w-9 shrink-0 place-items-center rounded-full [&_svg]:h-[18px] [&_svg]:w-[18px]',
+        active ? 'bg-white text-[#0A0F1A]' : 'bg-white/12 text-white',
+      )}>{icon}</span>
+      <span className="hidden leading-tight sm:block">
+        <span className="block text-[12.5px] font-semibold text-white">{label}</span>
+        {(value || extra) && (
+          <span className={cn('flex items-center gap-1 text-[11px]', valueClass || 'text-white/55')}>
+            {extra}{value}{hasChevron && value && <ChevronDown className="h-3 w-3" />}
+          </span>
+        )}
+      </span>
+    </button>
   )
 }
 
+// Tiny live input meter shown inside the Mic control while unmuted.
 function AudioMeter({ level }) {
   return (
-    <div className="flex h-3 items-end gap-0.5">
-      {Array.from({ length: 5 }).map((_, i) => {
-        const threshold = (i + 1) / 5
-        const active = level >= threshold * 0.9
-        const h = 4 + i * 1.5
+    <span aria-hidden="true" className="flex h-3 items-end gap-0.5">
+      {Array.from({ length: 4 }).map((_, i) => {
+        const active = level >= ((i + 1) / 4) * 0.9
         return (
           <span
             key={i}
-            style={{ height: `${h}px`, opacity: active ? 1 : 0.3 }}
-            className={
-              'w-0.5 rounded-full transition-opacity ' +
-              (i >= 4 && active ? 'bg-[#F87171]' : 'bg-[#34D399]')
-            }
+            style={{ height: `${4 + i * 2}px`, opacity: active ? 1 : 0.3 }}
+            className="w-0.5 rounded-full bg-[#34D399]"
           />
         )
       })}
+    </span>
+  )
+}
+
+// Dark popover anchored above the in-preview control bar (Effects / More).
+function BarPopover({ children }) {
+  return (
+    <div className="absolute bottom-[calc(100%+10px)] left-0 z-10 w-56 rounded-2xl bg-[#111827] p-1.5 text-white shadow-[0_20px_50px_-16px_rgba(0,0,0,0.8)] ring-1 ring-white/10">
+      {children}
+    </div>
+  )
+}
+
+function PopoverHeading({ children }) {
+  return <div className="px-2.5 py-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-white/40">{children}</div>
+}
+
+function MenuItem({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium text-white/90 transition hover:bg-white/10"
+    >
+      <span className="flex flex-1 items-center gap-2">{children}</span>
+      {active && <Check className="h-4 w-4 text-[#34D399]" />}
+    </button>
+  )
+}
+
+function ShortcutRow({ keys, label }) {
+  return (
+    <div className="flex items-center justify-between px-2.5 py-1.5 text-[12px] text-white/70">
+      <span>{label}</span>
+      <span className="font-mono text-[11px] text-white/45">{keys}</span>
+    </div>
+  )
+}
+
+function SignalBars() {
+  return (
+    <span aria-hidden="true" className="flex items-end gap-0.5">
+      {[6, 9, 12, 15].map((h, i) => (
+        <span key={i} style={{ height: `${h}px` }} className="w-1 rounded-sm bg-[#10B981]" />
+      ))}
+    </span>
+  )
+}
+
+function StatTile({ icon, iconClass, label, value }) {
+  return (
+    <div className="bg-white px-3 py-3 text-center">
+      <div className={cn('mx-auto grid h-6 w-6 place-items-center [&_svg]:h-4 [&_svg]:w-4', iconClass)}>{icon}</div>
+      <div className="mt-1.5 text-[12px] font-semibold text-[#374151]">{label}</div>
+      <div className="text-[11px] text-[#9CA3AF]">{value}</div>
+    </div>
+  )
+}
+
+const BANNER_TONES = {
+  amber: 'border-[#F5E4C0] bg-[#FDF7EC]',
+  teal: 'border-[#BBE7D6] bg-[#ECFDF5]',
+  violet: 'border-[#E7E0FB] bg-[#F5F3FF]',
+}
+
+function Banner({ tone, icon, bold, text, action }) {
+  return (
+    <div className={cn('flex items-center gap-3 rounded-2xl border px-4 py-3 text-[12.5px]', BANNER_TONES[tone])}>
+      <span className="shrink-0 [&_svg]:h-4 [&_svg]:w-4">{icon}</span>
+      <p className="min-w-0 flex-1 text-[#4B5563]">
+        <span className="font-semibold text-[#1F2937]">{bold}</span> {text}
+      </p>
+      <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[#4B5563]">{action}</span>
     </div>
   )
 }
 
 function PermError({ icon, title, detail, onRetry }) {
   return (
-    <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center text-[#F1F5F9]">
-      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-white/[0.06] ring-1 ring-white/10">{icon}</div>
+    <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center text-white">
+      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-white/[0.08] ring-1 ring-white/10">{icon}</div>
       <div>
         <div className="text-[14.5px] font-semibold">{title}</div>
-        <div className="mt-1 text-[12.5px] leading-relaxed text-[#94A3B8]">{detail}</div>
+        <div className="mt-1 text-[12.5px] leading-relaxed text-white/60">{detail}</div>
       </div>
       <button
         onClick={onRetry}
-        className="zk-press rounded-full bg-white/[0.05] px-4 py-2 text-[12.5px] font-semibold text-[#34D399] shadow-[inset_0_0_0_1px_rgba(16,185,129,0.3)] transition hover:bg-white/[0.1] hover:shadow-[inset_0_0_0_1px_rgba(16,185,129,0.55)]"
+        className="zk-press rounded-full bg-white/10 px-4 py-2 text-[12.5px] font-semibold text-[#C4B5FD] ring-1 ring-white/15 transition hover:bg-white/15"
       >Retry</button>
     </div>
   )
@@ -972,19 +1165,17 @@ function DevicePicker({ label, icon, devices, value, onChange, disabled, fallbac
   const display = current?.label || devices[0]?.label || fallbackLabel
   return (
     <label
-      className={
-        'zk-field group relative flex h-14 cursor-pointer items-center gap-2.5 rounded-2xl px-4 ' +
-        (disabled ? 'pointer-events-none cursor-not-allowed opacity-50' : '')
-      }
+      className={cn(
+        'group relative flex h-12 cursor-pointer items-center gap-2.5 rounded-xl border border-[#E5E7EB] bg-white px-3',
+        disabled && 'pointer-events-none cursor-not-allowed opacity-50',
+      )}
     >
-      <span className="grid h-8 w-8 place-items-center rounded-full bg-[#10B981]/15 text-[#34D399] transition-colors duration-200 group-hover:bg-[#10B981]/25">
-        {icon}
-      </span>
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#F5F3FF] text-[#7C3AED]">{icon}</span>
       <div className="min-w-0 flex-1">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[#8696A7]">{label}</div>
-        <div className="truncate text-[13px] font-medium text-[#E2E8F0]">{display}</div>
+        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[#9CA3AF]">{label}</div>
+        <div className="truncate text-[13px] font-medium text-[#374151]">{display}</div>
       </div>
-      <ChevronDown className="zk-chevron h-4 w-4 shrink-0 text-[#8696A7] group-hover:text-[#34D399]" />
+      <ChevronDown className="h-4 w-4 shrink-0 text-[#9CA3AF]" />
       <select
         disabled={disabled}
         value={value || ''}

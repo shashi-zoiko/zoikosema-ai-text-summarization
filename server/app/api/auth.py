@@ -1,6 +1,8 @@
+import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
@@ -40,6 +42,13 @@ def _pick_color(email: str) -> str:
     return AVATAR_COLORS[hash(email) % len(AVATAR_COLORS)]
 
 
+# Profile photos land in the same uploads dir StaticFiles serves at /api/uploads
+# (see main.py). __file__ is server/app/api/auth.py → three dirnames up == server/.
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
+AVATAR_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+MAX_AVATAR_SIZE = 5 * 1024 * 1024  # 5 MB
+
+
 class RefreshIn(BaseModel):
     refresh_token: str
 
@@ -51,6 +60,11 @@ class PasswordChangeIn(BaseModel):
 
 class ProfileUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
+    job_title: str | None = Field(default=None, max_length=120)
+    pronouns: str | None = Field(default=None, max_length=40)
+    bio: str | None = Field(default=None, max_length=300)
+    show_photo_in_meetings: bool | None = None
+    show_photo_on_dashboard: bool | None = None
 
 
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
@@ -149,8 +163,56 @@ def update_profile(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if data.name is not None:
+    # exclude_unset → only touch fields the client actually sent, so a partial
+    # PATCH can't wipe unrelated fields. Empty text clears to NULL.
+    sent = data.model_dump(exclude_unset=True)
+    if "name" in sent and data.name is not None:
         user.name = data.name.strip()
+    for f in ("job_title", "pronouns", "bio"):
+        if f in sent:
+            val = (sent[f] or "").strip()
+            setattr(user, f, val or None)
+    for f in ("show_photo_in_meetings", "show_photo_on_dashboard"):
+        if f in sent and sent[f] is not None:
+            setattr(user, f, bool(sent[f]))
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.post("/avatar", response_model=UserOut)
+async def upload_avatar(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upload/replace the current user's profile photo."""
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename else ""
+    if ext not in AVATAR_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Use a PNG, JPG, GIF or WEBP image")
+
+    content = await file.read()
+    if len(content) > MAX_AVATAR_SIZE:
+        raise HTTPException(status_code=400, detail="Image too large (max 5 MB)")
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    safe_name = f"{uuid.uuid4().hex}.{ext}"
+    with open(os.path.join(UPLOAD_DIR, safe_name), "wb") as f:
+        f.write(content)
+
+    user.avatar_url = f"/api/uploads/{safe_name}"
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.delete("/avatar", response_model=UserOut)
+def remove_avatar(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Clear the profile photo, falling back to coloured initials."""
+    user.avatar_url = None
     db.commit()
     db.refresh(user)
     return user

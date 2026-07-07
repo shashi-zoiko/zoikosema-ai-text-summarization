@@ -20,6 +20,12 @@ class UserOut(BaseModel):
     email: EmailStr
     name: str
     avatar_color: str
+    avatar_url: str | None = None
+    job_title: str | None = None
+    pronouns: str | None = None
+    bio: str | None = None
+    show_photo_in_meetings: bool = True
+    show_photo_on_dashboard: bool = True
     created_at: datetime
 
 

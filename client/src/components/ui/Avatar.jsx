@@ -1,4 +1,5 @@
 import { cn } from '../../lib/cn'
+import { assetUrl } from '../../api/client'
 
 const SIZES = {
   xs: 'h-6 w-6 text-[10px]',
@@ -26,6 +27,7 @@ function initials(name) {
 
 export default function Avatar({ name, color, src, size = 'md', presence, className, ...rest }) {
   const bg = color || pickColor(name)
+  src = assetUrl(src)
   return (
     <span
       className={cn(
