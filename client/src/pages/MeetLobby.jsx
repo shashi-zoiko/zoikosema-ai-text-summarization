@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  ArrowRight, Calendar, Camera, CameraOff, Check, ChevronDown, Circle, Clock, Copy,
-  ExternalLink, HelpCircle, Info, Loader2, Lock, Mic, MicOff, Monitor, MoreHorizontal,
+  ArrowRight, Calendar, Camera, CameraOff, Check, ChevronDown, Circle, Copy,
+  HelpCircle, Info, Loader2, Lock, Mic, MicOff, Monitor, MoreHorizontal,
   MoreVertical, Settings, ShieldCheck, Sparkles, Triangle, User as UserIcon, Users,
   Video, VideoOff, X,
 } from 'lucide-react'
@@ -11,6 +11,8 @@ import { useAuth } from '../context/AuthContext'
 import { cleanDisplayName, validateDisplayName } from '../features/meeting/guestName'
 import useMediaDevices from '../hooks/useMediaDevices'
 import useAudioLevel from '../hooks/useAudioLevel'
+import { BackgroundProcessor, backgroundEffectsSupported } from '../features/meeting/backgroundEngine.js'
+import { BLUR_PRESETS, FILTER_PRESETS, IMAGE_PRESETS, NONE_EFFECT, getPreset } from '../features/meeting/backgroundPresets.js'
 import Avatar from '../components/ui/Avatar'
 import Logo from '../components/ui/Logo'
 import ThemeToggle from '../components/ui/ThemeToggle'
@@ -70,11 +72,14 @@ function formatCountdown(ms) {
 }
 
 const GUEST_NAME_KEY = 'zoiko_guest_name'
+// Same key the meeting reads on mount (MeetRoomLivekit) — persisting the lobby
+// pick here is what carries the chosen background into the call.
+const BG_EFFECT_KEY = 'zoiko_bg_effect'
 
 export default function MeetLobby() {
   const { code } = useParams()
   const navigate = useNavigate()
-  const { user, loading: authLoading, joinAsGuest } = useAuth()
+  const { user, loading: authLoading, joinAsGuest, resumeGuest, clearGuest } = useAuth()
   // Anonymous (guest) mode: a logged-out visitor on a public meeting link.
   const isGuest = !authLoading && !user
 
@@ -113,12 +118,20 @@ export default function MeetLobby() {
   const [joining, setJoining] = useState(false)
   const [devicesOpen, setDevicesOpen] = useState(false)
   // In-preview control popovers. `barPanel` is which one is open ('effects' |
-  // 'more' | null); `previewBlur` is a real, zero-dependency privacy blur on
-  // the local preview. ponytail: true background segmentation would need a
-  // LiveKit track processor — this blurs the whole frame, which is fine as a
-  // pre-join privacy toggle. Wire to the room's processor when that ships.
+  // 'more' | null).
   const [barPanel, setBarPanel] = useState(null)
-  const [previewBlur, setPreviewBlur] = useState(false)
+  // Virtual background chosen before joining. Uses the SAME MediaPipe engine +
+  // presets + localStorage key ('zoiko_bg_effect') as the in-call effect, so
+  // the pick previews live here and the meeting restores it on join with no
+  // extra plumbing. `displayStream` is what the preview <video> shows — the raw
+  // camera when no effect, else the processed (segmented) output track.
+  const [bgEffectId, setBgEffectId] = useState(() => {
+    try { return localStorage.getItem(BG_EFFECT_KEY) || 'none' } catch { return 'none' }
+  })
+  const [displayStream, setDisplayStream] = useState(null)
+  const bgProcRef = useRef(null)
+  const bgSupported = backgroundEffectsSupported()
+  const bgEffect = getPreset(bgEffectId)
   // Live clock — only ticks while there's a future start time to count down to.
   const [nowTs, setNowTs] = useState(() => Date.now())
 
@@ -157,6 +170,27 @@ export default function MeetLobby() {
         .catch((e) => setErr(e.message || 'Meeting not found'))
     }
   }, [code, user, authLoading])
+
+  // ── Live waiting-room count ─────────────────────────────────────────
+  // The pre-join lobby has no control WS, so refresh the real pending count on a
+  // gentle interval (visibility-gated) and patch ONLY waiting_count — never the
+  // gating fields — so people joining the waiting room show up while the host
+  // sits on this screen. Backend computes it on demand (meetings.py).
+  useEffect(() => {
+    if (authLoading || !meeting?.is_active) return undefined
+    let alive = true
+    const tick = async () => {
+      if (document.visibilityState !== 'visible') return
+      try {
+        const m = user ? await api(`/api/meetings/${code}`) : await fetchPublicMeeting(code)
+        if (alive && typeof m?.waiting_count === 'number') {
+          setMeeting((prev) => (prev ? { ...prev, waiting_count: m.waiting_count } : prev))
+        }
+      } catch { /* transient — keep the last known count */ }
+    }
+    const id = setInterval(tick, 5000)
+    return () => { alive = false; clearInterval(id) }
+  }, [code, user, authLoading, meeting?.is_active])
 
   // ── Camera lifecycle ───────────────────────────────────────────────
   // Cancellation-aware. Each acquire run cancels its predecessor so a
@@ -305,11 +339,42 @@ export default function MeetLobby() {
   useEffect(() => {
     const el = videoRef.current
     if (!el) return
-    if (el.srcObject !== stream) {
+    const s = displayStream || stream
+    if (el.srcObject !== s) {
       try { el.srcObject = null } catch {}
-      try { el.srcObject = stream } catch {}
+      try { el.srcObject = s } catch {}
     }
-  }, [stream])
+  }, [displayStream, stream])
+
+  // ── Virtual background preview ──────────────────────────────────────
+  // Runs the shared MediaPipe processor on the raw camera track and feeds the
+  // segmented output to the preview. Shows the raw camera (never a freeze) when
+  // there's no effect, no camera, or the browser can't run the engine.
+  const changeBg = useCallback((id) => {
+    setBgEffectId(id)
+    try { localStorage.setItem(BG_EFFECT_KEY, id) } catch { /* private mode */ }
+    setBarPanel(null)
+  }, [])
+
+  useEffect(() => {
+    const rawTrack = stream?.getVideoTracks?.()[0]
+    const off = !rawTrack || !videoOn || permState !== PERM.granted || bgEffect.type === 'none' || !bgSupported
+    if (off) {
+      bgProcRef.current?.stop()
+      setDisplayStream(null) // fall back to raw stream in the attach effect
+      return undefined
+    }
+    let cancelled = false
+    const proc = bgProcRef.current || (bgProcRef.current = new BackgroundProcessor())
+    proc.setEffect(bgEffect)
+    proc.start(rawTrack)
+      .then((outTrack) => { if (!cancelled && outTrack) setDisplayStream(new MediaStream([outTrack])) })
+      .catch(() => { if (!cancelled) setDisplayStream(null) })
+    return () => { cancelled = true }
+  }, [stream, videoOn, permState, bgEffectId, bgEffect, bgSupported])
+
+  // Full teardown of the processor (and its segmenter) on unmount.
+  useEffect(() => () => { bgProcRef.current?.dispose() }, [])
 
   // Keep the mic track live when muted, but fully stop camera tracks when
   // video is off so the hardware indicator turns off like Google Meet.
@@ -388,22 +453,46 @@ export default function MeetLobby() {
     }
     setJoining(true)
     try {
-      // For guests, mint the guest token first (creates the ephemeral identity);
-      // the api client then sends it automatically on the calls below.
+      // For guests: reuse the durable identity already admitted to THIS meeting
+      // if we have one — that's what lets an admitted guest rejoin after a
+      // refresh / disconnect / leave WITHOUT the host re-admitting. Only mint a
+      // brand-new identity (→ waiting room) when there's no prior session.
       let authToken
       if (isGuest) {
-        const guestData = await joinAsGuest(code, {
-          displayName: cleanDisplayName(guestName),
-          password: needsPassword ? meetingPwd : undefined,
-        })
-        authToken = guestData.access_token
+        const resumed = resumeGuest(code)
+        if (resumed?.token) {
+          authToken = resumed.token
+        } else {
+          const guestData = await joinAsGuest(code, {
+            displayName: cleanDisplayName(guestName),
+            password: needsPassword ? meetingPwd : undefined,
+          })
+          authToken = guestData.access_token
+        }
       } else {
         authToken = localStorage.getItem('zoiko_token')
       }
 
       const joinBody = { code }
       if (needsPassword) joinBody.password = meetingPwd
-      const participant = await api(`/api/meetings/${code}/join`, { method: 'POST', body: joinBody })
+      let participant
+      try {
+        participant = await api(`/api/meetings/${code}/join`, { method: 'POST', body: joinBody })
+      } catch (e) {
+        // A resumed guest token can be stale (6h expiry, or the meeting ended
+        // and the guest row was purged). Mint a fresh identity ONCE and retry —
+        // this correctly requires host approval again, since the old identity
+        // no longer exists. Never re-mint on 403 (removed/denied/wrong password).
+        const credErr = isGuest && /401|unauthor|credential/i.test(e?.message || '')
+        if (!credErr) throw e
+        clearGuest(code)
+        const guestData = await joinAsGuest(code, {
+          displayName: cleanDisplayName(guestName),
+          password: needsPassword ? meetingPwd : undefined,
+        })
+        authToken = guestData.access_token
+        participant = await api(`/api/meetings/${code}/join`, { method: 'POST', body: joinBody })
+      }
       sessionStorage.setItem(
         `zoiko_meet_prefs_${code}`,
         JSON.stringify({ audio: audioOn, video: videoOn }),
@@ -470,6 +559,7 @@ export default function MeetLobby() {
   // name (falls back to "You" before they type).
   const displayName = isGuest ? (cleanDisplayName(guestName) || 'You') : (user?.name || '')
   const hostName = meeting?.host_name || (isHostSafe(user, meeting) ? user?.name : null) || 'Host'
+  const waitingCount = meeting?.waiting_count || 0
   const showVideo = permState === PERM.granted && videoOn
 
   // ── Scheduled-start countdown gate (Google-Meet parity) ──────────────
@@ -566,7 +656,6 @@ export default function MeetLobby() {
                 autoPlay
                 playsInline
                 muted
-                style={{ filter: previewBlur ? 'blur(14px)' : undefined }}
                 className={
                   'absolute inset-0 h-full w-full -scale-x-100 object-cover transition-opacity duration-200 ' +
                   (showVideo ? 'opacity-100' : 'opacity-0')
@@ -664,15 +753,11 @@ export default function MeetLobby() {
                   )}
 
                   {barPanel === 'effects' && (
-                    <BarPopover>
-                      <PopoverHeading>Effects</PopoverHeading>
-                      <MenuItem active={!previewBlur} onClick={() => { setPreviewBlur(false); setBarPanel(null) }}>
-                        No effect
-                      </MenuItem>
-                      <MenuItem active={previewBlur} onClick={() => { setPreviewBlur(true); setBarPanel(null) }}>
-                        Blur my video
-                      </MenuItem>
-                    </BarPopover>
+                    <BackgroundPopover
+                      activeId={bgEffectId}
+                      onSelect={changeBg}
+                      supported={bgSupported}
+                    />
                   )}
 
                   {barPanel === 'more' && (
@@ -719,7 +804,8 @@ export default function MeetLobby() {
                   <ControlItem
                     icon={<Sparkles />}
                     label="Effects"
-                    value={previewBlur ? 'Blur' : 'None'}
+                    value={bgEffect.type === 'none' ? 'None' : bgEffect.name}
+                    active={bgEffect.type !== 'none'}
                     onClick={() => setBarPanel((p) => (p === 'effects' ? null : 'effects'))}
                   />
                   <ControlItem
@@ -751,13 +837,16 @@ export default function MeetLobby() {
               <div className="skeleton h-8 w-3/4 rounded-lg" aria-hidden="true" />
             )}
 
-            {/* Host + waiting count */}
+            {/* Host + live waiting-room count (polled; real pending count) */}
             <div className="mt-4 flex items-center gap-3">
               <Avatar name={hostName} src={meeting?.host_avatar_url} size="md" />
               <div className="min-w-0">
                 <div className="truncate text-[14px] font-semibold text-[var(--c-fg)]">Host: {hostName}</div>
                 <div className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--c-fg-muted)]">
-                  <Users className="h-3.5 w-3.5" /> 3 people waiting
+                  <Users className="h-3.5 w-3.5" />
+                  {waitingCount > 0
+                    ? `${waitingCount} ${waitingCount === 1 ? 'person' : 'people'} waiting`
+                    : 'No one waiting yet'}
                 </div>
               </div>
             </div>
@@ -942,41 +1031,6 @@ export default function MeetLobby() {
           </aside>
         </div>
 
-        {/* ── Managed-workspace policy banners ────────────────────── */}
-        <div className="mt-4 space-y-2.5">
-          <Banner
-            tone="amber"
-            icon={<ShieldCheck className="text-[var(--lobby-warn-fg)]" />}
-            bold="Managed under Zoiko Tech policy."
-            text="Confidential Mode is enforced. Break-glass audit available to admins."
-            action={<span className="inline-flex items-center gap-1 font-semibold text-[var(--lobby-warn-fg)] hover:underline">View policy <ExternalLink className="h-3 w-3" /></span>}
-          />
-          <Banner
-            tone="teal"
-            icon={<ShieldCheck className="text-[var(--lobby-success-fg)]" />}
-            bold="Workspace-protected meeting."
-            text="Zoiko Sema never stores meeting content in Confidential Mode."
-            action={<span className="inline-flex items-center gap-1 font-semibold text-[var(--lobby-success-fg)] hover:underline">Trust Center <ExternalLink className="h-3 w-3" /></span>}
-          />
-          <Banner
-            tone="violet"
-            icon={<Sparkles className="text-[var(--lobby-accent-fg)]" />}
-            bold="Sema will draft follow-ups and action items"
-            text="for you after the meeting."
-            action={(
-              <span className="inline-flex items-center gap-2">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--lobby-success-tint)] text-[var(--lobby-success-fg)]">
-                  <Clock className="h-4 w-4" />
-                </span>
-                <span className="leading-tight text-left">
-                  <span className="block text-[11px] text-[var(--c-fg-muted)]">Connected to</span>
-                  <span className="block font-semibold text-[var(--c-fg)]">ZoikoTime</span>
-                </span>
-                <ExternalLink className="h-3 w-3 text-[var(--c-fg-muted)]" />
-              </span>
-            )}
-          />
-        </div>
       </div>
     </Shell>
   )
@@ -1098,6 +1152,84 @@ function PopoverHeading({ children }) {
   return <div className="px-2.5 py-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-white/40">{children}</div>
 }
 
+// Google-Meet-style background picker anchored above the control bar. Reuses
+// the shared presets so the pre-join choice matches exactly what the call
+// applies. Thumbnails are the same generated SVG scenes — zero extra assets.
+function BackgroundPopover({ activeId, onSelect, supported }) {
+  if (!supported) {
+    return (
+      <BarPopover>
+        <PopoverHeading>Backgrounds</PopoverHeading>
+        <div className="px-2.5 pb-2 pt-1 text-[12px] leading-snug text-white/60">
+          Background effects aren’t supported on this browser. Try Chrome, Edge, or Safari.
+        </div>
+      </BarPopover>
+    )
+  }
+  return (
+    <div className="absolute bottom-[calc(100%+10px)] left-0 z-10 max-h-[min(70vh,360px)] w-[300px] overflow-y-auto rounded-2xl bg-[#111827] p-3 text-white shadow-[0_20px_50px_-16px_rgba(0,0,0,0.8)] ring-1 ring-white/10">
+      <PopoverHeading>Blur</PopoverHeading>
+      <div className="grid grid-cols-3 gap-2">
+        <BgTile preset={NONE_EFFECT} active={activeId === 'none'} onSelect={onSelect} />
+        {BLUR_PRESETS.map((p) => (
+          <BgTile key={p.id} preset={p} active={activeId === p.id} onSelect={onSelect} />
+        ))}
+      </div>
+
+      <PopoverHeading>Backgrounds</PopoverHeading>
+      <div className="grid grid-cols-3 gap-2">
+        {IMAGE_PRESETS.map((p) => (
+          <BgTile key={p.id} preset={p} active={activeId === p.id} onSelect={onSelect} />
+        ))}
+      </div>
+
+      <PopoverHeading>Filters</PopoverHeading>
+      <div className="grid grid-cols-3 gap-2">
+        {FILTER_PRESETS.map((p) => (
+          <BgTile key={p.id} preset={p} active={activeId === p.id} onSelect={onSelect} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function BgTile({ preset, active, onSelect }) {
+  const isImage = preset.type === 'image'
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(preset.id)}
+      aria-label={preset.name}
+      aria-pressed={active}
+      title={preset.name}
+      className={cn(
+        'group relative aspect-square overflow-hidden rounded-lg border-0 bg-white/10 p-0 shadow-none ring-1 ring-inset transition',
+        active ? 'ring-2 ring-[#8B5CF6]' : 'ring-white/10 hover:ring-white/30',
+      )}
+      style={isImage ? { backgroundImage: `url("${preset.src}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
+    >
+      {preset.type === 'none' && (
+        <span className="grid h-full w-full place-items-center text-[10px] font-semibold text-white/70">None</span>
+      )}
+      {preset.type === 'blur' && (
+        <span className="grid h-full w-full place-items-center bg-[radial-gradient(120%_120%_at_30%_20%,#3b4763,#1b2740)] text-[9.5px] font-semibold text-white/80 backdrop-blur">
+          {preset.name}
+        </span>
+      )}
+      {preset.type === 'filter' && (
+        <span className="grid h-full w-full place-items-center bg-[linear-gradient(135deg,#6D28D9,#7C3AED)] px-1 text-center text-[9.5px] font-semibold leading-tight text-white">
+          {preset.name}
+        </span>
+      )}
+      {active && (
+        <span className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded-full bg-[#8B5CF6] text-white ring-2 ring-[#111827]">
+          <Check className="h-2.5 w-2.5" />
+        </span>
+      )}
+    </button>
+  )
+}
+
 function MenuItem({ active, onClick, children }) {
   return (
     <button
@@ -1136,24 +1268,6 @@ function StatTile({ icon, iconClass, label, value }) {
       <div className={cn('mx-auto grid h-6 w-6 place-items-center [&_svg]:h-4 [&_svg]:w-4', iconClass)}>{icon}</div>
       <div className="mt-1.5 text-[12px] font-semibold text-[var(--c-fg-dim)]">{label}</div>
       <div className="text-[11px] text-[var(--c-fg-muted)]">{value}</div>
-    </div>
-  )
-}
-
-const BANNER_TONES = {
-  amber: 'border-[var(--lobby-warn-line)] bg-[var(--lobby-warn-tint)]',
-  teal: 'border-[var(--lobby-success-line)] bg-[var(--lobby-success-tint)]',
-  violet: 'border-[var(--lobby-accent-line)] bg-[var(--lobby-accent-tint)]',
-}
-
-function Banner({ tone, icon, bold, text, action }) {
-  return (
-    <div className={cn('zk-themed flex items-center gap-3 rounded-2xl border px-4 py-3 text-[12.5px]', BANNER_TONES[tone])}>
-      <span className="shrink-0 [&_svg]:h-4 [&_svg]:w-4">{icon}</span>
-      <p className="min-w-0 flex-1 text-[var(--c-fg-dim)]">
-        <span className="font-semibold text-[var(--c-fg)]">{bold}</span> {text}
-      </p>
-      <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[var(--c-fg-dim)]">{action}</span>
     </div>
   )
 }

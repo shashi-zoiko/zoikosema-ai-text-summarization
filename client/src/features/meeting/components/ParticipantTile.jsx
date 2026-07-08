@@ -415,14 +415,16 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
           readable over bright video; a soft accent glow makes it pop. */}
       <div className={'pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 ' + (dense ? 'px-2.5 pb-2' : 'px-[3.5cqmin] pb-[3.5cqmin]')}>
         <div
-          className="flex min-w-0 max-w-full items-center gap-1.5 font-semibold leading-none tracking-[-0.01em] text-white"
+          className="flex min-w-0 max-w-full items-center gap-1.5 font-bold leading-tight tracking-[-0.01em] text-white"
           style={{
             // Dense filmstrip tiles use a fixed legible size (their auto height
             // breaks container-query resolution); gallery / hero tiles scale with
             // the tile via cqmin. A higher floor + scale factor keeps the name
             // clearly readable even when a busy grid shrinks each tile, while
             // `min-w-0 truncate` (below) guarantees it never outgrows the tile.
-            fontSize: dense ? 14 : 'clamp(14px, 4.4cqmin, 22px)',
+            // leading-tight (not leading-none) so descenders (g, y, p) never clip
+            // against the tile's bottom edge.
+            fontSize: dense ? 14 : 'clamp(15px, 4.6cqmin, 24px)',
             textShadow: `0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.65), 0 0 20px ${withAlpha(tileAccent, 0.75)}`,
           }}
         >

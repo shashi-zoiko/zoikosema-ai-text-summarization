@@ -39,6 +39,7 @@ class MeetingOut(BaseModel):
     password_protected: bool = False
     media_provider: str = "mesh"   # "mesh" | "livekit"
     status: str = "live"           # "scheduled" | "live" | "ended" | "cancelled"
+    waiting_count: int = 0         # live pending-in-waiting-room count (single-meeting GET only)
     created_at: datetime
     ended_at: datetime | None = None
     cancelled_at: datetime | None = None

@@ -198,11 +198,17 @@ async def _send_waiting_list(room: str, meeting: Meeting, db: Session):
     waiting = []
     for p in pending:
         u = users.get(p.user_id)
+        # joined_at drives the client-side "Waiting Xs" timer; email/avatar_url
+        # enrich the People-panel waiting rows. All three are additive — older
+        # clients ignore unknown fields.
         waiting.append({
             "user_id": p.user_id,
             "name": u.name if u else "Unknown",
             "color": u.avatar_color if u else "#5b8def",
             "is_guest": bool(u.is_guest) if u else False,
+            "email": (u.email if u and not u.is_guest else None),
+            "avatar_url": (u.avatar_url if u else None),
+            "joined_at": p.joined_at.isoformat() if p.joined_at else None,
         })
 
     for member_ws in meet_manager.members(room):

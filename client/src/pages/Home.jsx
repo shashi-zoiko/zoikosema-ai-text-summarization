@@ -302,7 +302,7 @@ export default function Home() {
                 aria-haspopup="menu"
                 aria-expanded={showNewMenu}
                 aria-label="More meeting options"
-                className={cn('grid h-11 w-11 shrink-0 place-items-center rounded-r-xl border-l border-white/25 transition', BLUE_BTN, '!rounded-l-none')}
+                className={cn('grid h-11 w-11 shrink-0 place-items-center rounded-r-xl border-l-2 border-white/40 text-white transition !bg-[#1e40af] hover:!bg-[#1e3a8a]', '!rounded-l-none')}
               >
                 <ChevronDown className={cn('h-4 w-4 transition-transform', showNewMenu && 'rotate-180')} />
               </button>

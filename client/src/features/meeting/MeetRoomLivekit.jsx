@@ -7,7 +7,7 @@ import {
   useConnectionState,
 } from '@livekit/components-react'
 import { ConnectionState, DisconnectReason, ScreenSharePresets, Track, VideoPresets } from 'livekit-client'
-import { PencilLine, UserPlus } from 'lucide-react'
+import { PencilLine } from 'lucide-react'
 import '@livekit/components-styles'
 
 import { fetchMediaToken } from './api/media.js'
@@ -21,7 +21,6 @@ import PresenterPiP from './components/PresenterPiP.jsx'
 import MeetingDock from '../../components/meeting/MeetingDock.jsx'
 import MeetingHeader from './components/MeetingHeader.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
-import WaitingRoomPanel from './components/WaitingRoomPanel.jsx'
 import ReactionOverlay from './components/ReactionOverlay.jsx'
 import ParticipantsPanel from './components/ParticipantsPanel.jsx'
 import SettingsDrawer from './components/SettingsDrawer.jsx'
@@ -193,12 +192,14 @@ function MeetRoom() {
     chat_enabled: true,
     screenshare_enabled: true,
   })
-  const [waiting, setWaiting] = useState([])
   const [handRaised, setHandRaised] = useState(false)
   const [recording, setRecording] = useState({ recording: false, recording_id: null })
 
   // Local UI state
-  const [sidebar, setSidebar] = useState(null) // 'chat' | 'waiting' | 'people' | 'info' | 'settings' | null
+  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | null
+  // Bumped whenever the header admit-chip / lobby "open" is used, so the People
+  // panel scrolls its waiting section into view.
+  const [waitingScrollSignal, setWaitingScrollSignal] = useState(0)
   const [settingsTab, setSettingsTab] = useState('audio') // active tab when sidebar==='settings'
   // Per-viewer grid/speaker preference (local only, never synced).
   const [layout, setLayout] = useState('grid') // 'grid' | 'speaker'
@@ -225,6 +226,10 @@ function MeetRoom() {
   }, [notify])
   const msgKeyRef = useRef(0)
 
+  // Waiting list lives in the store (see roomStore) — header chip, People panel
+  // and dock badge all read it via selectors instead of prop-drilling.
+  const waiting = useRoomStore((s) => s.waiting)
+  const setWaiting = useRoomStore((s) => s.setWaiting)
   const reactions = useRoomStore((s) => s.reactions)
   const raisedHandsCount = useRoomStore((s) => s.raisedHands.size)
   const pushReaction = useRoomStore((s) => s.pushReaction)
@@ -475,18 +480,27 @@ function MeetRoom() {
       // list re-syncs from the next 'waiting-room' WS broadcast
     }
   }, [code])
+  // Open the People panel and scroll to the waiting section (header chip + lobby
+  // "open" both route here). Bump the signal so the panel scrolls even if it's
+  // already open.
+  const openPeopleWaiting = useCallback(() => {
+    setSidebar('people')
+    setWaitingScrollSignal((n) => n + 1)
+  }, [])
+  // Google-Meet: clicking the grid's "+N others" tile opens the People panel.
+  const openPeople = useCallback(() => setSidebar('people'), [])
   // Let the lobby notification cards drive admit/deny and "open waiting room".
   useEffect(() => {
     registerLobbyActions({
       onAdmit: admitUser,
       onDeny: denyUser,
-      onOpen: () => setSidebar((s) => (s === 'waiting' ? s : 'waiting')),
+      onOpen: openPeopleWaiting,
       // "Mark as read" on a chat card clears the unread badge without opening
       // chat; tapping a card's preview opens the chat drawer (which also clears).
       onChatRead: () => setUnreadChat(0),
       onOpenChat: () => setSidebar('chat'),
     })
-  }, [registerLobbyActions, admitUser, denyUser])
+  }, [registerLobbyActions, admitUser, denyUser, openPeopleWaiting])
 
   // ponytail: host "remove participant" (kick) was removed — no kick action.
   const promoteUser = useCallback((uid) => ctrlSend({ type: 'promote', user_id: uid }), [ctrlSend])
@@ -649,11 +663,12 @@ function MeetRoom() {
         onChatEnabled={setChatEnabled}
         onScreenEnabled={setScreenEnabled}
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
+        onOpenPeople={openPeopleWaiting}
       />
 
       <div className="relative flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
-          <Stage layout={layout} />
+          <Stage layout={layout} onOpenPeople={openPeople} />
           <PresenterBanner />
           <PresenterPiP />
           <ReactionOverlay events={reactions} />
@@ -679,21 +694,17 @@ function MeetRoom() {
             disabled={!meeting.chat_enabled && !isHostOrCohost}
           />
         )}
-        {sidebar === 'waiting' && isHostOrCohost && (
-          <WaitingRoomPanel
-            waiting={waiting}
-            onAdmit={admitUser}
-            onDeny={denyUser}
-            onAdmitAll={admitAll}
-            onClose={() => setSidebar(null)}
-          />
-        )}
         {sidebar === 'people' && (
           <ParticipantsPanel
             selfUserId={user?.id}
             isHost={isHost}
+            isHostOrCohost={isHostOrCohost}
             onClose={() => setSidebar(null)}
             onPromote={promoteUser}
+            onAdmit={admitUser}
+            onDeny={denyUser}
+            onAdmitAll={admitAll}
+            scrollWaitingSignal={waitingScrollSignal}
           />
         )}
         {sidebar === 'info' && (
@@ -929,23 +940,6 @@ function LivekitDockAdapter({
         >
           <PencilLine className="h-5 w-5" />
         </RoundDockExtra>
-      }
-      extraRightSlot={
-        // Distinct, persistent waiting-room button — shown whenever anyone is
-        // actually waiting. UserPlus (not Users) so it doesn't read as a
-        // duplicate of the People icon next to it.
-        isHostOrCohost && waitingList.length > 0 ? (
-          <RoundDockExtra
-            active={sidebar === 'waiting'}
-            onClick={() => setSidebar((s) => (s === 'waiting' ? null : 'waiting'))}
-            label="Waiting room"
-            badge={waitingList.length}
-            glow={sidebar !== 'waiting'}
-            side
-          >
-            <UserPlus className="h-5 w-5" />
-          </RoundDockExtra>
-        ) : null
       }
       leave={leave}
     />

@@ -20,6 +20,20 @@ export const useRoomStore = create((set) => ({
   setHeroActive: (v) =>
     set((s) => (s.heroActive === !!v ? s : { heroActive: !!v })),
 
+  // waiting: authoritative waiting-room list [{user_id,name,color,is_guest,email,avatar_url,joined_at}].
+  // Lives here (not in <MeetRoomLivekit> local state) so the header admit-chip,
+  // the People panel and the dock badge read the same slice via selectors
+  // instead of prop-drilling — and a per-second waiting timer re-renders only
+  // its own leaf, never the panel.
+  waiting: [],
+  // Accepts a list (WS re-sync) or an updater fn (optimistic admit/deny), so
+  // existing `setWaiting(prev => prev.filter(...))` call sites keep working.
+  setWaiting: (list) =>
+    set((s) => {
+      const next = typeof list === 'function' ? list(s.waiting) : list
+      return { waiting: Array.isArray(next) ? next : [] }
+    }),
+
   // raisedHands: Set<user_id>
   raisedHands: new Set(),
   setHand: (userId, raised) =>
@@ -60,6 +74,7 @@ export const useRoomStore = create((set) => ({
     set({
       pinnedIdentity: null,
       heroActive: false,
+      waiting: [],
       raisedHands: new Set(),
       reactions: [],
       roles: new Map(),
