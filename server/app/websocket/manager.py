@@ -52,6 +52,13 @@ class RoomManager:
     def members(self, room: str) -> list[WebSocket]:
         return list(self._rooms.get(room, set()))
 
+    def stats(self) -> dict[str, int]:
+        """Snapshot gauge for observability: how many rooms and total live
+        sockets this instance holds. Lock-free read of a point-in-time size —
+        good enough for a metrics scrape, never used for control flow."""
+        rooms = self._rooms
+        return {"rooms": len(rooms), "sockets": sum(len(s) for s in rooms.values())}
+
     async def broadcast(
         self, room: str, payload: dict[str, Any], exclude: WebSocket | None = None
     ) -> list[WebSocket]:

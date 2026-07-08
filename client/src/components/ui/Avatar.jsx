@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { cn } from '../../lib/cn'
 import { assetUrl } from '../../api/client'
 
@@ -28,6 +29,11 @@ function initials(name) {
 export default function Avatar({ name, color, src, size = 'md', presence, className, ...rest }) {
   const bg = color || pickColor(name)
   src = assetUrl(src)
+  // Fall back to initials if the photo fails to load (e.g. an uploaded avatar
+  // that didn't persist in production) instead of showing an empty circle.
+  const [failed, setFailed] = useState(false)
+  useEffect(() => { setFailed(false) }, [src])
+  const showImg = src && !failed
   return (
     <span
       className={cn(
@@ -38,12 +44,17 @@ export default function Avatar({ name, color, src, size = 'md', presence, classN
         className
       )}
       style={{
-        background: src ? undefined : `linear-gradient(135deg, ${bg} 0%, color-mix(in srgb, ${bg} 70%, #000) 100%)`,
+        background: showImg ? undefined : `linear-gradient(135deg, ${bg} 0%, color-mix(in srgb, ${bg} 70%, #000) 100%)`,
       }}
       {...rest}
     >
-      {src ? (
-        <img src={src} alt={name || ''} className="h-full w-full object-cover" />
+      {showImg ? (
+        <img
+          src={src}
+          alt={name || ''}
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
       ) : (
         <span aria-hidden>{initials(name)}</span>
       )}

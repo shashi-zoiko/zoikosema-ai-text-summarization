@@ -11,6 +11,8 @@ import threading
 import time
 from collections import defaultdict
 
+from app.core.config import get_settings
+
 
 class SlidingWindowLimiter:
     """Allow at most `max_requests` hits per `window` seconds per key."""
@@ -48,10 +50,12 @@ class SlidingWindowLimiter:
             return max(int(self.window - (now - hits[0])), 1)
 
 
-# Guest join: 20 successful token requests per IP per hour (spec). Generous
-# enough for a household/office behind one NAT, tight enough to blunt scripted
-# room-flooding.
-guest_join_limiter = SlidingWindowLimiter(max_requests=20, window=3600)
+# Guest join: N successful token requests per IP per hour. Default (250) is
+# sized for a 50-100 person meeting behind one corporate NAT plus reconnects,
+# tight enough to blunt scripted room-flooding. Tune via GUEST_JOIN_MAX_PER_HOUR.
+guest_join_limiter = SlidingWindowLimiter(
+    max_requests=get_settings().guest_join_max_per_hour, window=3600
+)
 
 # Throttle repeated hits against non-existent / ended rooms from one IP — blunts
 # enumeration of valid meeting codes. Separate, looser window.

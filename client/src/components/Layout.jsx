@@ -2,9 +2,9 @@ import { Suspense, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  BarChart3, Building2, CheckCircle2, ChevronDown, ChevronsUpDown,
-  HelpCircle, Home, LogOut, Menu, MessageSquareText, Search,
-  Settings, ShieldCheck, Video, X,
+  BarChart3, Building2, Calendar, CheckCircle2, ChevronDown, ChevronsUpDown,
+  CreditCard, HelpCircle, Home, LogOut, Menu, MessageSquareText,
+  PlayCircle, Search, Settings, ShieldCheck, Sparkles, Users, Video, X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
@@ -53,15 +53,21 @@ import NotificationBell from './NotificationBell'
  * active style — they mirror the mockup's fuller feature list without
  * faking pages that don't exist yet. */
 const WORKSPACE_NAV = [
-  { key: 'home',      label: 'Home',        icon: Home,             to: '/', end: true, badge: { text: 'Live', tone: 'live' } },
-  { key: 'meetings',  label: 'Meetings',    icon: Video,            to: '/scheduled' },
-  { key: 'chat',      label: 'Chat',        icon: MessageSquareText, to: '/chat', countTone: 'danger' },
-  { key: 'actions',   label: 'Actions',     icon: CheckCircle2,     to: '/actions' },
+  { key: 'home',       label: 'Home',        icon: Home,              to: '/', end: true, badge: { text: 'Live', tone: 'live' } },
+  { key: 'meetings',   label: 'Meetings',    icon: Video,             to: '/scheduled' },
+  { key: 'chat',       label: 'Chat',        icon: MessageSquareText, to: '/chat', countTone: 'danger' },
+  { key: 'calendar',   label: 'Calendar',    icon: Calendar,          go: '/scheduled' },
+  { key: 'summaries',  label: 'AI Summaries', icon: Sparkles,         go: '/dashboard', badge: { text: 'New' } },
+  { key: 'actions',    label: 'Actions',     icon: CheckCircle2,      to: '/actions' },
+  { key: 'recordings', label: 'Recordings',  icon: PlayCircle,        go: '/admin' },
 ]
 
 const MANAGE_NAV = [
-  { key: 'workspace', label: 'Workspace', icon: Building2,  to: '/admin' },
-  { key: 'analytics', label: 'Analytics', icon: BarChart3,  to: '/dashboard' },
+  { key: 'people',    label: 'People',    icon: Users,       to: '/admin' },
+  { key: 'workspace', label: 'Workspace', icon: Building2,   to: '/settings' },
+  { key: 'security',  label: 'Security',  icon: ShieldCheck, to: '/security' },
+  { key: 'analytics', label: 'Analytics', icon: BarChart3,   to: '/dashboard' },
+  { key: 'billing',   label: 'Billing',   icon: CreditCard,  to: '/billing' },
 ]
 
 function UserMenu() {
@@ -231,7 +237,7 @@ export default function Layout() {
           )}
         </nav>
 
-        {/* Footer: status */}
+        {/* Footer: status + help / settings */}
         <div className="space-y-0.5 border-t border-[var(--c-line)] px-3 py-3">
           <div className="flex items-center gap-3 rounded-xl px-2.5 py-2">
             <span className="relative flex h-7 w-7 items-center justify-center">
@@ -243,6 +249,8 @@ export default function Layout() {
               <span className="block truncate text-[11px] leading-tight text-[var(--c-fg-muted)]">All systems operational</span>
             </span>
           </div>
+          <SideLink key="help" label="Help & Support" icon={HelpCircle} to="/help-support" statusDot="success" />
+          <SideLink key="settings" label="Settings" icon={Settings} to="/settings" />
         </div>
       </aside>
 
@@ -321,7 +329,7 @@ const COUNT_TONES = {
 }
 
 /* Row inner content shared by the NavLink and button variants. */
-function SideLinkInner({ Icon, label, badge, count, countTone, isActive }) {
+function SideLinkInner({ Icon, label, badge, count, countTone, statusDot, isActive }) {
   return (
     <>
       {isActive && (
@@ -342,6 +350,17 @@ function SideLinkInner({ Icon, label, badge, count, countTone, isActive }) {
         <Icon />
       </span>
       <span className="flex-1 truncate">{label}</span>
+      {statusDot === 'success' && (
+        <span
+          className="relative flex h-2 w-2 shrink-0"
+          role="img"
+          aria-label="All systems operational"
+          title="All systems operational"
+        >
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--c-success)] opacity-60" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--c-success)]" />
+        </span>
+      )}
       {badge && (
         <span
           className={cn(
@@ -364,7 +383,7 @@ function SideLinkInner({ Icon, label, badge, count, countTone, isActive }) {
   )
 }
 
-function SideLink({ to, go, label, icon: Icon, end, badge, count, countTone }) {
+function SideLink({ to, go, label, icon: Icon, end, badge, count, countTone, statusDot }) {
   const navigate = useNavigate()
   const base = 'group/link relative flex items-center gap-3 rounded-xl px-2.5 py-2 text-[13px] tracking-tight transition-colors duration-150'
 
@@ -383,7 +402,7 @@ function SideLink({ to, go, label, icon: Icon, end, badge, count, countTone }) {
         }
       >
         {({ isActive }) => (
-          <SideLinkInner Icon={Icon} label={label} badge={badge} count={count} countTone={countTone} isActive={isActive} />
+          <SideLinkInner Icon={Icon} label={label} badge={badge} count={count} countTone={countTone} statusDot={statusDot} isActive={isActive} />
         )}
       </NavLink>
     )
@@ -395,7 +414,7 @@ function SideLink({ to, go, label, icon: Icon, end, badge, count, countTone }) {
       onClick={() => go && navigate(go)}
       className={cn(base, 'w-full text-left font-medium text-[var(--c-fg-dim)] hover:bg-[var(--c-bg-3)] hover:text-[var(--c-fg)]')}
     >
-      <SideLinkInner Icon={Icon} label={label} badge={badge} count={count} countTone={countTone} isActive={false} />
+      <SideLinkInner Icon={Icon} label={label} badge={badge} count={count} countTone={countTone} statusDot={statusDot} isActive={false} />
     </button>
   )
 }

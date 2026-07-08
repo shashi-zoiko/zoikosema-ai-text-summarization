@@ -119,13 +119,21 @@ jobs:
             LIVEKIT_WS_URL=${{ secrets.LIVEKIT_URL }}
             LIVEKIT_PUBLIC_WS_URL=${{ secrets.LIVEKIT_PUBLIC_WS_URL }}
             E2EE_SECRET=${{ secrets.E2EE_SECRET }}
-          # min-instances=1 eliminates cold starts on the first request after
-          # idle (default is 0 → ~5-10s pull+boot on each idle wake). 2 CPU
-          # + 1Gi memory is the smallest tier that comfortably runs uvicorn +
-          # active WebSocket fanout without GC churn. concurrency=40 keeps
-          # any single instance from hoarding DB pool connections (pool_size
-          # defaults to 20 — env DB_POOL_SIZE — so >40 concurrent requests
-          # would queue on the pool).
+          # SINGLE INSTANCE (min=max=1) is REQUIRED, not just for cold starts:
+          # the meeting signaling manager (app/websocket/manager.py) keeps room
+          # membership in PROCESS memory with no Redis fanout, so every socket
+          # of one meeting must live on the SAME instance. With autoscaling,
+          # Cloud Run would split a 50-100 person meeting across instances and
+          # peers on different boxes would never receive each other's
+          # peer-joined / chat / media-state events. Pinning to one instance
+          # keeps the whole meeting coherent. concurrency=200 lets that one
+          # instance hold a full large meeting — each WebSocket is one
+          # long-lived request, so concurrency must exceed peak participants
+          # (was 40, which capped a single instance at ~40 sockets and forced
+          # a split). 2 CPU + 2Gi comfortably runs uvicorn + WS fanout for
+          # ~100 mostly-idle sockets. When you need MULTIPLE concurrent large
+          # meetings beyond one box, wire meeting fanout through the Redis the
+          # connect module already provisions, then raise max-instances again.
           # --allow-unauthenticated grants allUsers the Cloud Run Invoker role so
           # the public SPA/API is reachable in a browser. A fresh service (new
           # region) defaults to REQUIRE-auth and returns 403 "client does not have
@@ -135,9 +143,9 @@ jobs:
           flags: |
             --allow-unauthenticated
             --min-instances=1
-            --max-instances=10
+            --max-instances=1
             --cpu=2
-            --memory=1Gi
-            --concurrency=40
-            --timeout=300
+            --memory=2Gi
+            --concurrency=200
+            --timeout=3600
             --cpu-boost
