@@ -128,11 +128,11 @@ export function AuthProvider({ children }) {
     return data.user
   }, [scheduleRefresh])
 
-  const register = useCallback(async (email, name, password) => {
+  const register = useCallback(async (email, name, password, organization) => {
     const data = await api('/api/auth/register', {
       method: 'POST',
       auth: false,
-      body: { email, name, password },
+      body: { email, name, password, organization: organization || null },
     })
     localStorage.setItem('zoiko_token', data.access_token)
     if (data.refresh_token) localStorage.setItem('zoiko_refresh', data.refresh_token)

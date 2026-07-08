@@ -28,6 +28,11 @@ export function meetingIntelligencePath(code) {
   return `/${code}/intelligence`
 }
 
+/** Relative path to the post-leave "you left the meeting" screen. */
+export function meetingLeftPath(code) {
+  return `/${code}/left`
+}
+
 /**
  * Absolute, shareable meeting URL (for copy-link buttons, etc.).
  * Uses the live browser origin by default; pass an explicit origin for tests.

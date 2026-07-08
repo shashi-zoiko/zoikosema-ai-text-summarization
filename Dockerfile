@@ -22,7 +22,22 @@ RUN apt-get update \
 COPY server/requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY server/app ./app
+COPY server/preflight.py ./preflight.py
 # Copy built frontend from previous stage
 COPY --from=frontend-build /client/dist ./dist
 EXPOSE 8080
-CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
+# Production: gunicorn supervising uvicorn async workers (auto-restarts a crashed
+# worker). WORKERS DEFAULT TO 1 — identical to the previous single-uvicorn
+# behaviour, so this does NOT regress the current single-instance deploy. Scale
+# with WEB_CONCURRENCY, but raise it above 1 ONLY once REDIS_URL is set: without
+# Redis, separate workers hold separate in-process meeting state with no fanout
+# and a meeting would split across workers. `python preflight.py` hard-fails that
+# combination. Dev is unaffected — `python -m app.main` still runs uvicorn with
+# --reload. (gunicorn is Linux-only, which is fine: Cloud Run runs Linux.)
+CMD exec gunicorn app.main:app \
+    -k uvicorn.workers.UvicornWorker \
+    --workers ${WEB_CONCURRENCY:-1} \
+    --timeout 3600 \
+    --graceful-timeout 30 \
+    --bind 0.0.0.0:${PORT} \
+    --access-logfile - --error-logfile -

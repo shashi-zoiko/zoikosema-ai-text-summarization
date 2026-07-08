@@ -949,9 +949,17 @@ def get_participants(
         select(MeetingParticipant).where(MeetingParticipant.meeting_id == meeting.id)
     ).all()
 
+    # Bulk-load every participant's user in ONE query (was an N+1: one db.get per
+    # row, i.e. 1 + 100 queries for a 100-person meeting).
+    _uids = [p.user_id for p in participants]
+    _users = (
+        {u.id: u for u in db.scalars(select(User).where(User.id.in_(_uids))).all()}
+        if _uids else {}
+    )
+
     roster = []
     for p in participants:
-        u = db.get(User, p.user_id)
+        u = _users.get(p.user_id)
         roster.append({
             "id": p.id,
             "user_id": p.user_id,
@@ -967,7 +975,7 @@ def get_participants(
     return MeetingRoster(meeting=meeting, participants=roster)
 
 
-# ── Host actions: admit / deny / kick / promote ────────────────────────────
+# ── Host actions: admit / deny / promote ───────────────────────────────────
 
 @router.post("/{code}/admit", response_model=ParticipantOut)
 async def admit_participant(
@@ -1079,34 +1087,8 @@ async def deny_participant(
     return participant
 
 
-@router.post("/{code}/kick", response_model=ParticipantOut)
-def kick_participant(
-    code: str,
-    data: ParticipantActionIn,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    meeting = _get_meeting_or_404(code, db)
-    _require_host_or_cohost(meeting, user, db)
-
-    if data.user_id == meeting.host_id:
-        raise HTTPException(status_code=403, detail="Cannot kick the host")
-
-    participant = db.scalar(
-        select(MeetingParticipant).where(
-            MeetingParticipant.meeting_id == meeting.id,
-            MeetingParticipant.user_id == data.user_id,
-            MeetingParticipant.status == STATUS_ADMITTED,
-        )
-    )
-    if not participant:
-        raise HTTPException(status_code=404, detail="Participant not found or not admitted")
-
-    participant.status = STATUS_KICKED
-    participant.left_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(participant)
-    return participant
+# ponytail: host "kick participant" endpoint removed — hosts can no longer
+# force-disconnect anyone. STATUS_KICKED stays for historical rows + join guards.
 
 
 # ── Attendance export (host-only CSV) ──────────────────────────────────────
@@ -1127,11 +1109,18 @@ def export_attendance(
         .order_by(MeetingParticipant.joined_at)
     ).all()
 
+    # Bulk-load users in ONE query instead of db.get() per row (N+1).
+    _uids = [p.user_id for p in participants]
+    _users = (
+        {u.id: u for u in db.scalars(select(User).where(User.id.in_(_uids))).all()}
+        if _uids else {}
+    )
+
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["Name", "Email", "Role", "Status", "Joined At", "Left At", "Duration (seconds)"])
     for p in participants:
-        u = db.get(User, p.user_id)
+        u = _users.get(p.user_id)
         end = p.left_at or p.last_seen_at
         duration = int((end - p.joined_at).total_seconds()) if (end and p.joined_at) else ""
         writer.writerow([

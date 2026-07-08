@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, ForeignKey, Boolean, Integer, Text, JSON
+from sqlalchemy import String, DateTime, ForeignKey, Boolean, Integer, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -74,6 +74,13 @@ class Meeting(Base):
 
 class MeetingParticipant(Base):
     __tablename__ = "meeting_participants"
+    # One row per (meeting, user). Enforced so concurrent first-joins can't create
+    # duplicate rows — the IntegrityError recovery in join_meeting / signaling
+    # relies on this constraint actually existing. Existing DBs get it via the
+    # dedup+index step in database.py (create_all won't ALTER an existing table).
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "user_id", name="uq_meeting_participants_meeting_user"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     meeting_id: Mapped[int] = mapped_column(

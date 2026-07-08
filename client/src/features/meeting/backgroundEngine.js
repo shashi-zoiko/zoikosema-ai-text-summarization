@@ -94,6 +94,7 @@ export class BackgroundProcessor {
     this.maskCtx = this.maskCanvas.getContext('2d', { willReadFrequently: true })
 
     this.segmenter = null
+    this._segLoading = false
     this.effect = { type: 'none' }
     this.bgImage = null
     this.outputStream = null
@@ -139,7 +140,9 @@ export class BackgroundProcessor {
     this.canvas.width = w
     this.canvas.height = h
 
-    if (!this.segmenter) this.segmenter = await getSegmenter()
+    // Only the blur/image backgrounds need MediaPipe. A colour-grade filter (or
+    // a later switch to one) skips loading the heavy segmenter entirely.
+    if (this._needsSegmenter() && !this.segmenter) this.segmenter = await getSegmenter()
 
     if (!this.outputStream) {
       this.outputStream = this.canvas.captureStream(fps)
@@ -171,6 +174,25 @@ export class BackgroundProcessor {
     } else {
       this.bgImage = null
     }
+    // Switched to a background that needs the segmenter but it isn't loaded yet
+    // (e.g. we started on a cheap filter) — kick off the load in the background.
+    if (this._needsSegmenter()) this._ensureSegmenter()
+  }
+
+  /** True when the active effect requires MediaPipe segmentation. */
+  _needsSegmenter() {
+    const t = this.effect?.type
+    return t === 'blur' || t === 'image'
+  }
+
+  /** Lazily load the shared segmenter without blocking the render loop. */
+  _ensureSegmenter() {
+    if (this.segmenter || this._segLoading) return
+    this._segLoading = true
+    getSegmenter()
+      .then((s) => { this.segmenter = s })
+      .catch(() => {})
+      .finally(() => { this._segLoading = false })
   }
 
   _loadImage(src) {
@@ -210,7 +232,24 @@ export class BackgroundProcessor {
 
   _renderFrame() {
     const v = this.video
-    if (!v.videoWidth || v.readyState < 2 || !this.segmenter) return
+    if (!v.videoWidth || v.readyState < 2) return
+
+    // Colour-grade filter — no segmentation, just draw the raw frame through a
+    // CSS filter. Cheap; runs regardless of participant count.
+    if (this.effect.type === 'filter') {
+      this._drawFiltered(this.effect.css)
+      return
+    }
+
+    // A background that needs the segmenter, but it isn't ready yet — show the
+    // raw camera (never freeze) while it loads in the background.
+    if (!this.segmenter) {
+      this.ctx.filter = 'none'
+      this.ctx.globalCompositeOperation = 'source-over'
+      this.ctx.drawImage(v, 0, 0, this.canvas.width, this.canvas.height)
+      this._ensureSegmenter()
+      return
+    }
 
     // Monotonic, strictly-increasing timestamp is required by VIDEO mode.
     let ts = performance.now()
@@ -381,6 +420,21 @@ export class BackgroundProcessor {
     ctx.filter = 'blur(2px)'
     ctx.drawImage(this._blurCanvas, -o, -o, w + o * 2, h + o * 2)
     ctx.filter = 'none'
+  }
+
+  // Full-frame colour grade: draw the raw camera through a CSS filter. Both
+  // the person and the background are graded (like Google Meet's Filters tab).
+  _drawFiltered(css) {
+    const ctx = this.ctx
+    const w = this.canvas.width
+    const h = this.canvas.height
+    ctx.save()
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.clearRect(0, 0, w, h)
+    ctx.filter = css || 'none'
+    ctx.drawImage(this.video, 0, 0, w, h)
+    ctx.filter = 'none'
+    ctx.restore()
   }
 
   // Cover-fit (object-fit: cover) the background image onto the canvas.

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { AnimatePresence, LayoutGroup, motion } from 'framer-motion'
 import { PanelRightClose, Users } from 'lucide-react'
 import { computeGridLayout, computePageSize, galleryGridOpts, TILE_ASPECT, useElementSize, useGridLayout } from '../hooks/useGridLayout.js'
@@ -45,6 +45,13 @@ const ENTER = { opacity: 0, scale: 0.85 }
 const SHOW = { opacity: 1, scale: 1 }
 const OVERFLOW_KEY = '__overflow__'
 
+// Above this many tiles, drop the framer-motion FLIP `layout` animation. `layout`
+// forces a getBoundingClientRect measure + reflow of every tile on each
+// layout-affecting render; combined with active-speaker ticks that is the main
+// meeting-grid CPU cost past ~15 participants. Tiles still mount/unmount, just
+// without the animated morph — a deliberate perf/polish trade at scale.
+const ANIMATE_MAX = 15
+
 /**
  * Split `items` into the tiles that stay on stage and the tiles that fold into
  * the "+N others" summary. Selection is by `priorityOrder` (most-important
@@ -66,9 +73,38 @@ function selectVisible(items, priorityOrder, visN) {
   }
 }
 
-export default function StageLayout({ items, heroKey, heroFit = 'cover', heroAspect, priorityOrder, renderTile, renderOverflow }) {
+// A single tile slot. Animates (FLIP morph + enter/exit) when `animate` is on;
+// otherwise a plain div so big meetings skip the per-tile reflow. `layoutId` is
+// only set when animating, so framer-motion does no cross-view tracking at scale.
+function MotionTile({ animate, id, style, className, children }) {
+  if (!animate) return <div style={style} className={className}>{children}</div>
+  return (
+    <motion.div
+      layoutId={id}
+      layout
+      initial={ENTER}
+      animate={SHOW}
+      exit={ENTER}
+      transition={TRANSITION}
+      style={style}
+      className={className}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
+// LayoutGroup / AnimatePresence both cost layout work; skip them entirely when
+// animation is off so a large grid pays nothing for machinery it isn't using.
+const MaybeGroup = ({ animate, children }) => (animate ? <LayoutGroup>{children}</LayoutGroup> : <>{children}</>)
+const MaybePresence = ({ animate, children }) =>
+  animate ? <AnimatePresence mode="popLayout">{children}</AnimatePresence> : <>{children}</>
+
+function StageLayout({ items, heroKey, heroFit = 'cover', heroAspect, priorityOrder, renderTile, renderOverflow }) {
   const hero = heroKey ? items.find((i) => i.key === heroKey) : null
   const others = hero ? items.filter((i) => i.key !== hero.key) : items
+  // One decision for the whole subtree: animate only small rooms.
+  const animate = items.length <= ANIMATE_MAX
 
   if (items.length === 0) return <div className="flex-1" />
 
@@ -78,17 +114,24 @@ export default function StageLayout({ items, heroKey, heroFit = 'cover', heroAsp
   // plays on stop. Without it the two views are separate subtrees and the layout
   // would hard-cut instead of animating.
   return (
-    <LayoutGroup>
+    <MaybeGroup animate={animate}>
       {hero ? (
-        <HeroView hero={hero} heroFit={heroFit} heroAspect={heroAspect} others={others} priorityOrder={priorityOrder} renderTile={renderTile} renderOverflow={renderOverflow} />
+        <HeroView hero={hero} heroFit={heroFit} heroAspect={heroAspect} others={others} priorityOrder={priorityOrder} renderTile={renderTile} renderOverflow={renderOverflow} animate={animate} />
       ) : (
-        <GalleryGrid items={items} priorityOrder={priorityOrder} renderTile={renderTile} renderOverflow={renderOverflow} />
+        <GalleryGrid items={items} priorityOrder={priorityOrder} renderTile={renderTile} renderOverflow={renderOverflow} animate={animate} />
       )}
-    </LayoutGroup>
+    </MaybeGroup>
   )
 }
 
-function GalleryGrid({ items, priorityOrder, renderTile, renderOverflow }) {
+// Memoised: Stage re-renders on every active-speaker/audio-level tick, but its
+// layout inputs (items, priorityOrder, heroKey) usually don't change on a tick.
+// With the render callbacks wrapped in useCallback upstream, memo keeps the whole
+// grid subtree from reconciling on every tick — the other half of the speaker-
+// event CPU fix.
+export default memo(StageLayout)
+
+function GalleryGrid({ items, priorityOrder, renderTile, renderOverflow, animate }) {
   const [ref, size] = useElementSize()
   const count = items.length
   // Orientation + viewport drive both the column strategy and the gutter: phones
@@ -125,44 +168,36 @@ function GalleryGrid({ items, priorityOrder, renderTile, renderOverflow }) {
   return (
     <div ref={ref} className="relative min-h-0 w-full flex-1 overflow-hidden p-2 sm:p-4 lg:p-6">
       <div className="flex h-full w-full flex-wrap content-center items-center justify-center" style={{ gap }}>
-        <AnimatePresence mode="popLayout">
+        <MaybePresence animate={animate}>
           {visibleItems.map((item) => (
-            <motion.div
+            <MotionTile
               key={item.key}
-              layoutId={item.key}
-              layout
-              initial={ENTER}
-              animate={SHOW}
-              exit={ENTER}
-              transition={TRANSITION}
+              animate={animate}
+              id={item.key}
               style={{ width: grid.tileW, height: grid.tileH }}
               className="min-h-0 min-w-0"
             >
               {renderTile(item, { isHero: single, fit: 'cover' })}
-            </motion.div>
+            </MotionTile>
           ))}
           {overflowing && (
-            <motion.div
+            <MotionTile
               key={OVERFLOW_KEY}
-              layoutId={OVERFLOW_KEY}
-              layout
-              initial={ENTER}
-              animate={SHOW}
-              exit={ENTER}
-              transition={TRANSITION}
+              animate={animate}
+              id={OVERFLOW_KEY}
               style={{ width: grid.tileW, height: grid.tileH }}
               className="min-h-0 min-w-0"
             >
               {renderOverflow(overflowItems, { dense: false })}
-            </motion.div>
+            </MotionTile>
           )}
-        </AnimatePresence>
+        </MaybePresence>
       </div>
     </div>
   )
 }
 
-function HeroView({ hero, heroFit, heroAspect, others, priorityOrder, renderTile, renderOverflow }) {
+function HeroView({ hero, heroFit, heroAspect, others, priorityOrder, renderTile, renderOverflow, animate }) {
   // Hero owns the stage; the rail of other tiles sits to the RIGHT on desktop and
   // drops to a horizontal carousel UNDER the hero on tablet/mobile. The rail can
   // be collapsed so the shared content goes edge-to-edge (Meet/Teams "hide
@@ -189,15 +224,15 @@ function HeroView({ hero, heroFit, heroAspect, others, priorityOrder, renderTile
 
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row">
-      <Hero item={hero} fit={heroFit} aspect={heroAspect} renderTile={renderTile} toggle={toggle} />
+      <Hero item={hero} fit={heroFit} aspect={heroAspect} renderTile={renderTile} toggle={toggle} animate={animate} />
       {hasOthers && !collapsed && (
-        <Filmstrip items={others} priorityOrder={priorityOrder} renderTile={renderTile} renderOverflow={renderOverflow} />
+        <Filmstrip items={others} priorityOrder={priorityOrder} renderTile={renderTile} renderOverflow={renderOverflow} animate={animate} />
       )}
     </div>
   )
 }
 
-function Hero({ item, fit, aspect, renderTile, toggle }) {
+function Hero({ item, fit, aspect, renderTile, toggle, animate }) {
   const contain = fit === 'contain'
   // Screen share: size the hero box to the SHARE's real aspect ratio so the frame
   // hugs the content edge-to-edge — no black letterbox bars, and the rounded
@@ -210,20 +245,15 @@ function Hero({ item, fit, aspect, renderTile, toggle }) {
   const [ref, grid] = useGridLayout(1, GAP, opts)
   return (
     <div ref={ref} className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
-      <motion.div
-        layoutId={item.key}
-        layout
-        transition={TRANSITION}
-        style={{ width: grid.tileW, height: grid.tileH }}
-      >
+      <MotionTile animate={animate} id={item.key} style={{ width: grid.tileW, height: grid.tileH }}>
         {renderTile(item, { isHero: true, fit })}
-      </motion.div>
+      </MotionTile>
       {toggle}
     </div>
   )
 }
 
-function Filmstrip({ items, priorityOrder, renderTile, renderOverflow }) {
+function Filmstrip({ items, priorityOrder, renderTile, renderOverflow, animate }) {
   // Two shapes, like Meet / Teams: a VERTICAL rail down the right on desktop and
   // a HORIZONTAL carousel under the hero on tablet/mobile. Tiles render in
   // `dense` mode (fixed type sizes) throughout.
@@ -298,38 +328,30 @@ function Filmstrip({ items, priorityOrder, renderTile, renderOverflow }) {
           : 'overflow-x-auto overflow-y-hidden')
       }
     >
-      <AnimatePresence mode="popLayout">
+      <MaybePresence animate={animate}>
         {visibleItems.map((item) => (
-          <motion.div
+          <MotionTile
             key={item.key}
-            layoutId={item.key}
-            layout
-            initial={ENTER}
-            animate={SHOW}
-            exit={ENTER}
-            transition={TRANSITION}
+            animate={animate}
+            id={item.key}
             className={tileClass}
             style={tileStyle}
           >
             {renderTile(item, { isHero: false, fit: 'cover', dense: true })}
-          </motion.div>
+          </MotionTile>
         ))}
         {overflowing && (
-          <motion.div
+          <MotionTile
             key={OVERFLOW_KEY}
-            layoutId={OVERFLOW_KEY}
-            layout
-            initial={ENTER}
-            animate={SHOW}
-            exit={ENTER}
-            transition={TRANSITION}
+            animate={animate}
+            id={OVERFLOW_KEY}
             className={tileClass}
             style={tileStyle}
           >
             {renderOverflow(overflowItems, { dense: true })}
-          </motion.div>
+          </MotionTile>
         )}
-      </AnimatePresence>
+      </MaybePresence>
     </div>
   )
 }
