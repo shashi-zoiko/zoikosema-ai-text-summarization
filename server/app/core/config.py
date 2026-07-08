@@ -6,15 +6,25 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg2://zoiko:zoiko_dev@localhost:5432/zoiko"
-    # SQLAlchemy connection-pool sizing (Postgres only). Defaults suit normal
-    # autoscaled load; raise db_pool_size for a single-instance large-meeting
-    # event (more concurrent joins land on one box). Total connections per
-    # instance = db_pool_size + db_max_overflow. Safe on the Supabase
-    # transaction pooler (:6543), which multiplexes; do NOT push high on the
-    # session pooler (:5432, 15-client cap). Overridable via DB_POOL_SIZE /
-    # DB_MAX_OVERFLOW so it can be tuned from deploy env without a code change.
-    db_pool_size: int = 20
-    db_max_overflow: int = 10
+    # SQLAlchemy connection-pool sizing (Postgres only). Sized for a single
+    # large meeting (50-100) whose attendees can all submit /join + /media-token
+    # in the same few seconds at a scheduled start — that burst is the only
+    # thing that now touches the pool at scale, since admitted WebSockets hold
+    # ZERO connections while idle (see signaling.py's per-loop db.rollback()).
+    # Total connections per instance = db_pool_size + db_max_overflow. Safe on
+    # the Supabase transaction pooler (:6543), which multiplexes; do NOT push
+    # high on the session pooler (:5432, 15-client cap). Overridable via
+    # DB_POOL_SIZE / DB_MAX_OVERFLOW so it can be tuned from deploy env.
+    db_pool_size: int = 40
+    db_max_overflow: int = 20
+
+    # Guest joins allowed per client IP per hour. Sized so a 50-100 person
+    # meeting whose attendees share one corporate NAT (single egress IP) can
+    # all join — the old 20 returned 429 to every guest past the 20th, which
+    # looked like "can't join after ~15". Still blunts scripted room-flooding
+    # (a bot from one IP is capped here, and combined with the per-meeting
+    # guests_enabled kill-switch). Overridable via GUEST_JOIN_MAX_PER_HOUR.
+    guest_join_max_per_hour: int = 250
     jwt_secret: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
 

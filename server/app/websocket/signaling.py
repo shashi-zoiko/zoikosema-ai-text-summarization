@@ -540,6 +540,17 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
 
         try:
             while True:
+                # Release the pooled DB connection back to the pool while we
+                # idle waiting for the next client frame. Without this, every
+                # admitted participant pins one pooled connection for the WHOLE
+                # meeting (the open transaction from join/welcome is never
+                # ended), so ~15 participants exhaust the pool — and the
+                # Supabase session pooler's 15-client cap — after which every
+                # new join, admit-all, and even background init_db 500s. This
+                # mirrors the same release the waiting-room hold loop already
+                # does between polls; the next db.* re-checks a connection out
+                # cheaply and processes the message.
+                db.rollback()
                 data = await websocket.receive_json()
                 kind = data.get("type")
 

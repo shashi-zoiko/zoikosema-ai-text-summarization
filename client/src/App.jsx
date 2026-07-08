@@ -27,6 +27,9 @@ const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx')
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
 const AccountSettings = lazy(() => import('./pages/AccountSettings.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
+const Billing = lazy(() => import('./pages/Billing.jsx'))
+const HelpSupport = lazy(() => import('./pages/HelpSupport.jsx'))
+const Settings = lazy(() => import('./pages/Settings.jsx'))
 const SharedRecording = lazy(() => import('./pages/SharedRecording.jsx'))
 
 function PageFallback() {
@@ -175,9 +178,11 @@ export default function App() {
           <Route path="/scheduled" element={<ScheduledMeetings />} />
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
-          <Route path="/settings" element={<AccountSettings section="workspace" />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/security" element={<AccountSettings section="security" />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/billing" element={<Billing />} />
+          <Route path="/help-support" element={<HelpSupport />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

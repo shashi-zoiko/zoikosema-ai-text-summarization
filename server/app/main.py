@@ -18,7 +18,7 @@ from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.core.recording_cleanup import recording_cleanup_loop
 from app.core.guest_cleanup import guest_cleanup_loop
 from app.core.meeting_reminders import meeting_reminder_loop
-from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence, webhooks
+from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence, webhooks, support, settings as settings_api
 from app.websocket import chat as chat_ws, signaling as meeting_ws
 from app.websocket.manager import chat_manager, meet_manager
 from app.connect import router as connect_router
@@ -128,6 +128,26 @@ def health_ready():
     return JSONResponse(body, status_code=200 if overall_ok else 503)
 
 
+@app.get("/api/health/metrics")
+def health_metrics():
+    """Point-in-time scalability gauges — curl this during a load test to watch
+    for the two failure modes that used to crash meetings at ~15 users:
+    DB-pool exhaustion and per-instance socket saturation. Numbers are for THIS
+    instance only (single-instance deploy, so that's the whole picture)."""
+    pool = engine.pool
+    # QueuePool exposes these; the SQLite fallback pool may not — guard each.
+    db_pool = {
+        k: getattr(pool, k)()
+        for k in ("size", "checkedin", "checkedout", "overflow")
+        if callable(getattr(pool, k, None))
+    }
+    return {
+        "db_pool": db_pool,
+        "meetings": meet_manager.stats(),
+        "chat": chat_manager.stats(),
+    }
+
+
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(chat.router)
@@ -145,6 +165,8 @@ app.include_router(calls.router)
 app.include_router(chat_ws.router)
 app.include_router(meeting_ws.router)
 app.include_router(webhooks.router)
+app.include_router(support.router)
+app.include_router(settings_api.router)
 
 # Zoiko Connect v3 — new bounded services mounted alongside legacy routers.
 # Strangler-fig: legacy paths keep working; new features consume /api/connect/*.

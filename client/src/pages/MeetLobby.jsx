@@ -13,6 +13,7 @@ import useMediaDevices from '../hooks/useMediaDevices'
 import useAudioLevel from '../hooks/useAudioLevel'
 import Avatar from '../components/ui/Avatar'
 import Logo from '../components/ui/Logo'
+import ThemeToggle from '../components/ui/ThemeToggle'
 import { cn } from '../lib/cn'
 import { meetingRoomPath, meetingShareText } from '../lib/meetingUrls.js'
 
@@ -500,12 +501,12 @@ export default function MeetLobby() {
   if (err && !meeting) {
     return (
       <Shell user={user} meeting={null}>
-        <div className="mx-auto mt-8 w-full max-w-md rounded-3xl border border-[#E5E7EB] bg-white p-8 text-center shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)]">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#FEE2E2] text-[#DC2626]">
+        <div className="zk-themed mx-auto mt-8 w-full max-w-md rounded-3xl border border-[var(--c-line)] bg-[var(--c-surface)] p-8 text-center shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)]">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[var(--c-danger-soft)] text-[var(--c-danger)]">
             <X className="h-7 w-7" />
           </div>
-          <h2 className="mt-5 text-xl font-bold text-[#111827]">Meeting unavailable</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-[#6B7280]">{err}</p>
+          <h2 className="mt-5 text-xl font-bold text-[var(--c-fg)]">Meeting unavailable</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--c-fg-muted)]">{err}</p>
           <button
             onClick={() => navigate('/')}
             className="zk-press mt-6 inline-flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] px-6 text-[14px] font-semibold text-white shadow-[0_12px_30px_-10px_rgba(124,58,237,0.6)]"
@@ -521,23 +522,23 @@ export default function MeetLobby() {
   if (waitingStatus === 'pending') {
     return (
       <Shell user={user} meeting={meeting}>
-        <div className="mx-auto mt-8 w-full max-w-md rounded-3xl border border-[#E5E7EB] bg-white p-8 text-center shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)]">
+        <div className="zk-themed mx-auto mt-8 w-full max-w-md rounded-3xl border border-[var(--c-line)] bg-[var(--c-surface)] p-8 text-center shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)]">
           <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-[#6D28D9] to-[#7C3AED] text-white shadow-[0_12px_30px_-8px_rgba(124,58,237,0.5)]">
             <Loader2 className="h-7 w-7 animate-spin" />
           </div>
-          <h2 className="mt-5 text-xl font-bold text-[#111827]">Asking to be let in</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-[#6B7280]">
+          <h2 className="mt-5 text-xl font-bold text-[var(--c-fg)]">Asking to be let in</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--c-fg-muted)]">
             You'll join automatically once the host lets you in. This usually takes a few seconds.
           </p>
-          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[#DDD6FE] bg-[#F5F3FF] px-3 py-1.5 text-[12px]">
-            <ShieldCheck className="h-3.5 w-3.5 text-[#7C3AED]" />
-            <span className="text-[#6B7280]">Code</span>
-            <span className="font-mono font-semibold text-[#111827]">{code}</span>
+          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[var(--lobby-accent-line)] bg-[var(--lobby-accent-tint)] px-3 py-1.5 text-[12px]">
+            <ShieldCheck className="h-3.5 w-3.5 text-[var(--lobby-accent-fg)]" />
+            <span className="text-[var(--c-fg-muted)]">Code</span>
+            <span className="font-mono font-semibold text-[var(--c-fg)]">{code}</span>
           </div>
           <div>
             <button
               onClick={cancelWaiting}
-              className="zk-press mt-6 rounded-full border border-[#E5E7EB] bg-white px-5 py-2 text-sm font-medium text-[#374151] transition hover:bg-[#F9FAFB]"
+              className="zk-press mt-6 rounded-full border border-[var(--c-line)] bg-[var(--c-surface)] px-5 py-2 text-sm font-medium text-[var(--c-fg-dim)] transition hover:bg-[var(--c-bg-3)]"
             >Cancel</button>
           </div>
         </div>
@@ -554,7 +555,11 @@ export default function MeetLobby() {
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:items-start">
           {/* ── Left: device preview ──────────────────────────────── */}
           <section className="min-w-0">
-            <div className="relative isolate aspect-[4/3] w-full overflow-hidden rounded-[24px] bg-[#0A0F1A] shadow-[0_24px_60px_-28px_rgba(15,23,42,0.5)] ring-1 ring-black/5 sm:aspect-[3/2]">
+            {/* min-h floor: every child is absolutely positioned, so the card's
+                height comes only from aspect-ratio — which resolves to 0 in this
+                grid cell and collapses the whole preview. The min-height guarantees
+                the panel is always visible; aspect-ratio still shapes it when taller. */}
+            <div className="relative isolate aspect-[4/3] min-h-[420px] w-full overflow-hidden rounded-[24px] bg-[#0A0F1A] shadow-[0_24px_60px_-28px_rgba(15,23,42,0.5)] ring-1 ring-black/5 sm:aspect-[3/2] sm:min-h-[480px]">
               {/* Video — ALWAYS mounted so the ref is stable. */}
               <video
                 ref={videoRef}
@@ -653,7 +658,7 @@ export default function MeetLobby() {
                     <button
                       type="button"
                       aria-label="Close menu"
-                      className="fixed inset-0 z-0 cursor-default"
+                      className="fixed inset-0 z-0 cursor-default border-0 bg-transparent shadow-none"
                       onClick={() => setBarPanel(null)}
                     />
                   )}
@@ -686,7 +691,9 @@ export default function MeetLobby() {
                     icon={audioOn ? <Mic /> : <MicOff />}
                     label="Mic"
                     value={audioOn ? 'On' : 'Off'}
+                    valueClass={audioOn ? undefined : 'text-[#FCA5A5]'}
                     active={audioOn}
+                    danger={!audioOn}
                     onClick={toggleAudio}
                     disabled={permState !== PERM.granted}
                     extra={audioOn && permState === PERM.granted ? <AudioMeter level={audioLevel} /> : null}
@@ -695,7 +702,9 @@ export default function MeetLobby() {
                     icon={videoOn ? <Video /> : <CameraOff />}
                     label="Camera"
                     value={videoOn ? 'On' : 'Off'}
+                    valueClass={videoOn ? undefined : 'text-[#FCA5A5]'}
                     active={videoOn}
+                    danger={!videoOn}
                     onClick={toggleVideo}
                     disabled={permState !== PERM.granted}
                   />
@@ -733,9 +742,9 @@ export default function MeetLobby() {
           </section>
 
           {/* ── Right: meeting info card ───────────────────────────── */}
-          <aside className="min-w-0 rounded-[24px] border border-[#E5E7EB] bg-white p-5 shadow-[0_24px_60px_-34px_rgba(15,23,42,0.3)] sm:p-6">
+          <aside className="zk-themed min-w-0 rounded-[24px] border border-[var(--c-line)] bg-[var(--c-surface)] p-5 shadow-[0_24px_60px_-34px_rgba(15,23,42,0.3)] sm:p-6">
             {meeting ? (
-              <h1 className="text-[24px] font-bold leading-tight tracking-tight text-[#111827] sm:text-[26px]">
+              <h1 className="text-[24px] font-bold leading-tight tracking-tight text-[var(--c-fg)] sm:text-[26px]">
                 {meeting.title || 'Meeting'}
               </h1>
             ) : (
@@ -746,27 +755,27 @@ export default function MeetLobby() {
             <div className="mt-4 flex items-center gap-3">
               <Avatar name={hostName} src={meeting?.host_avatar_url} size="md" />
               <div className="min-w-0">
-                <div className="truncate text-[14px] font-semibold text-[#111827]">Host: {hostName}</div>
-                <div className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[#6B7280]">
+                <div className="truncate text-[14px] font-semibold text-[var(--c-fg)]">Host: {hostName}</div>
+                <div className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--c-fg-muted)]">
                   <Users className="h-3.5 w-3.5" /> 3 people waiting
                 </div>
               </div>
             </div>
 
             {meeting?.description && (
-              <p className="mt-3 text-[13.5px] leading-relaxed text-[#6B7280]">{meeting.description}</p>
+              <p className="mt-3 text-[13.5px] leading-relaxed text-[var(--c-fg-muted)]">{meeting.description}</p>
             )}
 
-            <div className="my-4 h-px bg-[#EEF0F3]" />
+            <div className="my-4 h-px bg-[var(--c-line)]" />
 
             {/* Confidential Mode */}
-            <div className="relative rounded-2xl bg-[#F5F3FF] p-4 ring-1 ring-[#E7E0FB]">
-              <Info className="absolute right-3 top-3 h-4 w-4 text-[#A78BFA]" />
+            <div className="relative rounded-2xl bg-[var(--lobby-accent-tint)] p-4 ring-1 ring-[var(--lobby-accent-line)]">
+              <Info className="absolute right-3 top-3 h-4 w-4 text-[var(--lobby-accent-fg)]" />
               <div className="flex items-start gap-2.5">
-                <Lock className="mt-0.5 h-5 w-5 shrink-0 text-[#7C3AED]" />
+                <Lock className="mt-0.5 h-5 w-5 shrink-0 text-[var(--lobby-accent-fg)]" />
                 <div className="pr-5">
-                  <div className="text-[14px] font-bold text-[#6D28D9]">Confidential Mode</div>
-                  <div className="mt-1 text-[12.5px] leading-relaxed text-[#6B7280]">
+                  <div className="text-[14px] font-bold text-[var(--lobby-accent-fg)]">Confidential Mode</div>
+                  <div className="mt-1 text-[12.5px] leading-relaxed text-[var(--c-fg-dim)]">
                     End-to-end encrypted. AI notes, cloud recording, and phone dial-in are disabled.
                   </div>
                 </div>
@@ -774,8 +783,8 @@ export default function MeetLobby() {
             </div>
 
             {meeting?.scheduled_at && (
-              <div className="mt-3 inline-flex w-fit items-center gap-2 rounded-full border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-1.5 text-[12.5px] text-[#374151]">
-                <Calendar className="h-3.5 w-3.5 text-[#7C3AED]" />
+              <div className="mt-3 inline-flex w-fit items-center gap-2 rounded-full border border-[var(--c-line)] bg-[var(--c-bg-2)] px-3 py-1.5 text-[12.5px] text-[var(--c-fg-dim)]">
+                <Calendar className="h-3.5 w-3.5 text-[var(--lobby-accent-fg)]" />
                 {new Date(meeting.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
                 {meeting.timezone_name ? ` · ${meeting.timezone_name}` : ''}
               </div>
@@ -783,12 +792,12 @@ export default function MeetLobby() {
 
             {/* Scheduled-start countdown */}
             {showCountdown && (
-              <div className="mt-4 rounded-2xl border border-[#DDD6FE] bg-[#F5F3FF] p-4 text-center">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7C3AED]">Meeting starts in</div>
-                <div className="mt-1.5 font-mono text-[30px] font-bold leading-none tabular-nums text-[#111827]">
+              <div className="mt-4 rounded-2xl border border-[var(--lobby-accent-line)] bg-[var(--lobby-accent-tint)] p-4 text-center">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--lobby-accent-fg)]">Meeting starts in</div>
+                <div className="mt-1.5 font-mono text-[30px] font-bold leading-none tabular-nums text-[var(--c-fg)]">
                   {formatCountdown(msToStart)}
                 </div>
-                <div className="mt-1.5 text-[12px] text-[#6B7280]">
+                <div className="mt-1.5 text-[12px] text-[var(--c-fg-muted)]">
                   {notYetOpen
                     ? 'You can join from 5 minutes before the start time.'
                     : isHost
@@ -801,11 +810,11 @@ export default function MeetLobby() {
             {/* Guest display-name entry */}
             {isGuest && (
               <div className="mt-4">
-                <label htmlFor="guest-name" className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#6B7280]">
+                <label htmlFor="guest-name" className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[var(--c-fg-muted)]">
                   Your name
                 </label>
-                <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-3 py-2.5 focus-within:border-[#7C3AED] focus-within:ring-2 focus-within:ring-[#7C3AED]/20">
-                  <UserIcon className="h-4 w-4 shrink-0 text-[#9CA3AF]" />
+                <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-1)] px-3 py-2.5 focus-within:border-[var(--lobby-accent)] focus-within:ring-2 focus-within:ring-[color-mix(in_srgb,var(--lobby-accent)_35%,transparent)]">
+                  <UserIcon className="h-4 w-4 shrink-0 text-[var(--c-fg-muted)]" />
                   <input
                     id="guest-name"
                     type="text"
@@ -818,18 +827,18 @@ export default function MeetLobby() {
                     autoComplete="name"
                     aria-invalid={!!nameError}
                     aria-describedby={nameError ? 'guest-name-error' : undefined}
-                    className="min-w-0 flex-1 bg-transparent text-sm text-[#111827] outline-none placeholder:text-[#9CA3AF]"
+                    className="min-w-0 flex-1 bg-transparent text-sm text-[var(--c-fg)] outline-none placeholder:text-[var(--c-fg-muted)]"
                   />
                 </div>
                 {nameError && (
-                  <p id="guest-name-error" role="alert" className="mt-1.5 text-[12px] font-medium text-[#DC2626]">{nameError}</p>
+                  <p id="guest-name-error" role="alert" className="mt-1.5 text-[12px] font-medium text-[var(--c-danger)]">{nameError}</p>
                 )}
-                <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12.5px] text-[#6B7280]">
+                <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12.5px] text-[var(--c-fg-muted)]">
                   <input
                     type="checkbox"
                     checked={rememberName}
                     onChange={(e) => setRememberName(e.target.checked)}
-                    className="h-4 w-4 rounded border-[#D1D5DB] text-[#7C3AED] focus:ring-[#7C3AED]/40"
+                    className="h-4 w-4 rounded border-[var(--c-line-strong)] text-[var(--lobby-accent)] focus:ring-[color-mix(in_srgb,var(--lobby-accent)_45%,transparent)]"
                   />
                   Remember my name on this device
                 </label>
@@ -837,29 +846,29 @@ export default function MeetLobby() {
             )}
 
             {needsPassword && (
-              <div className="mt-4 flex items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-3 py-2.5 focus-within:border-[#7C3AED] focus-within:ring-2 focus-within:ring-[#7C3AED]/20">
-                <Lock className="h-4 w-4 shrink-0 text-[#9CA3AF]" />
+              <div className="mt-4 flex items-center gap-2 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-1)] px-3 py-2.5 focus-within:border-[var(--lobby-accent)] focus-within:ring-2 focus-within:ring-[color-mix(in_srgb,var(--lobby-accent)_35%,transparent)]">
+                <Lock className="h-4 w-4 shrink-0 text-[var(--c-fg-muted)]" />
                 <input
                   type="password"
                   placeholder="Enter meeting password"
                   value={meetingPwd}
                   onChange={(e) => setMeetingPwd(e.target.value)}
                   autoComplete="off"
-                  className="min-w-0 flex-1 bg-transparent text-sm text-[#111827] outline-none placeholder:text-[#9CA3AF]"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[var(--c-fg)] outline-none placeholder:text-[var(--c-fg-muted)]"
                 />
               </div>
             )}
 
             {meeting?.waiting_room_enabled && (isGuest || meeting?.host_id !== user?.id) && (
-              <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-[#F5E4C0] bg-[#FDF7EC] p-3 text-[12.5px] text-[#8A6516]">
-                <Info className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-[var(--lobby-warn-line)] bg-[var(--lobby-warn-tint)] p-3 text-[12.5px] text-[var(--c-fg-dim)]">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-[var(--lobby-warn-fg)]" />
                 <span>This meeting uses a waiting room — the host will let you in.</span>
               </div>
             )}
 
             {err && (
-              <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] p-3 text-[12.5px] text-[#DC2626]">
-                <X className="mt-0.5 h-4 w-4 shrink-0" />
+              <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-xl border border-[color-mix(in_srgb,var(--c-danger)_40%,transparent)] bg-[var(--c-danger-soft)] p-3 text-[12.5px] text-[var(--c-fg-dim)]">
+                <X className="mt-0.5 h-4 w-4 shrink-0 text-[var(--c-danger)]" />
                 <span className="font-medium">{err}</span>
               </div>
             )}
@@ -869,7 +878,7 @@ export default function MeetLobby() {
               onClick={join}
               disabled={joinDisabled}
               aria-busy={joining}
-              className="zk-press zk-sheen mt-4 flex h-14 w-full items-center justify-between rounded-2xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] px-6 text-[15px] font-semibold text-white shadow-[0_16px_36px_-14px_rgba(124,58,237,0.7)] transition hover:from-[#5B21B6] hover:to-[#6D28D9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+              className="zk-press zk-sheen mt-4 flex h-14 w-full items-center justify-between rounded-2xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] px-6 text-[15px] font-semibold text-white shadow-[0_16px_36px_-14px_rgba(124,58,237,0.7)] transition hover:from-[#5B21B6] hover:to-[#6D28D9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--c-surface)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
               <span className="flex items-center gap-2">
                 {joining && <Loader2 className="h-[18px] w-[18px] animate-spin" />}
@@ -883,14 +892,14 @@ export default function MeetLobby() {
               type="button"
               onClick={() => setDevicesOpen((v) => !v)}
               aria-expanded={devicesOpen}
-              className="zk-press mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-[#E5E7EB] bg-white text-[14px] font-semibold text-[#374151] transition hover:bg-[#F9FAFB]"
+              className="zk-press mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-[var(--c-line)] bg-[var(--c-surface)] text-[14px] font-semibold text-[var(--c-fg-dim)] transition hover:bg-[var(--c-bg-3)]"
             >
               <Settings className="h-4 w-4" /> Options
               <ChevronDown className={'h-4 w-4 transition-transform ' + (devicesOpen ? 'rotate-180' : '')} />
             </button>
 
             {devicesOpen && (
-              <div className="mt-3 space-y-2.5 rounded-2xl border border-[#E5E7EB] bg-[#F9FAFB] p-3">
+              <div className="mt-3 space-y-2.5 rounded-2xl border border-[var(--c-line)] bg-[var(--c-bg-2)] p-3">
                 <DevicePicker
                   label="Microphone"
                   icon={<Mic className="h-4 w-4" />}
@@ -912,20 +921,20 @@ export default function MeetLobby() {
               </div>
             )}
 
-            <div className="mt-2 text-center text-[12px] text-[#9CA3AF]">audio only · present · dial in</div>
+            <div className="mt-2 text-center text-[12px] text-[var(--c-fg-muted)]">audio only · present · dial in</div>
 
             {/* Stat tiles */}
-            <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-[#E5E7EB] bg-[#E5E7EB] sm:grid-cols-4">
-              <StatTile icon={<Sparkles />} iconClass="text-[#7C3AED]" label="AI notes" value="Off · E2EE" />
-              <StatTile icon={<Circle />} iconClass="text-[#059669]" label="Recording" value="Off" />
-              <StatTile icon={<Users />} iconClass="text-[#EA580C]" label="Guests" value="1 external" />
-              <StatTile icon={<ShieldCheck />} iconClass="text-[#059669]" label="Admission" value="Not required" />
+            <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-line)] sm:grid-cols-4">
+              <StatTile icon={<Sparkles />} iconClass="text-[var(--lobby-accent-fg)]" label="AI notes" value="Off · E2EE" />
+              <StatTile icon={<Circle />} iconClass="text-[var(--lobby-success-fg)]" label="Recording" value="Off" />
+              <StatTile icon={<Users />} iconClass="text-[var(--lobby-warn-fg)]" label="Guests" value="1 external" />
+              <StatTile icon={<ShieldCheck />} iconClass="text-[var(--lobby-success-fg)]" label="Admission" value="Not required" />
             </div>
 
             <button
               type="button"
               onClick={copyLink}
-              className="zk-press mt-3 inline-flex w-full items-center justify-center gap-1.5 text-[12.5px] font-medium text-[#6B7280] transition hover:text-[#7C3AED]"
+              className="zk-press mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-transparent bg-transparent text-[12.5px] font-medium text-[var(--c-fg-muted)] shadow-none transition hover:bg-[var(--c-bg-3)] hover:text-[var(--lobby-accent-fg)]"
             >
               {copied ? <><Check className="h-3.5 w-3.5" /> Link copied</> : <><Copy className="h-3.5 w-3.5" /> Copy invite link</>}
             </button>
@@ -937,33 +946,33 @@ export default function MeetLobby() {
         <div className="mt-4 space-y-2.5">
           <Banner
             tone="amber"
-            icon={<ShieldCheck className="text-[#B45309]" />}
+            icon={<ShieldCheck className="text-[var(--lobby-warn-fg)]" />}
             bold="Managed under Zoiko Group policy."
             text="Confidential Mode is enforced. Break-glass audit available to admins."
-            action={<span className="inline-flex items-center gap-1 font-semibold text-[#C2410C] hover:underline">View policy <ExternalLink className="h-3 w-3" /></span>}
+            action={<span className="inline-flex items-center gap-1 font-semibold text-[var(--lobby-warn-fg)] hover:underline">View policy <ExternalLink className="h-3 w-3" /></span>}
           />
           <Banner
             tone="teal"
-            icon={<ShieldCheck className="text-[#0F766E]" />}
+            icon={<ShieldCheck className="text-[var(--lobby-success-fg)]" />}
             bold="Workspace-protected meeting."
             text="Zoiko Sema never stores meeting content in Confidential Mode."
-            action={<span className="inline-flex items-center gap-1 font-semibold text-[#0F766E] hover:underline">Trust Center <ExternalLink className="h-3 w-3" /></span>}
+            action={<span className="inline-flex items-center gap-1 font-semibold text-[var(--lobby-success-fg)] hover:underline">Trust Center <ExternalLink className="h-3 w-3" /></span>}
           />
           <Banner
             tone="violet"
-            icon={<Sparkles className="text-[#7C3AED]" />}
+            icon={<Sparkles className="text-[var(--lobby-accent-fg)]" />}
             bold="Sema will draft follow-ups and action items"
             text="for you after the meeting."
             action={(
               <span className="inline-flex items-center gap-2">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#ECFDF5] text-[#059669]">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--lobby-success-tint)] text-[var(--lobby-success-fg)]">
                   <Clock className="h-4 w-4" />
                 </span>
                 <span className="leading-tight text-left">
-                  <span className="block text-[11px] text-[#9CA3AF]">Connected to</span>
-                  <span className="block font-semibold text-[#1F2937]">ZoikoTime</span>
+                  <span className="block text-[11px] text-[var(--c-fg-muted)]">Connected to</span>
+                  <span className="block font-semibold text-[var(--c-fg)]">ZoikoTime</span>
                 </span>
-                <ExternalLink className="h-3 w-3 text-[#9CA3AF]" />
+                <ExternalLink className="h-3 w-3 text-[var(--c-fg-muted)]" />
               </span>
             )}
           />
@@ -984,37 +993,38 @@ function isHostSafe(user, meeting) {
 
 function Shell({ user, meeting, children }) {
   return (
-    <div className="relative flex min-h-dvh flex-col bg-[#F3F4F6] text-[#1F2937]">
+    <div className="zk-lobby relative flex min-h-dvh flex-col bg-[var(--c-bg)] text-[var(--c-fg)]">
       <header
-        className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-[#E5E7EB] bg-white/90 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl sm:px-6"
+        className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-surface)_88%,transparent)] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl sm:px-6"
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
       >
         <div className="flex min-w-0 items-center gap-3 sm:gap-5">
           <Logo size={32} withWordmark />
           {meeting && (
-            <div className="hidden min-w-0 border-l border-[#E5E7EB] pl-3 sm:block sm:pl-5">
-              <div className="truncate text-[15px] font-bold text-[#111827]">{meeting.title || 'Meeting'}</div>
-              <div className="mt-0.5 flex items-center gap-2 text-[12px] text-[#6B7280]">
+            <div className="hidden min-w-0 border-l border-[var(--c-line)] pl-3 sm:block sm:pl-5">
+              <div className="truncate text-[15px] font-bold text-[var(--c-fg)]">{meeting.title || 'Meeting'}</div>
+              <div className="mt-0.5 flex items-center gap-2 text-[12px] text-[var(--c-fg-muted)]">
                 <span className="inline-flex items-center gap-1">
-                  Zoiko Group Workspace <ShieldCheck className="h-3.5 w-3.5 text-[#059669]" />
+                  Zoiko Group Workspace <ShieldCheck className="h-3.5 w-3.5 text-[var(--lobby-success-fg)]" />
                 </span>
-                <span className="rounded-md bg-[#EEF2FF] px-1.5 py-0.5 text-[11px] font-medium text-[#4F46E5]">Managed by Zoiko Group</span>
+                <span className="rounded-md bg-[var(--lobby-accent-tint)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--lobby-accent-fg)]">Managed by Zoiko Group</span>
               </div>
             </div>
           )}
         </div>
-        <div className="flex items-center gap-3 sm:gap-5">
-          <button type="button" className="hidden items-center gap-1.5 text-[13px] font-medium text-[#4B5563] transition hover:text-[#111827] sm:inline-flex">
+        <div className="flex items-center gap-2.5 sm:gap-4">
+          <ThemeToggle />
+          <button type="button" className="hidden h-9 items-center gap-1.5 rounded-full border border-[var(--c-line)] bg-[var(--c-surface-2)] px-3.5 text-[13px] font-medium text-[var(--c-fg-dim)] shadow-none transition hover:border-[var(--c-line-strong)] hover:text-[var(--c-fg)] sm:inline-flex">
             <HelpCircle className="h-4 w-4" /> Help
           </button>
           {user && (
             <div className="flex items-center gap-2">
               <Avatar name={user.name} src={user.avatar_url} color={user.avatar_color} size="sm" />
               <div className="hidden leading-tight sm:block">
-                <div className="text-[13px] font-semibold text-[#111827]">{user.name}</div>
-                <div className="text-[11.5px] text-[#6B7280]">{user.email}</div>
+                <div className="text-[13px] font-semibold text-[var(--c-fg)]">{user.name}</div>
+                <div className="text-[11.5px] text-[var(--c-fg-muted)]">{user.email}</div>
               </div>
-              <ChevronDown className="hidden h-4 w-4 text-[#9CA3AF] sm:block" />
+              <ChevronDown className="hidden h-4 w-4 text-[var(--c-fg-muted)] sm:block" />
             </div>
           )}
         </div>
@@ -1029,17 +1039,21 @@ function Shell({ user, meeting, children }) {
 // One control in the in-preview bar: circular glyph + label/value stack. On
 // mobile the label collapses to just the glyph. `active` = white fill (like
 // image 2's "Mic On"); otherwise a translucent dark chip.
-function ControlItem({ icon, label, value, valueClass, active, onClick, disabled, hasChevron = true, extra }) {
+function ControlItem({ icon, label, value, valueClass, active, danger, onClick, disabled, hasChevron = true, extra }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-left transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+      // bg-transparent/border-0/shadow-none override the global `button{}` base
+      // (background: var(--c-bg-1)) which otherwise paints these white in light mode.
+      className="group flex items-center gap-2 rounded-xl border-0 bg-transparent px-2 py-1.5 text-left shadow-none transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
     >
       <span className={cn(
         'grid h-9 w-9 shrink-0 place-items-center rounded-full [&_svg]:h-[18px] [&_svg]:w-[18px]',
-        active ? 'bg-white text-[#0A0F1A]' : 'bg-white/12 text-white',
+        active ? 'bg-white text-[#0A0F1A]'
+          : danger ? 'bg-[#EF4444] text-white'
+          : 'bg-white/15 text-white ring-1 ring-inset ring-white/15',
       )}>{icon}</span>
       <span className="hidden leading-tight sm:block">
         <span className="block text-[12.5px] font-semibold text-white">{label}</span>
@@ -1089,7 +1103,7 @@ function MenuItem({ active, onClick, children }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium text-white/90 transition hover:bg-white/10"
+      className="flex w-full items-center gap-2 rounded-xl border-0 bg-transparent px-2.5 py-2 text-left text-[13px] font-medium text-white/90 shadow-none transition hover:bg-white/10"
     >
       <span className="flex flex-1 items-center gap-2">{children}</span>
       {active && <Check className="h-4 w-4 text-[#34D399]" />}
@@ -1118,28 +1132,28 @@ function SignalBars() {
 
 function StatTile({ icon, iconClass, label, value }) {
   return (
-    <div className="bg-white px-3 py-3 text-center">
+    <div className="bg-[var(--c-surface)] px-3 py-3 text-center">
       <div className={cn('mx-auto grid h-6 w-6 place-items-center [&_svg]:h-4 [&_svg]:w-4', iconClass)}>{icon}</div>
-      <div className="mt-1.5 text-[12px] font-semibold text-[#374151]">{label}</div>
-      <div className="text-[11px] text-[#9CA3AF]">{value}</div>
+      <div className="mt-1.5 text-[12px] font-semibold text-[var(--c-fg-dim)]">{label}</div>
+      <div className="text-[11px] text-[var(--c-fg-muted)]">{value}</div>
     </div>
   )
 }
 
 const BANNER_TONES = {
-  amber: 'border-[#F5E4C0] bg-[#FDF7EC]',
-  teal: 'border-[#BBE7D6] bg-[#ECFDF5]',
-  violet: 'border-[#E7E0FB] bg-[#F5F3FF]',
+  amber: 'border-[var(--lobby-warn-line)] bg-[var(--lobby-warn-tint)]',
+  teal: 'border-[var(--lobby-success-line)] bg-[var(--lobby-success-tint)]',
+  violet: 'border-[var(--lobby-accent-line)] bg-[var(--lobby-accent-tint)]',
 }
 
 function Banner({ tone, icon, bold, text, action }) {
   return (
-    <div className={cn('flex items-center gap-3 rounded-2xl border px-4 py-3 text-[12.5px]', BANNER_TONES[tone])}>
+    <div className={cn('zk-themed flex items-center gap-3 rounded-2xl border px-4 py-3 text-[12.5px]', BANNER_TONES[tone])}>
       <span className="shrink-0 [&_svg]:h-4 [&_svg]:w-4">{icon}</span>
-      <p className="min-w-0 flex-1 text-[#4B5563]">
-        <span className="font-semibold text-[#1F2937]">{bold}</span> {text}
+      <p className="min-w-0 flex-1 text-[var(--c-fg-dim)]">
+        <span className="font-semibold text-[var(--c-fg)]">{bold}</span> {text}
       </p>
-      <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[#4B5563]">{action}</span>
+      <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[var(--c-fg-dim)]">{action}</span>
     </div>
   )
 }
@@ -1166,16 +1180,16 @@ function DevicePicker({ label, icon, devices, value, onChange, disabled, fallbac
   return (
     <label
       className={cn(
-        'group relative flex h-12 cursor-pointer items-center gap-2.5 rounded-xl border border-[#E5E7EB] bg-white px-3',
+        'group relative flex h-12 cursor-pointer items-center gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-surface)] px-3',
         disabled && 'pointer-events-none cursor-not-allowed opacity-50',
       )}
     >
-      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#F5F3FF] text-[#7C3AED]">{icon}</span>
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--lobby-accent-tint)] text-[var(--lobby-accent-fg)]">{icon}</span>
       <div className="min-w-0 flex-1">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[#9CA3AF]">{label}</div>
-        <div className="truncate text-[13px] font-medium text-[#374151]">{display}</div>
+        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--c-fg-muted)]">{label}</div>
+        <div className="truncate text-[13px] font-medium text-[var(--c-fg-dim)]">{display}</div>
       </div>
-      <ChevronDown className="h-4 w-4 shrink-0 text-[#9CA3AF]" />
+      <ChevronDown className="h-4 w-4 shrink-0 text-[var(--c-fg-muted)]" />
       <select
         disabled={disabled}
         value={value || ''}

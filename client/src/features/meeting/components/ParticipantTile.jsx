@@ -55,7 +55,7 @@ function useConnectionQuality(participant) {
 }
 
 function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = false, onAspectRatio, dense = false }) {
-  const { name, identity } = useParticipantInfo({ participant: trackRef.participant })
+  const { name, identity, metadata } = useParticipantInfo({ participant: trackRef.participant })
   const isSpeaking = useIsSpeaking(trackRef.participant)
   const quality = useConnectionQuality(trackRef.participant)
   const { isMuted: micMuted } = useTrackMutedIndicator({
@@ -96,8 +96,17 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
 
   const hasVideo = !!trackRef.publication && !videoMuted
   const displayName = name || identity || 'Guest'
-  const isGuest = isGuestParticipant(trackRef.participant)
-  const avatarUrl = assetUrl(participantAvatarUrl(trackRef.participant))
+  // Read guest/avatar off the REACTIVE metadata from useParticipantInfo, not
+  // the raw participant.metadata — remote participants' metadata arrives after
+  // the tile first mounts, and reading it non-reactively left their photo/guest
+  // badge stuck on the first (empty) render.
+  const isGuest = isGuestParticipant({ metadata })
+  const rawAvatar = participantAvatarUrl({ metadata })
+  // Fall back to the initial if the photo 404s (e.g. an upload that didn't
+  // persist) instead of showing a blank circle. Reset when the URL changes.
+  const [avatarFailed, setAvatarFailed] = useState(false)
+  useEffect(() => { setAvatarFailed(false) }, [rawAvatar])
+  const avatarUrl = avatarFailed ? null : assetUrl(rawAvatar)
   // Deterministic colour per identity so the same user always gets the same
   // avatar — Meet does the same trick.
   const avatarColor = pickColor(identity || displayName)
@@ -338,7 +347,12 @@ function ParticipantTileImpl({ trackRef, fit = 'cover', accent, isPresenting = f
               }}
             >
               {avatarUrl ? (
-                <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                <img
+                  src={avatarUrl}
+                  alt=""
+                  onError={() => setAvatarFailed(true)}
+                  className="h-full w-full object-cover"
+                />
               ) : (
                 displayName.slice(0, 1).toUpperCase()
               )}
