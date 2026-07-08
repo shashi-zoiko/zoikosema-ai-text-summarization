@@ -24,7 +24,6 @@ export default function MeetingHeader({
   onLock,
   onChatEnabled,
   onScreenEnabled,
-  onEnd,
   onOpenInfo,
 }) {
   const state = useConnectionState()
@@ -106,7 +105,6 @@ export default function MeetingHeader({
             onToggleLock={onLock}
             onToggleChat={onChatEnabled}
             onToggleScreenshare={onScreenEnabled}
-            onEndMeeting={onEnd}
           />
         )}
       </div>

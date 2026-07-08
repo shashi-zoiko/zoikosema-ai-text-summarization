@@ -55,10 +55,24 @@ class LiveKitMediaProvider(MediaProvider):
         can_publish = role in ("host", "co_host", "cohost", "participant")
         is_admin = (not is_guest) and role in ("host", "co_host", "cohost")
 
+        # Explicit source allowlist (hardening): a publisher may push ONLY
+        # camera, mic and screen share — never any other/unexpected track source.
+        # can_publish_sources supersedes can_publish, so this bounds what a
+        # compromised or misbehaving client can send at the SFU (a bandwidth/DoS
+        # vector at 100 users). Screen-share PERMISSION is still enforced live
+        # over the control WS (meeting.screenshare_enabled); this only limits the
+        # source TYPES a client may ever publish, matching what the app uses.
+        publish_sources = (
+            ["camera", "microphone", "screen_share", "screen_share_audio"]
+            if can_publish
+            else None
+        )
+
         grants = api.VideoGrants(
             room_join=True,
             room=media_room_ref,
             can_publish=can_publish,
+            can_publish_sources=publish_sources,
             can_subscribe=True,
             can_publish_data=True,
             room_admin=is_admin,        # mute/remove others

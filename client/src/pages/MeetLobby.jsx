@@ -947,7 +947,7 @@ export default function MeetLobby() {
           <Banner
             tone="amber"
             icon={<ShieldCheck className="text-[var(--lobby-warn-fg)]" />}
-            bold="Managed under Zoiko Group policy."
+            bold="Managed under Zoiko Tech policy."
             text="Confidential Mode is enforced. Break-glass audit available to admins."
             action={<span className="inline-flex items-center gap-1 font-semibold text-[var(--lobby-warn-fg)] hover:underline">View policy <ExternalLink className="h-3 w-3" /></span>}
           />
@@ -1005,7 +1005,7 @@ function Shell({ user, meeting, children }) {
               <div className="truncate text-[15px] font-bold text-[var(--c-fg)]">{meeting.title || 'Meeting'}</div>
               <div className="mt-0.5 flex items-center gap-2 text-[12px] text-[var(--c-fg-muted)]">
                 <span className="inline-flex items-center gap-1">
-                  Zoiko Group Workspace <ShieldCheck className="h-3.5 w-3.5 text-[var(--lobby-success-fg)]" />
+                  Zoiko Tech Workspace <ShieldCheck className="h-3.5 w-3.5 text-[var(--lobby-success-fg)]" />
                 </span>
                 <span className="rounded-md bg-[var(--lobby-accent-tint)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--lobby-accent-fg)]">Managed by Zoiko Group</span>
               </div>

@@ -1,7 +1,7 @@
 import { memo, useMemo } from 'react'
 import { useParticipants } from '@livekit/components-react'
 import { Track } from 'livekit-client'
-import { Crown, Hand, MicOff, Pin, PinOff, ShieldCheck, UserMinus, UserPlus, VideoOff } from 'lucide-react'
+import { Crown, Hand, MicOff, Pin, PinOff, ShieldCheck, UserPlus, VideoOff } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
 import DrawerShell from './DrawerShell.jsx'
 import GuestBadge, { isGuestParticipant } from './GuestBadge.jsx'
@@ -19,11 +19,11 @@ const ROLE_LABEL = {
 }
 
 /**
- * Teams-style people drawer (dark). Rows are tap-friendly; pin/promote/kick
+ * Teams-style people drawer (dark). Rows are tap-friendly; pin/promote
  * controls fade in on hover. Order: host → co-host → everyone else, with raised
  * hands bubbling within their tier.
  */
-export default function ParticipantsPanel({ selfUserId, isHost, isHostOrCohost, onClose, onKick, onPromote }) {
+export default function ParticipantsPanel({ selfUserId, isHost, onClose, onPromote }) {
   const all = useParticipants()
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
   const togglePinned = useRoomStore((s) => s.togglePinned)
@@ -50,12 +50,10 @@ export default function ParticipantsPanel({ selfUserId, isHost, isHostOrCohost, 
             participant={p}
             selfUserId={selfUserId}
             isHost={isHost}
-            isHostOrCohost={isHostOrCohost}
             role={roles.get(identityToUserId(p.identity)) || 'participant'}
             raised={raisedHands.has(identityToUserId(p.identity))}
             pinned={pinnedIdentity === p.identity}
             onTogglePin={() => togglePinned(p.identity)}
-            onKick={onKick}
             onPromote={onPromote}
           />
         ))}
@@ -65,7 +63,7 @@ export default function ParticipantsPanel({ selfUserId, isHost, isHostOrCohost, 
 }
 
 const ParticipantRow = memo(function ParticipantRow({
-  participant, selfUserId, isHost, isHostOrCohost, role, raised, pinned, onTogglePin, onKick, onPromote,
+  participant, selfUserId, isHost, role, raised, pinned, onTogglePin, onPromote,
 }) {
   const uid = identityToUserId(participant.identity)
   const isSelf = uid === selfUserId
@@ -81,7 +79,6 @@ const ParticipantRow = memo(function ParticipantRow({
   const initial = name.slice(0, 1).toUpperCase()
   const isGuest = isGuestParticipant(participant)
   const avatarColor = pickColor(participant.identity || name)
-  const canKick = isHostOrCohost && !isSelf && !isRowHost
   const canPromote = isHost && !isSelf && !isRowHost
 
   return (
@@ -114,11 +111,6 @@ const ParticipantRow = memo(function ParticipantRow({
         {canPromote && (
           <RowBtn onClick={() => onPromote(uid)} title={isRowCohost ? 'Demote' : 'Make co-host'}>
             <UserPlus className="h-3.5 w-3.5" />
-          </RowBtn>
-        )}
-        {canKick && (
-          <RowBtn onClick={() => onKick(uid, participant.name)} title="Remove from meeting" destructive>
-            <UserMinus className="h-3.5 w-3.5" />
           </RowBtn>
         )}
       </div>

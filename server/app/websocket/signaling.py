@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.core.deps import get_participant_from_token
-from app.core.guest_cleanup import purge_meeting_guests
 from app.core.security import verify_password
 from app.models.meeting import (
     Meeting,
@@ -29,6 +29,24 @@ from app.websocket.manager import meet_manager
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _run(fn, *args, **kwargs):
+    """Run a blocking SQLAlchemy / bcrypt call off the event loop.
+
+    This handler is `async` but does synchronous psycopg2 and bcrypt work; run
+    inline, each call blocked the single uvicorn event loop for its DB round-trip
+    (or ~50-100ms of bcrypt), so one participant's join/admit froze every other
+    socket on the instance — the meeting "freeze at ~15 joins" symptom. Offloading
+    to a worker thread keeps the loop free.
+
+    Safe with the shared per-connection Session: it is touched only by this one
+    coroutine and these calls are always awaited sequentially (never two in flight
+    for the same session), so no cross-thread session access ever overlaps.
+    """
+    if kwargs:
+        return await asyncio.to_thread(lambda: fn(*args, **kwargs))
+    return await asyncio.to_thread(fn, *args)
 
 
 # Track connection metadata per websocket
@@ -123,7 +141,7 @@ async def broadcast_waiting_list(code: str, meeting_id: int) -> None:
     room. Opens its own short-lived DB session so REST endpoints can call it."""
     db: Session = SessionLocal()
     try:
-        meeting = db.get(Meeting, meeting_id)
+        meeting = await _run(db.get, Meeting, meeting_id)
         if meeting is not None:
             await _send_waiting_list(f"meeting:{code}", meeting, db)
     finally:
@@ -154,24 +172,29 @@ def _get_participant(meeting_id: int, user_id: int, db: Session) -> MeetingParti
 
 async def _send_waiting_list(room: str, meeting: Meeting, db: Session):
     """Send the current waiting-room list to all host/co-host connections."""
-    pending = db.scalars(
-        select(MeetingParticipant).where(
-            MeetingParticipant.meeting_id == meeting.id,
-            MeetingParticipant.status == STATUS_PENDING,
-        )
-    ).all()
+    from app.models.user import User
 
     # Bulk-load every pending user in ONE query instead of db.get() per row.
     # The per-row lookup was an N+1 that ran on every admit (the waiting list is
     # recomputed and rebroadcast each time), so an admit-all over N waiters cost
-    # O(N²) point reads against the (possibly pooled/remote) DB.
-    from app.models.user import User
-    user_ids = [p.user_id for p in pending]
-    users = (
-        {u.id: u for u in db.scalars(select(User).where(User.id.in_(user_ids))).all()}
-        if user_ids
-        else {}
-    )
+    # O(N²) point reads against the (possibly pooled/remote) DB. Both queries run
+    # in one worker-thread hop so the event loop is never blocked on the DB here.
+    def _load():
+        rows = db.scalars(
+            select(MeetingParticipant).where(
+                MeetingParticipant.meeting_id == meeting.id,
+                MeetingParticipant.status == STATUS_PENDING,
+            )
+        ).all()
+        ids = [p.user_id for p in rows]
+        by_id = (
+            {u.id: u for u in db.scalars(select(User).where(User.id.in_(ids))).all()}
+            if ids
+            else {}
+        )
+        return rows, by_id
+
+    pending, users = await asyncio.to_thread(_load)
     waiting = []
     for p in pending:
         u = users.get(p.user_id)
@@ -198,24 +221,26 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
         # Accepts both signed-in users and anonymous guests (guest tokens). The
         # rest of this handler is identity-agnostic — a guest is a real User row
         # so every (meeting_id, user_id)-keyed path below works unchanged.
-        user = get_participant_from_token(token, db)
+        user = await _run(get_participant_from_token, token, db)
         if not user:
             await websocket.close(code=4401)
             return
 
-        meeting = db.scalar(select(Meeting).where(Meeting.code == code))
+        meeting = await _run(db.scalar, select(Meeting).where(Meeting.code == code))
         if not meeting or not meeting.is_active:
             await websocket.close(code=4404)
             return
 
-        # Meeting password check (host exempt)
+        # Meeting password check (host exempt). bcrypt is CPU-heavy (~50-100ms);
+        # off-loop so a burst of joins to a locked meeting doesn't serialize on it.
         if meeting.password_hash and meeting.host_id != user.id:
-            if not pwd or not verify_password(pwd, meeting.password_hash):
+            ok = bool(pwd) and await _run(verify_password, pwd, meeting.password_hash)
+            if not ok:
                 await websocket.close(code=4403, reason="Incorrect meeting password")
                 return
 
         # ── Determine participant status ────────────────────────────────
-        participant = _get_participant(meeting.id, user.id, db)
+        participant = await _run(_get_participant, meeting.id, user.id, db)
         is_host = meeting.host_id == user.id
 
         if participant:
@@ -227,7 +252,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 participant.status = STATUS_ADMITTED
                 participant.last_seen_at = datetime.now(timezone.utc)
                 participant.left_at = None
-                db.commit()
+                await _run(db.commit)
             elif participant.status == STATUS_LEFT:
                 # Re-joining after leaving
                 if meeting.waiting_room_enabled and not is_host:
@@ -236,7 +261,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     participant.status = STATUS_ADMITTED
                 participant.last_seen_at = datetime.now(timezone.utc)
                 participant.left_at = None
-                db.commit()
+                await _run(db.commit)
         else:
             # New participant
             if meeting.locked and not is_host:
@@ -244,24 +269,48 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 return
             role = ROLE_HOST if is_host else ROLE_PARTICIPANT
             status = STATUS_ADMITTED if is_host or not meeting.waiting_room_enabled else STATUS_PENDING
-            participant = MeetingParticipant(
-                meeting_id=meeting.id,
-                user_id=user.id,
-                role=role,
-                status=status,
-            )
-            db.add(participant)
-            db.commit()
-            db.refresh(participant)
 
+            def _create():
+                p = MeetingParticipant(
+                    meeting_id=meeting.id,
+                    user_id=user.id,
+                    role=role,
+                    status=status,
+                )
+                db.add(p)
+                try:
+                    db.commit()
+                except IntegrityError:
+                    # Concurrent first-join raced two INSERTs; UNIQUE(meeting_id,
+                    # user_id) rejects the loser. Recover the winner's row (same
+                    # idiom as join_meeting) instead of 500ing the socket.
+                    db.rollback()
+                    p = db.scalars(
+                        select(MeetingParticipant)
+                        .where(
+                            MeetingParticipant.meeting_id == meeting.id,
+                            MeetingParticipant.user_id == user.id,
+                        )
+                        .order_by(MeetingParticipant.id.desc())
+                    ).first()
+                    if p is None:
+                        raise
+                    return p
+                db.refresh(p)
+                return p
+
+            participant = await asyncio.to_thread(_create)
+
+        # peer_id is ephemeral signaling state used only in-process (see the
+        # _conn_info entries below) and is NEVER read back from Postgres. Keep it
+        # in memory only — persisting it wrote to meeting_participants on EVERY WS
+        # connect/reconnect (pure churn on the hot join path) for zero readers.
         peer_id = uuid.uuid4().hex[:10]
-        participant.peer_id = peer_id
-        db.commit()
 
         await websocket.accept()
         room = f"meeting:{code}"
 
-        host_or_cohost = _is_host_or_cohost(meeting, user.id, db)
+        host_or_cohost = await _run(_is_host_or_cohost, meeting, user.id, db)
 
         # If the same user already has a live WS in this meeting (extra tab,
         # stale connection that never sent a close frame, reconnect race),
@@ -356,7 +405,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     # Re-read status on every wake (event or timeout). A fresh
                     # SELECT under READ COMMITTED sees the host's committed
                     # change made on another connection.
-                    db.refresh(participant)
+                    await _run(db.refresh, participant)
                     status_now = participant.status
                     if status_now == STATUS_ADMITTED:
                         outcome = "admitted"
@@ -368,7 +417,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     # concurrent waiters don't each pin one for the whole wait
                     # (keeps headroom under the Supabase pooler at 20+ waiting
                     # users). The next refresh re-checks the row out cheaply.
-                    db.rollback()
+                    await _run(db.rollback)
             finally:
                 recv_task.cancel()
                 wait_task.cancel()
@@ -388,7 +437,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
             if outcome == "left" and was_active:
                 participant.status = STATUS_LEFT
                 participant.left_at = datetime.now(timezone.utc)
-                db.commit()
+                await _run(db.commit)
 
             if outcome == "admitted":
                 log.info("[ADMISSION_RECEIVED] meeting=%s user=%s", meeting.id, user.id)
@@ -550,7 +599,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 # mirrors the same release the waiting-room hold loop already
                 # does between polls; the next db.* re-checks a connection out
                 # cheaply and processes the message.
-                db.rollback()
+                await _run(db.rollback)
                 data = await websocket.receive_json()
                 kind = data.get("type")
 
@@ -604,7 +653,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     # than the plaintext) so a legit message is never truncated,
                     # which would corrupt the ciphertext and fail decryption.
                     # Refresh to honour live permission changes mid-meeting.
-                    db.refresh(meeting)
+                    await _run(db.refresh, meeting)
                     if not meeting.chat_enabled and not host_or_cohost:
                         await websocket.send_json({
                             "type": "permission-denied",
@@ -695,7 +744,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     )
 
                 elif kind == "screen-share-started":
-                    db.refresh(meeting)
+                    await _run(db.refresh, meeting)
                     if not meeting.screenshare_enabled and not host_or_cohost:
                         await websocket.send_json({
                             "type": "permission-denied",
@@ -742,26 +791,29 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     if not target_user_id:
                         continue
                     log.info("[ADMISSION_REQUEST] meeting=%s host=%s target=%s via=ws", meeting.id, user.id, target_user_id)
-                    tp = _get_participant(meeting.id, target_user_id, db)
+                    tp = await _run(_get_participant, meeting.id, target_user_id, db)
                     if tp and tp.status == STATUS_PENDING:
                         tp.status = STATUS_ADMITTED
                         tp.last_seen_at = datetime.now(timezone.utc)
-                        db.commit()
+                        await _run(db.commit)
                         await signal_admitted(meeting.id, target_user_id)
                         await _send_waiting_list(room, meeting, db)
 
                 elif kind == "admit-all" and host_or_cohost:
-                    pending = db.scalars(
-                        select(MeetingParticipant).where(
-                            MeetingParticipant.meeting_id == meeting.id,
-                            MeetingParticipant.status == STATUS_PENDING,
-                        )
-                    ).all()
-                    target_ids = [tp.user_id for tp in pending]
-                    for tp in pending:
-                        tp.status = STATUS_ADMITTED
-                        tp.last_seen_at = datetime.now(timezone.utc)
-                    db.commit()
+                    def _admit_all():
+                        rows = db.scalars(
+                            select(MeetingParticipant).where(
+                                MeetingParticipant.meeting_id == meeting.id,
+                                MeetingParticipant.status == STATUS_PENDING,
+                            )
+                        ).all()
+                        for tp in rows:
+                            tp.status = STATUS_ADMITTED
+                            tp.last_seen_at = datetime.now(timezone.utc)
+                        db.commit()
+                        return [tp.user_id for tp in rows]
+
+                    target_ids = await asyncio.to_thread(_admit_all)
                     log.info("[ADMISSION_REQUEST] meeting=%s host=%s admit-all count=%s via=ws", meeting.id, user.id, len(target_ids))
                     await signal_admitted_many(meeting.id, target_ids)
                     await _send_waiting_list(room, meeting, db)
@@ -770,45 +822,25 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     target_user_id = data.get("user_id")
                     if not target_user_id:
                         continue
-                    tp = _get_participant(meeting.id, target_user_id, db)
+                    tp = await _run(_get_participant, meeting.id, target_user_id, db)
                     if tp and tp.status == STATUS_PENDING:
                         tp.status = STATUS_DENIED
-                        db.commit()
+                        await _run(db.commit)
                         await signal_denied(meeting.id, target_user_id)
                         await _send_waiting_list(room, meeting, db)
 
-                elif kind == "kick" and host_or_cohost:
-                    target_user_id = data.get("user_id")
-                    if not target_user_id or target_user_id == meeting.host_id:
-                        continue
-                    tp = _get_participant(meeting.id, target_user_id, db)
-                    if tp and tp.status == STATUS_ADMITTED:
-                        tp.status = STATUS_KICKED
-                        tp.left_at = datetime.now(timezone.utc)
-                        db.commit()
-                        # Find their websocket and notify
-                        target_ws = _user_ws.get((meeting.id, target_user_id))
-                        if target_ws:
-                            try:
-                                await target_ws.send_json({"type": "kicked"})
-                            except Exception:
-                                pass
-                        # Broadcast peer-left
-                        target_info = _conn_info.get(target_ws) if target_ws else None
-                        if target_info:
-                            await meet_manager.broadcast(
-                                room,
-                                {"type": "peer-left", "peer_id": target_info["peer_id"]},
-                            )
+                # ponytail: host "kick / remove participant" was removed by
+                # product decision — hosts can no longer force-disconnect anyone.
+                # STATUS_KICKED is kept only for historical rows + the join guard.
 
                 elif kind == "promote" and meeting.host_id == user.id:
                     target_user_id = data.get("user_id")
                     if not target_user_id:
                         continue
-                    tp = _get_participant(meeting.id, target_user_id, db)
+                    tp = await _run(_get_participant, meeting.id, target_user_id, db)
                     if tp and tp.status == STATUS_ADMITTED:
                         tp.role = ROLE_COHOST if tp.role == ROLE_PARTICIPANT else ROLE_PARTICIPANT
-                        db.commit()
+                        await _run(db.commit)
                         await meet_manager.broadcast(
                             room,
                             {
@@ -829,7 +861,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                         meeting.screenshare_enabled = bool(data["screenshare_enabled"])
                         changed = True
                     if changed:
-                        db.commit()
+                        await _run(db.commit)
                         await meet_manager.broadcast(
                             room,
                             {
@@ -847,7 +879,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     theme_id = (data.get("theme") or "").strip()[:24]
                     if theme_id and theme_id != meeting.theme:
                         meeting.theme = theme_id
-                        db.commit()
+                        await _run(db.commit)
                         await meet_manager.broadcast(
                             room,
                             {"type": "theme-changed", "theme": theme_id},
@@ -856,28 +888,16 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 elif kind == "lock" and host_or_cohost:
                     locked = bool(data.get("locked", True))
                     meeting.locked = locked
-                    db.commit()
+                    await _run(db.commit)
                     await meet_manager.broadcast(
                         room,
                         {"type": "meeting-locked", "locked": locked},
                     )
 
-                elif kind == "end-meeting" and meeting.host_id == user.id:
-                    meeting.is_active = False
-                    meeting.ended_at = datetime.now(timezone.utc)
-                    db.commit()
-                    # Purge ephemeral guest accounts for this meeting (best-effort).
-                    try:
-                        purge_meeting_guests(meeting.id, db)
-                        db.commit()
-                    except Exception:
-                        log.exception("purge_meeting_guests failed for meeting=%s", meeting.id)
-                        db.rollback()
-                    await meet_manager.broadcast(
-                        room,
-                        {"type": "meeting-ended"},
-                    )
-                    break
+                # ponytail: in-meeting "end meeting for all" was removed — a host
+                # now just leaves (Google-Meet style) and the meeting stays live
+                # until everyone leaves. Deliberate admin teardown still lives in
+                # the REST POST /api/meetings/{code}/end endpoint.
 
         except WebSocketDisconnect:
             pass
@@ -896,13 +916,17 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     {"type": "peer-left", "peer_id": leaving["peer_id"]},
                 )
 
-            # Update participant status
-            db.refresh(participant)
-            if participant.status == STATUS_ADMITTED:
-                participant.status = STATUS_DISCONNECTED
-            participant.last_seen_at = datetime.now(timezone.utc)
-            if participant.status not in (STATUS_DISCONNECTED,):
-                participant.left_at = datetime.now(timezone.utc)
-            db.commit()
+            # Update participant status (off-loop so a mass leave at meeting end
+            # doesn't serialize every disconnect on the event loop).
+            def _mark_disconnected():
+                db.refresh(participant)
+                if participant.status == STATUS_ADMITTED:
+                    participant.status = STATUS_DISCONNECTED
+                participant.last_seen_at = datetime.now(timezone.utc)
+                if participant.status not in (STATUS_DISCONNECTED,):
+                    participant.left_at = datetime.now(timezone.utc)
+                db.commit()
+
+            await asyncio.to_thread(_mark_disconnected)
     finally:
         db.close()

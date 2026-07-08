@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMediaDeviceSelect } from '@livekit/components-react'
 import {
-  Accessibility, Ban, Bell, BellOff, Check, ImagePlus, Loader2, Mic, Play,
+  Accessibility, Ban, Bell, BellOff, Check, ImagePlus, Loader2, Mic, Palette, Play,
   Sparkles, Video, Volume2, VolumeX,
 } from 'lucide-react'
 import DrawerShell from './DrawerShell.jsx'
-import { BLUR_PRESETS, IMAGE_PRESETS } from '../backgroundPresets.js'
+import { BLUR_PRESETS, IMAGE_PRESETS, FILTER_PRESETS } from '../backgroundPresets.js'
 import { useNotifications } from '../notify/NotificationProvider.jsx'
 
 const TABS = [
   { id: 'audio', label: 'Audio', icon: Mic },
   { id: 'video', label: 'Video', icon: Video },
   { id: 'backgrounds', label: 'Backgrounds', icon: Sparkles },
+  { id: 'filters', label: 'Filters', icon: Palette },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'accessibility', label: 'Accessibility', icon: Accessibility },
 ]
@@ -82,6 +83,15 @@ export default function SettingsDrawer({
             bgSupported={bgSupported}
             uploads={uploads}
             onUpload={onUpload}
+            cameraOn={cameraOn}
+          />
+        )}
+        {tab === 'filters' && (
+          <FilterSection
+            bgEffectId={bgEffectId}
+            onSelectBg={onSelectBg}
+            bgLoading={bgLoading}
+            bgSupported={bgSupported}
             cameraOn={cameraOn}
           />
         )}
@@ -235,6 +245,61 @@ function BackgroundSection({ bgEffectId, onSelectBg, bgLoading, bgSupported, upl
               <span className="text-[11px] font-semibold">Upload</span>
             </button>
             <input ref={fileRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/* ── Camera filters (local, per-participant colour grade — no segmentation) ── */
+
+function FilterSection({ bgEffectId, onSelectBg, bgLoading, bgSupported, cameraOn }) {
+  return (
+    <div>
+      <SectionHead
+        icon={<Palette className="h-4 w-4" />}
+        title="Filters"
+        hint={
+          bgSupported
+            ? 'Apply a colour tone to your camera. Only you see the change.'
+            : 'Camera filters aren’t supported on this device or browser.'
+        }
+      />
+
+      {!bgSupported ? null : (
+        <>
+          {!cameraOn && (
+            <p className="mb-3 rounded-lg bg-[#F59E0B]/12 px-3 py-2 text-[12px] font-medium text-[#FBBF24]">
+              Turn your camera on to preview the filter.
+            </p>
+          )}
+          <div className="grid grid-cols-3 gap-2">
+            <BgTile
+              selected={bgEffectId === 'none'}
+              onClick={() => onSelectBg?.({ id: 'none', type: 'none' })}
+              label="None"
+              loading={bgLoading && bgEffectId === 'none'}
+            >
+              <span className="grid h-full w-full place-items-center bg-[#0B1220] text-[#475569]">
+                <Ban className="h-5 w-5" />
+              </span>
+            </BgTile>
+
+            {FILTER_PRESETS.map((p) => (
+              <BgTile
+                key={p.id}
+                selected={bgEffectId === p.id}
+                onClick={() => onSelectBg?.(p)}
+                label={p.name}
+                loading={bgLoading && bgEffectId === p.id}
+              >
+                <span
+                  className="block h-full w-full"
+                  style={{ background: 'linear-gradient(135deg,#f59e0b 0%,#10b981 50%,#3b82f6 100%)', filter: p.css }}
+                />
+              </BgTile>
+            ))}
           </div>
         </>
       )}

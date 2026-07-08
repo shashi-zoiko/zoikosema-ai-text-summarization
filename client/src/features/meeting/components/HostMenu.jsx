@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Lock, Unlock, MessageSquare, Monitor, PhoneOff } from 'lucide-react'
+import { ChevronDown, Lock, Unlock, MessageSquare, Monitor } from 'lucide-react'
 
-export default function HostMenu({ meeting, onToggleLock, onToggleChat, onToggleScreenshare, onEndMeeting }) {
+export default function HostMenu({ meeting, onToggleLock, onToggleChat, onToggleScreenshare }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -37,13 +37,6 @@ export default function HostMenu({ meeting, onToggleLock, onToggleChat, onToggle
             icon={<Monitor size={14} />}
             label={meeting.screenshare_enabled ? 'Disable screen share' : 'Enable screen share'}
             onClick={() => { onToggleScreenshare(!meeting.screenshare_enabled); setOpen(false) }}
-          />
-          <div className="mx-2 my-1 h-px bg-[#263244]" />
-          <Item
-            icon={<PhoneOff size={14} />}
-            label="End meeting for all"
-            destructive
-            onClick={() => { onEndMeeting(); setOpen(false) }}
           />
         </div>
       )}

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertCircle, ArrowRight, Check, Eye, EyeOff, Lock, Mail, Sparkles, User } from 'lucide-react'
+import { AlertCircle, ArrowRight, Building2, Check, Eye, EyeOff, Lock, Mail, Sparkles, User } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Logo from '../components/ui/Logo'
 import { Input, Field } from '../components/ui/Input'
@@ -31,6 +31,7 @@ export default function Register() {
   const { register } = useAuth()
   const navigate = useNavigate()
   const [name, setName] = useState('')
+  const [org, setOrg] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPwd, setShowPwd] = useState(false)
@@ -51,7 +52,7 @@ export default function Register() {
     }
     setBusy(true)
     try {
-      await register(email.trim(), name.trim(), password)
+      await register(email.trim(), name.trim(), password, org.trim())
       navigate('/', { replace: true })
     } catch (err) {
       setError(err.message || 'Sign up failed')
@@ -152,6 +153,22 @@ export default function Register() {
                   placeholder="Jane Doe"
                   autoComplete="name"
                   leftIcon={<User />}
+                />
+              </Field>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.25, duration: 0.4 }}
+            >
+              <Field label="Organization or workspace name">
+                <Input
+                  value={org}
+                  onChange={(e) => setOrg(e.target.value)}
+                  placeholder="Acme Inc."
+                  autoComplete="organization"
+                  leftIcon={<Building2 />}
                 />
               </Field>
             </motion.div>

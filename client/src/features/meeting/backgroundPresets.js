@@ -249,11 +249,26 @@ export const IMAGE_PRESETS = [
   { id: 'warm', name: 'Warm studio', type: 'image', src: WARM },
 ]
 
+// Colour-grade face/camera filters (Google-Meet "Filters" tab). Unlike the
+// blur/image backgrounds these need NO segmentation — the engine just draws the
+// raw frame through the given CSS `filter`, so they're cheap enough to run at
+// any participant count (the cost is per-client and constant, so we don't gate
+// them on meeting size). `css` is any value valid for CanvasRenderingContext2D
+// .filter. ponytail: warm/cool are CSS-filter approximations of a colour tint —
+// swap for a tint-overlay pass if a stronger grade is ever needed.
+export const FILTER_PRESETS = [
+  { id: 'filter-soft', name: 'Soft focus', type: 'filter', css: 'blur(1px) brightness(1.06) contrast(1.02)' },
+  { id: 'filter-warm', name: 'Warm', type: 'filter', css: 'sepia(0.35) saturate(1.4) brightness(1.03)' },
+  { id: 'filter-cool', name: 'Cool', type: 'filter', css: 'saturate(0.85) brightness(1.05) contrast(1.05)' },
+  { id: 'filter-bw', name: 'Black & white', type: 'filter', css: 'grayscale(1) contrast(1.05)' },
+  { id: 'filter-bright', name: 'Brighten', type: 'filter', css: 'brightness(1.2) contrast(1.03)' },
+]
+
 export const NONE_EFFECT = { id: 'none', type: 'none', name: 'No effect' }
 
 // Look up a preset by id across all built-in lists (not uploads).
 const BY_ID = Object.fromEntries(
-  [NONE_EFFECT, ...BLUR_PRESETS, ...IMAGE_PRESETS].map((p) => [p.id, p])
+  [NONE_EFFECT, ...BLUR_PRESETS, ...IMAGE_PRESETS, ...FILTER_PRESETS].map((p) => [p.id, p])
 )
 
 export function getPreset(id) {

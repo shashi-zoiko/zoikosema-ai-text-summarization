@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { meetingPath } from '../../lib/meetingUrls.js'
+import { meetingPath, meetingLeftPath } from '../../lib/meetingUrls.js'
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -488,10 +488,7 @@ function MeetRoom() {
     })
   }, [registerLobbyActions, admitUser, denyUser])
 
-  const kickUser = useCallback((uid, name) => {
-    if (!confirm(`Remove ${name || 'this participant'} from the meeting?`)) return
-    ctrlSend({ type: 'kick', user_id: uid })
-  }, [ctrlSend])
+  // ponytail: host "remove participant" (kick) was removed — no kick action.
   const promoteUser = useCallback((uid) => ctrlSend({ type: 'promote', user_id: uid }), [ctrlSend])
   const setLock = useCallback((locked) => ctrlSend({ type: 'lock', locked }), [ctrlSend])
   const toggleLayout = useCallback(() => {
@@ -519,10 +516,8 @@ function MeetRoom() {
       : (getPreset(bgEffectId) || bgUploads.find((u) => u.id === bgEffectId) || NONE_EFFECT)
   const setChatEnabled = useCallback((v) => ctrlSend({ type: 'set-permissions', chat_enabled: v }), [ctrlSend])
   const setScreenEnabled = useCallback((v) => ctrlSend({ type: 'set-permissions', screenshare_enabled: v }), [ctrlSend])
-  const endMeeting = useCallback(() => {
-    if (!confirm('End the meeting for everyone?')) return
-    ctrlSend({ type: 'end-meeting' })
-  }, [ctrlSend])
+  // ponytail: "end meeting for all" removed — a host leaving only disconnects
+  // themselves (Google-Meet style); the meeting stays live for everyone else.
 
   const toggleRecord = useCallback(async () => {
     try {
@@ -554,15 +549,20 @@ function MeetRoom() {
     // this component unmounts.
     soundManager.play('call-end')
     setPhase('left')
-    navigate('/', { replace: true })
-  }, [navigate])
+    // User-initiated leave → the "you left the meeting" exit screen (Rejoin /
+    // Home). Only this path shows it; auth-expiry / server errors go to the
+    // error splash, and host-ended / removed go home (handled below).
+    navigate(meetingLeftPath(code), { replace: true })
+  }, [navigate, code])
 
   const handleDisconnected = useCallback((reason) => {
     // Only navigate when the user actually clicked Leave OR the SFU
     // rejected/kicked us. CLIENT_INITIATED with userLeftRef=false is the
     // Strict Mode double-mount case — stay put and let the remount reconnect.
     if (userLeftRef.current) {
-      navigate('/', { replace: true })
+      // userLeave already routed to the exit screen; re-assert (idempotent
+      // replace) in case the disconnect beat the navigation.
+      navigate(meetingLeftPath(code), { replace: true })
       return
     }
     const remoteKick =
@@ -589,7 +589,7 @@ function MeetRoom() {
     }
     // Anything else (CLIENT_INITIATED w/o user leave) — silently ignored;
     // LiveKitRoom will reconnect if it can, or stay disconnected.
-  }, [navigate])
+  }, [navigate, code])
 
   const isHostOrCohost = isHost || myRole === 'co_host'
 
@@ -648,7 +648,6 @@ function MeetRoom() {
         onLock={setLock}
         onChatEnabled={setChatEnabled}
         onScreenEnabled={setScreenEnabled}
-        onEnd={endMeeting}
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
       />
 
@@ -693,9 +692,7 @@ function MeetRoom() {
           <ParticipantsPanel
             selfUserId={user?.id}
             isHost={isHost}
-            isHostOrCohost={isHostOrCohost}
             onClose={() => setSidebar(null)}
-            onKick={kickUser}
             onPromote={promoteUser}
           />
         )}

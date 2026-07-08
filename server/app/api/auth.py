@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -25,6 +26,7 @@ from app.core.security import (
     blacklist_token,
     validate_password_strength,
 )
+from app.models.organization import Organization, OrganizationMember, ORG_ROLE_OWNER
 from app.models.password_reset import PasswordResetOTP
 from app.models.user import User
 from app.schemas.user import TokenOut, UserCreate, UserOut
@@ -40,6 +42,16 @@ AVATAR_COLORS = ["#5b8def", "#f27167", "#47b881", "#d97706", "#8b5cf6", "#ec4899
 
 def _pick_color(email: str) -> str:
     return AVATAR_COLORS[hash(email) % len(AVATAR_COLORS)]
+
+
+def _unique_org_slug(name: str, db: Session) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:80] or "org"
+    slug = base
+    i = 1
+    while db.scalar(select(Organization.id).where(Organization.slug == slug)):
+        i += 1
+        slug = f"{base}-{i}"
+    return slug
 
 
 # Profile photos land in the same uploads dir StaticFiles serves at /api/uploads
@@ -84,6 +96,21 @@ def register(data: UserCreate, db: Session = Depends(get_db)):
         avatar_color=_pick_color(data.email.lower()),
     )
     db.add(user)
+    db.flush()
+
+    # Optional: spin up an org and make the new user its owner
+    if data.organization and data.organization.strip():
+        org = Organization(
+            name=data.organization.strip(),
+            slug=_unique_org_slug(data.organization, db),
+            owner_id=user.id,
+        )
+        db.add(org)
+        db.flush()
+        db.add(OrganizationMember(
+            organization_id=org.id, user_id=user.id, role=ORG_ROLE_OWNER
+        ))
+
     db.commit()
     db.refresh(user)
     access = create_access_token(subject=user.id)

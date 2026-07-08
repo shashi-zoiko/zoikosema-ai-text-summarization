@@ -44,6 +44,22 @@ async def lifespan(app: FastAPI):
     _loop = asyncio.get_running_loop()
     chat_manager.bind_loop(_loop)
     meet_manager.bind_loop(_loop)
+    # Loudly flag the #1 "meetings die at ~15 users" trigger: a Supabase SESSION
+    # pooler / direct connection (:5432, 15-client hard cap). Scaling needs the
+    # TRANSACTION pooler (:6543), which multiplexes. Only Supabase hosts on :5432
+    # are flagged — local Postgres / docker `db:5432` are legitimately on 5432.
+    _db_url = settings.database_url or ""
+    if "supabase" in _db_url and ":5432" in _db_url:
+        log.warning(
+            "Supabase session pooler detected (:5432, 15-client cap). "
+            "Use the transaction pooler (:6543) for scaling — otherwise DB "
+            "routes 500 around ~15 concurrent participants."
+        )
+    # Cross-instance WebSocket fanout (chat/reactions/host events across FastAPI
+    # instances). No-op unless REDIS_URL is set, so single-instance deploys are
+    # unaffected — this only activates once you run more than one instance.
+    await meet_manager.start_fanout()
+    await chat_manager.start_fanout()
     init_task = asyncio.create_task(_init_db_background())
     cleanup_task = asyncio.create_task(recording_cleanup_loop())
     guest_task = asyncio.create_task(guest_cleanup_loop())
@@ -51,6 +67,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await meet_manager.stop_fanout()
+        await chat_manager.stop_fanout()
         for t in (init_task, cleanup_task, guest_task, reminder_task):
             t.cancel()
         for t in (init_task, cleanup_task, guest_task, reminder_task):
@@ -129,11 +147,14 @@ def health_ready():
 
 
 @app.get("/api/health/metrics")
-def health_metrics():
+async def health_metrics():
     """Point-in-time scalability gauges — curl this during a load test to watch
-    for the two failure modes that used to crash meetings at ~15 users:
-    DB-pool exhaustion and per-instance socket saturation. Numbers are for THIS
-    instance only (single-instance deploy, so that's the whole picture)."""
+    the failure modes that crash large meetings: DB-pool exhaustion, per-instance
+    socket saturation, and Redis latency once the fanout is enabled. Gauges are
+    for THIS instance/worker only; with multiple instances, scrape each and sum.
+    """
+    import time as _time
+
     pool = engine.pool
     # QueuePool exposes these; the SQLite fallback pool may not — guard each.
     db_pool = {
@@ -141,10 +162,38 @@ def health_metrics():
         for k in ("size", "checkedin", "checkedout", "overflow")
         if callable(getattr(pool, k, None))
     }
+
+    # Redis reachability + round-trip latency. "disabled" when no REDIS_URL, so a
+    # single-instance deploy shows exactly why fanout is off without erroring.
+    redis_stat: dict = {"enabled": bool(os.getenv("REDIS_URL"))}
+    if redis_stat["enabled"]:
+        try:
+            from app.connect.shared.redis import get_redis
+            r = await get_redis()
+            if r is None:
+                redis_stat["ok"] = False
+                redis_stat["error"] = "client unavailable (redis pkg missing?)"
+            else:
+                t0 = _time.perf_counter()
+                await r.ping()
+                redis_stat["ok"] = True
+                redis_stat["ping_ms"] = round((_time.perf_counter() - t0) * 1000, 2)
+        except Exception as exc:  # noqa: BLE001
+            redis_stat["ok"] = False
+            redis_stat["error"] = str(exc)[:120]
+
+    meet = meet_manager.stats()
     return {
         "db_pool": db_pool,
-        "meetings": meet_manager.stats(),
+        # active_meetings = rooms currently holding ≥1 socket ON THIS INSTANCE.
+        "active_meetings": meet["rooms"],
+        "meetings": meet,
         "chat": chat_manager.stats(),
+        "redis": redis_stat,
+        "ws_fanout": {
+            "meet": meet_manager.fanout_enabled(),
+            "chat": chat_manager.fanout_enabled(),
+        },
     }
 
 

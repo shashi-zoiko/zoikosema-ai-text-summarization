@@ -21,6 +21,7 @@ const Chat = lazy(() => import('./pages/Chat.jsx'))
 const Actions = lazy(() => import('./pages/Actions.jsx'))
 const MeetLobby = lazy(() => import('./pages/MeetLobby.jsx'))
 const MeetRoomLivekit = lazy(() => import('./features/meeting/MeetRoomLivekit.jsx'))
+const MeetingLeft = lazy(() => import('./pages/MeetingLeft.jsx'))
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
 const ScheduledMeetings = lazy(() => import('./pages/ScheduledMeetings.jsx'))
 const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx'))
@@ -131,6 +132,9 @@ export default function App() {
             the existing pre-join flow, anonymous visitors get the guest-join
             screen (no forced login). */}
         <Route path="/:code" element={<MeetLobby />} />
+        {/* Post-leave "you left the meeting" screen (Rejoin / Home). Public so
+            guests see it too — reached only on a user-initiated leave. */}
+        <Route path="/:code/left" element={<MeetingLeft />} />
         {/* LiveKit SFU is the only media plane. /room is kept as an alias for
             old links/bookmarks and the 1:1 call flow; the legacy WebRTC mesh
             room (pages/MeetRoom.jsx) has been removed. Both paths render the

@@ -219,6 +219,33 @@ def _apply_additive_migrations() -> None:
                     conn.execute(
                         text(f"ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL")
                     )
+        # Deduplicate meeting_participants, then enforce UNIQUE(meeting_id,
+        # user_id). Without the constraint, concurrent first-joins silently
+        # inserted duplicate rows and the IntegrityError recovery in join_meeting
+        # could never fire. Keep the highest id per pair — the row every read
+        # already treats as canonical (all use `order_by(id desc).first()`) — and
+        # drop the rest. Idempotent: the DELETE no-ops once deduped and the index
+        # uses IF NOT EXISTS. Postgres only (SQLite test DBs get it via create_all).
+        if "meeting_participants" in existing_tables and engine.dialect.name == "postgresql":
+            deduped = conn.execute(text(
+                "DELETE FROM meeting_participants a "
+                "USING meeting_participants b "
+                "WHERE a.meeting_id = b.meeting_id AND a.user_id = b.user_id "
+                "AND a.id < b.id"
+            ))
+            if deduped.rowcount:
+                log.warning(
+                    "deduped %s duplicate meeting_participants row(s) before adding "
+                    "UNIQUE(meeting_id, user_id)", deduped.rowcount,
+                )
+            try:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_meeting_participants_meeting_user "
+                    "ON meeting_participants (meeting_id, user_id)"
+                ))
+            except Exception:
+                log.exception("unique meeting_participants index could not be created")
+
         # Indexes ship after columns because some of them reference columns we
         # may have just added (e.g. messages.deleted_at). All DDL uses
         # `CREATE INDEX IF NOT EXISTS` so re-runs are no-ops.

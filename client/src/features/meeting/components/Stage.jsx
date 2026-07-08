@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTracks } from '@livekit/components-react'
 import { Track, VideoQuality } from 'livekit-client'
 import { ParticipantTile } from './ParticipantTile.jsx'
@@ -251,6 +251,23 @@ function Stage({ layout = 'grid' }) {
       .map((x) => x.key)
   }, [cams, pinnedIdentity, presenterIdentity, activeSpeaker, recentSpeakers])
 
+  // Stable across renders so memo(StageLayout) isn't defeated by a fresh closure
+  // on every active-speaker tick. setScreenAspect is a stable useState setter.
+  const renderTile = useCallback((item, { isHero, fit, dense }) => (
+    <ParticipantTile
+      trackRef={item.track}
+      accent={item.accent}
+      isHero={isHero}
+      fit={fit}
+      dense={dense}
+      isPresenting={item.isPresenting}
+      onAspectRatio={item.track.source === Track.Source.ScreenShare ? setScreenAspect : undefined}
+    />
+  ), [])
+  const renderOverflow = useCallback((overflowItems, { dense } = {}) => (
+    <OverflowTile items={overflowItems} dense={dense} />
+  ), [])
+
   return (
     <StageLayout
       items={items}
@@ -258,20 +275,8 @@ function Stage({ layout = 'grid' }) {
       heroFit={screen ? 'contain' : 'cover'}
       heroAspect={screen ? screenAspect : null}
       priorityOrder={priorityOrder}
-      renderTile={(item, { isHero, fit, dense }) => (
-        <ParticipantTile
-          trackRef={item.track}
-          accent={item.accent}
-          isHero={isHero}
-          fit={fit}
-          dense={dense}
-          isPresenting={item.isPresenting}
-          onAspectRatio={item.track.source === Track.Source.ScreenShare ? setScreenAspect : undefined}
-        />
-      )}
-      renderOverflow={(overflowItems, { dense } = {}) => (
-        <OverflowTile items={overflowItems} dense={dense} />
-      )}
+      renderTile={renderTile}
+      renderOverflow={renderOverflow}
     />
   )
 }
