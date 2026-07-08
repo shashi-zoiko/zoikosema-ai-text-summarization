@@ -124,6 +124,23 @@ def _get_meeting_or_404(code: str, db: Session) -> Meeting:
     return meeting
 
 
+def _waiting_count(meeting_id: int, db: Session) -> int:
+    """Live number of people sitting in this meeting's waiting room (pending).
+    Drives the pre-join lobby's "N waiting" line — computed on demand, not
+    stored, so it's always current when the lobby fetches meeting metadata."""
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(MeetingParticipant)
+            .where(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.status == STATUS_PENDING,
+            )
+        )
+        or 0
+    )
+
+
 def _require_host_or_cohost(meeting: Meeting, user: User, db: Session) -> MeetingParticipant | None:
     """Return the caller's participant row if they are host or co-host, else 403."""
     if meeting.host_id == user.id:
@@ -242,7 +259,8 @@ def get_meeting(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return _meeting_out(_get_meeting_or_404(code, db))
+    meeting = _get_meeting_or_404(code, db)
+    return {**_meeting_out(meeting), "waiting_count": _waiting_count(meeting.id, db)}
 
 
 # ── Guest (anonymous) join ───────────────────────────────────────────────────
@@ -262,6 +280,7 @@ class PublicMeetingOut(BaseModel):
     password_protected: bool
     waiting_room_enabled: bool
     guests_enabled: bool
+    waiting_count: int = 0
 
 
 def _org_logo_for_host(host_id: int, db: Session) -> str | None:
@@ -311,6 +330,7 @@ def public_meeting_info(
         password_protected=meeting.password_hash is not None,
         waiting_room_enabled=meeting.waiting_room_enabled,
         guests_enabled=meeting.guests_enabled,
+        waiting_count=_waiting_count(meeting.id, db),
     )
 
 

@@ -35,7 +35,7 @@ function accentIndex(identity) {
  *
  * Hero priority:  screen share  >  pinned  >  active speaker (speaker layout).
  */
-function Stage({ layout = 'grid' }) {
+function Stage({ layout = 'grid', onOpenPeople }) {
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
   const setPinned = useRoomStore((s) => s.setPinned)
   const setHeroActive = useRoomStore((s) => s.setHeroActive)
@@ -265,8 +265,8 @@ function Stage({ layout = 'grid' }) {
     />
   ), [])
   const renderOverflow = useCallback((overflowItems, { dense } = {}) => (
-    <OverflowTile items={overflowItems} dense={dense} />
-  ), [])
+    <OverflowTile items={overflowItems} dense={dense} onClick={onOpenPeople} />
+  ), [onOpenPeople])
 
   return (
     <StageLayout
@@ -296,12 +296,19 @@ function overflowInitial(participant) {
  * (quiet, camera-off) participants, and any of them re-appears with their own
  * tile the moment they speak or turn their camera on.
  */
-function OverflowTile({ items, dense = false }) {
+function OverflowTile({ items, dense = false, onClick }) {
   const shown = items.slice(0, 3)
   const size = dense ? 34 : 'min(24cqmin, 92px)'
   return (
-    <div
-      className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[28px] ring-1 ring-[#263244]"
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Show all participants (${items.length} more)`}
+      title="Show all participants"
+      className={
+        'group relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[28px] border-0 p-0 shadow-none ring-1 ring-[#263244] transition ' +
+        (onClick ? 'cursor-pointer hover:ring-2 hover:ring-[#3B82F6]/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/60' : 'cursor-default')
+      }
       style={{
         background: 'linear-gradient(160deg, #1B2233 0%, #131824 100%)',
         containerType: 'size',
@@ -330,12 +337,13 @@ function OverflowTile({ items, dense = false }) {
       <span className="font-semibold text-white" style={{ fontSize: dense ? 13 : 'clamp(13px, 4.6cqmin, 22px)' }}>
         {items.length} {items.length === 1 ? 'other' : 'others'}
       </span>
-    </div>
+    </button>
   )
 }
 
-// Memoised: <Stage> only takes `layout`, so MeetRoom's frequent control-plane
-// state churn (waiting-room, chat, recording, sidebar toggles) no longer
+// Memoised: <Stage> takes only `layout` + a stable `onOpenPeople` callback, so
+// MeetRoom's frequent control-plane state churn (waiting-room, chat, recording,
+// sidebar toggles) no longer
 // re-renders the entire stage subtree. Track/speaker/pin changes still re-render
 // it through its own LiveKit + zustand subscriptions (memo doesn't block those).
 export default memo(Stage)

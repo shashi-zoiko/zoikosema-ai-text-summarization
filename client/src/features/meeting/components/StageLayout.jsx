@@ -39,6 +39,12 @@ import { computeGridLayout, computePageSize, galleryGridOpts, TILE_ASPECT, useEl
 
 export const GAP = 20 // px — premium spacing so accent glows never touch.
 
+// Google-Meet-style hard ceiling on gallery tiles: at most this many render on
+// the main stage, the surplus folds into one "+N others" tile. Caps DOM video
+// elements regardless of room size (100 people → 8 tiles). The viewport-
+// adaptive computePageSize still lowers this on small screens; it never raises it.
+const MAX_GALLERY_TILES = 8
+
 const EASE = [0.22, 1, 0.36, 1]
 const TRANSITION = { duration: 0.26, ease: EASE }
 const ENTER = { opacity: 0, scale: 0.85 }
@@ -146,7 +152,7 @@ function GalleryGrid({ items, priorityOrder, renderTile, renderOverflow, animate
   // top `cap - 1` tiles by priority and collapse everyone else into a single
   // "+N others" tile in the last slot — the Google-Meet big-room layout.
   const cap = useMemo(
-    () => computePageSize(count, size.width, size.height, gap, portrait),
+    () => Math.min(MAX_GALLERY_TILES, computePageSize(count, size.width, size.height, gap, portrait)),
     [count, size.width, size.height, gap, portrait],
   )
   const overflowing = !!renderOverflow && count > cap

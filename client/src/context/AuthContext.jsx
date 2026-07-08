@@ -6,6 +6,7 @@ import {
   setGuestSession,
   clearGuestSession,
   getGuestSession,
+  getGuestSessionForCode,
 } from '../api/client'
 import { clearChatCache } from '../lib/chatCache'
 
@@ -18,8 +19,9 @@ const REFRESH_MARGIN_MS = 2 * 60 * 1000
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
-  // Anonymous guest session (no account). Survives a tab reload via
-  // sessionStorage so a guest who refreshes mid-call reconnects seamlessly.
+  // Anonymous guest session (no account). Persisted in localStorage (per
+  // meeting) so a guest keeps ONE identity across refresh / tab-close / network
+  // drop / accidental leave and rejoins directly without host re-approval.
   const [guest, setGuest] = useState(() => getGuestSession())
   const refreshTimerRef = useRef(null)
 
@@ -39,8 +41,22 @@ export function AuthProvider({ children }) {
     return data
   }, [])
 
-  const clearGuest = useCallback(() => {
-    clearGuestSession()
+  // Reuse a durable guest identity previously admitted to THIS meeting instead
+  // of minting a new one — a new user_id would send the guest back to the
+  // waiting room. Returns the session if one exists (and makes it active), else
+  // null so the caller mints fresh.
+  const resumeGuest = useCallback((code) => {
+    const s = getGuestSessionForCode(code)
+    if (s?.token) {
+      setGuestSession(s) // re-assert as the active token for transports
+      setGuest(s)
+      return s
+    }
+    return null
+  }, [])
+
+  const clearGuest = useCallback((code) => {
+    clearGuestSession(code)
     setGuest(null)
   }, [])
 
@@ -195,7 +211,7 @@ export function AuthProvider({ children }) {
       changePassword, updateProfile, uploadAvatar, removeAvatar, deleteAccount,
       // Guest session: `guest` is the active anonymous session (or null);
       // isGuest is true only when there's a guest session AND no real account.
-      guest, isGuest: !!guest && !user, joinAsGuest, clearGuest,
+      guest, isGuest: !!guest && !user, joinAsGuest, resumeGuest, clearGuest,
     }}>{children}</AuthContext.Provider>
   )
 }

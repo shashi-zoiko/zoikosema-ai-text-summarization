@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useConnectionState, useLocalParticipant } from '@livekit/components-react'
 import { ConnectionQuality, ConnectionState } from 'livekit-client'
-import { Check, Copy, Info } from 'lucide-react'
+import { Check, Copy, Info, UserPlus } from 'lucide-react'
 import HostMenu from './HostMenu.jsx'
+import { useRoomStore } from '../state/roomStore.js'
 import { meetingShareText } from '../../../lib/meetingUrls.js'
 
 /**
@@ -25,6 +27,7 @@ export default function MeetingHeader({
   onChatEnabled,
   onScreenEnabled,
   onOpenInfo,
+  onOpenPeople,
 }) {
   const state = useConnectionState()
   const reconnecting = state === ConnectionState.Reconnecting
@@ -77,8 +80,10 @@ export default function MeetingHeader({
         )}
       </div>
 
-      {/* ── Right: duration · quality · HD · copy · info · host ─────────── */}
+      {/* ── Right: admit chip · duration · quality · HD · copy · info · host ─ */}
       <div className="flex items-center gap-2">
+        {isHostOrCohost && <AdmitChip onClick={onOpenPeople} />}
+
         <div className="hidden items-center gap-2.5 rounded-full border border-[#263244] bg-[#111827] px-3 py-1.5 text-[12.5px] md:flex">
           <Duration joinedAt={joinedAt} />
           <span aria-hidden className="h-3.5 w-px bg-[#263244]" />
@@ -109,6 +114,52 @@ export default function MeetingHeader({
         )}
       </div>
     </header>
+  )
+}
+
+/**
+ * Google-Meet-style "Admit N guest(s)" pill (host/co-host). Reads the waiting
+ * count straight from roomStore so it never re-renders the header on every
+ * waiting change. Fades in when someone arrives, fades out at zero (no flash),
+ * and the count slides on change. Click opens the People panel at the waiting
+ * section.
+ */
+function AdmitChip({ onClick }) {
+  const count = useRoomStore((s) => s.waiting.length)
+  const label = `Admit ${count} ${count === 1 ? 'guest' : 'guests'}`
+  return (
+    <AnimatePresence>
+      {count > 0 && (
+        <motion.button
+          type="button"
+          onClick={onClick}
+          aria-label={label}
+          title={label}
+          initial={{ opacity: 0, scale: 0.85, width: 0 }}
+          animate={{ opacity: 1, scale: 1, width: 'auto' }}
+          exit={{ opacity: 0, scale: 0.85, width: 0 }}
+          transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full bg-[#10B981]/15 px-3.5 text-[13px] font-semibold text-[#34D399] ring-1 ring-[#10B981]/30 transition hover:bg-[#10B981]/25"
+        >
+          <UserPlus className="h-4 w-4 shrink-0" />
+          <span>Admit</span>
+          <span className="relative inline-flex tabular-nums">
+            <AnimatePresence mode="popLayout" initial={false}>
+              <motion.span
+                key={count}
+                initial={{ y: 8, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: -8, opacity: 0 }}
+                transition={{ duration: 0.18 }}
+              >
+                {count}
+              </motion.span>
+            </AnimatePresence>
+          </span>
+          <span>{count === 1 ? 'guest' : 'guests'}</span>
+        </motion.button>
+      )}
+    </AnimatePresence>
   )
 }
 
