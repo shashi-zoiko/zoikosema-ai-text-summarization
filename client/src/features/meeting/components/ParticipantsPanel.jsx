@@ -5,7 +5,7 @@ import { useParticipants } from '@livekit/components-react'
 import { Track } from 'livekit-client'
 import {
   Check, Clock, Copy, Crown, Hand, Loader2, MicOff, MoreVertical, Pin, PinOff,
-  ShieldCheck, UserPlus, VideoOff, X,
+  Search, ShieldCheck, UserPlus, VideoOff, X,
 } from 'lucide-react'
 import { useRoomStore } from '../state/roomStore.js'
 import DrawerShell from './DrawerShell.jsx'
@@ -57,6 +57,12 @@ export default function ParticipantsPanel({
     return [...all].sort((a, b) => rank(a) - rank(b) || a.name?.localeCompare(b.name || '') || 0)
   }, [all, roles, raisedHands])
 
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const shown = q
+    ? sorted.filter((p) => (p.name || p.identity || '').toLowerCase().includes(q))
+    : sorted
+
   return (
     <DrawerShell title="People" count={sorted.length} onClose={onClose} bodyClassName="px-2 py-2">
       {showWaiting && (
@@ -69,9 +75,34 @@ export default function ParticipantsPanel({
         />
       )}
 
+      <div className="relative px-1 pb-1 pt-1">
+        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#64748B]" />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search people"
+          aria-label="Search people"
+          className="w-full rounded-full border border-[#263244] bg-[#0B1220] py-2 pl-10 pr-8 text-[13px] text-white placeholder:text-[#64748B] outline-none transition focus:border-[#3B82F6]"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            aria-label="Clear search"
+            className="absolute right-3 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-[#64748B] hover:text-white"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
       <SectionLabel>In the meeting · {sorted.length}</SectionLabel>
       <ul>
-        {sorted.map((p) => (
+        {shown.length === 0 && (
+          <li className="px-2 py-6 text-center text-[13px] text-[#64748B]">No people match “{query}”.</li>
+        )}
+        {shown.map((p) => (
           <ParticipantRow
             key={p.identity}
             participant={p}

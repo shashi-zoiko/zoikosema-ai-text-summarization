@@ -21,6 +21,15 @@ export default class RoomErrorBoundary extends Component {
 
   render() {
     if (!this.state.error) return this.props.children
+    // Scoped use (e.g. the notebook panel): render a caller-supplied fallback so
+    // one broken panel doesn't blank the whole call. reset() clears the error so
+    // the panel can be reopened.
+    if (this.props.fallback) {
+      return this.props.fallback({
+        error: this.state.error,
+        reset: () => this.setState({ error: null }),
+      })
+    }
     return (
       <div className="h-dvh w-screen grid place-items-center bg-zinc-950 text-zinc-200 p-6">
         <div className="text-center max-w-md">

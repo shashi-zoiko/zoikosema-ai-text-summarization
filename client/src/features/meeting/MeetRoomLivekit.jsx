@@ -34,6 +34,7 @@ import { LkBackgroundProcessor } from './lkBackgroundProcessor.js'
 // Private per-participant notebook (rich-text notes + personal drawing canvas).
 // Lazy-loaded so the TipTap editor bundle isn't in the initial meeting load.
 const PrivateNotebook = lazy(() => import('./notebook/PrivateNotebook.jsx'))
+import RoomErrorBoundary from './components/RoomErrorBoundary.jsx'
 import useMeetingControlWs from './hooks/useMeetingControlWs.js'
 import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
 import { useLocalParticipant, useMediaDeviceSelect, useRoomContext } from '@livekit/components-react'
@@ -701,13 +702,29 @@ function MeetRoom() {
           <CaptionOverlay />
           {showWhiteboard && (
             <div className="pointer-events-none absolute inset-0 z-20">
-              <Suspense fallback={null}>
-                <PrivateNotebook
-                  code={code}
-                  userId={user?.id}
-                  onClose={() => setShowWhiteboard(false)}
-                />
-              </Suspense>
+              <RoomErrorBoundary
+                fallback={({ reset }) => (
+                  // A notebook crash must never blank the call — show a small
+                  // dismissible card instead of the full-screen reload page.
+                  <div className="pointer-events-auto absolute bottom-4 left-1/2 -translate-x-1/2 rounded-lg border border-line bg-bg-2 px-4 py-3 text-sm text-fg shadow-2xl">
+                    <span className="mr-3">The notebook hit an error and was closed.</span>
+                    <button
+                      onClick={() => { reset(); setShowWhiteboard(false) }}
+                      className="rounded bg-white/10 px-3 py-1 hover:bg-white/20"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+              >
+                <Suspense fallback={null}>
+                  <PrivateNotebook
+                    code={code}
+                    userId={user?.id}
+                    onClose={() => setShowWhiteboard(false)}
+                  />
+                </Suspense>
+              </RoomErrorBoundary>
             </div>
           )}
         </div>

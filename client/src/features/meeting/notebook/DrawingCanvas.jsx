@@ -77,7 +77,7 @@ function DrawingCanvas({ initialStrokes = [], viewport: viewportProp, onStrokesC
 
   const toPixel = useCallback((pos) => {
     const canvas = canvasRef.current
-    if (!canvas) return { x: 0, y: 0 }
+    if (!canvas || !pos) return { x: 0, y: 0 }
     const rect = canvas.getBoundingClientRect()
     const v = viewportRef.current
     return {
@@ -88,7 +88,12 @@ function DrawingCanvas({ initialStrokes = [], viewport: viewportProp, onStrokesC
 
   const drawStroke = useCallback((stroke) => {
     const ctx = ctxRef.current
-    if (!ctx) return
+    if (!ctx || !stroke?.points?.length) return
+    // Shapes need two endpoints; text needs one. Skip malformed strokes rather
+    // than crash the whole call view on toPixel(undefined) (e.g. a legacy
+    // single-point shape persisted from a click-without-drag).
+    const need2 = stroke.tool === 'line' || stroke.tool === 'arrow' || stroke.tool === 'rect' || stroke.tool === 'circle'
+    if (need2 && stroke.points.length < 2) return
     const v = viewportRef.current
     const scaled = (n) => n * v.scale
 
@@ -391,7 +396,10 @@ function DrawingCanvas({ initialStrokes = [], viewport: viewportProp, onStrokesC
     setIsDrawing(false)
     const stroke = currentStrokeRef.current
     currentStrokeRef.current = null
-    if (stroke.points.length >= 1) commitStroke(stroke)
+    // Free-draw needs ≥2 points; shapes need exactly a start+end. A click with no
+    // drag (single point) is not a real stroke — dropping it avoids persisting a
+    // degenerate shape that would crash the redraw path.
+    if (stroke.points.length >= 2) commitStroke(stroke)
   }, [isDrawing, commitStroke])
 
   const closeEditor = useCallback((raw) => {
