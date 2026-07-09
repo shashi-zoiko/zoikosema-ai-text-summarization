@@ -54,6 +54,22 @@ function RequireAuth({ children }) {
   return children
 }
 
+// Admin-only surface (System Administration). Non-admins are bounced home —
+// the backend also returns 403, so this is UX, not the security boundary.
+function RequireAdmin({ children }) {
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', height: '100vh' }}>
+        <div className="spinner" />
+      </div>
+    )
+  }
+  if (!user) return <Navigate to="/login" replace />
+  if (!user.is_admin) return <Navigate to="/" replace />
+  return children
+}
+
 // Meeting room access: a signed-in user OR an active guest session for THIS
 // meeting may enter. Anyone else is bounced to the lobby (/:code), which
 // shows the guest-join screen rather than forcing a login.
@@ -184,7 +200,7 @@ export default function App() {
           <Route path="/org/:slug" element={<OrgSettings />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/security" element={<AccountSettings section="security" />} />
-          <Route path="/admin" element={<Admin />} />
+          <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
           <Route path="/billing" element={<Billing />} />
           <Route path="/help-support" element={<HelpSupport />} />
         </Route>

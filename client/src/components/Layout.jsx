@@ -230,7 +230,10 @@ export default function Layout() {
           <NavSection label="Workspace">
             {workspaceNav.map((item) => <SideLink key={item.key} {...item} />)}
           </NavSection>
-          {user && (
+          {/* Manage = workspace admin surface (People/admin, Billing, Security,
+              Analytics). Admins only; members reach personal settings via the
+              avatar menu. Backend also 403s the admin APIs. */}
+          {user?.is_admin && (
             <NavSection label="Manage">
               {MANAGE_NAV.map((item) => <SideLink key={item.key} {...item} />)}
             </NavSection>

@@ -100,6 +100,23 @@ const SCREEN_PUBLISH_OPTIONS = {
   degradationPreference: 'maintain-resolution',
 }
 
+// Media-device / permission failures ("Requested device not found",
+// NotReadableError, permission denied, over-constrained) are RECOVERABLE and
+// per-device — the participant just has no usable camera/mic. They must not pin
+// the fatal red connection banner for the whole call; the tile already shows
+// "Camera off". Everything else (signalling / connection failure) stays fatal.
+const DEVICE_ERROR_NAMES = new Set([
+  'NotFoundError', 'DevicesNotFoundError', 'NotReadableError', 'TrackStartError',
+  'OverconstrainedError', 'ConstraintNotSatisfiedError', 'NotAllowedError',
+  'PermissionDeniedError', 'DeviceUnsupportedError',
+])
+function isDeviceError(e) {
+  const name = e?.name || e?.cause?.name || ''
+  if (DEVICE_ERROR_NAMES.has(name)) return true
+  return /requested device not found|could not start (video|audio)|permission denied|device not found|notreadable|overconstrained/i
+    .test(e?.message || '')
+}
+
 export default function MeetRoomLivekit() {
   // The notification engine wraps the whole room so toasts/lobby cards/sounds
   // are available to the room body AND to LiveKit-context children (join/leave).
@@ -114,7 +131,7 @@ function MeetRoom() {
   const { code } = useParams()
   const navigate = useNavigate()
   const { user, isGuest, guest, joinAsGuest } = useAuth()
-  const { notify, notifyChat, syncLobby, registerLobbyActions } = useNotifications()
+  const { notify, notifyChat, registerChatActions } = useNotifications()
 
   // Mic/camera choice the user made in the lobby (persisted there before
   // navigating). The room must honour it — hardcoding `audio video` on
@@ -322,8 +339,12 @@ function MeetRoom() {
         }
       } else if (t === 'waiting-room') {
         const list = Array.isArray(data.waiting) ? data.waiting : []
-        setWaiting(list)
-        syncLobby(list) // drives the persistent lobby request cards + lobby sound
+        // Chime only when someone NEW joins the queue (list grew) — the People
+        // panel + header "Admit N" chip are the sole UI for managing them.
+        setWaiting((prev) => {
+          if (list.length > prev.length) soundManager.play('lobby')
+          return list
+        })
       } else if (t === 'recording') {
         setRecording({ recording: !!data.recording, recording_id: data.recording_id ?? null })
         // The host who toggled already saw a confirmation toast; notify the rest.
@@ -356,7 +377,7 @@ function MeetRoom() {
       // LiveKit data channel (see captions/CaptionProvider). The server 'caption'
       // relay is left intact as a documented fallback transport.
     })
-  }, [ctrlSubscribe, sidebar, navigate, user?.id, user?.name, pushReaction, setHand, setRole, seedRoles, notify, notifyChat, syncLobby])
+  }, [ctrlSubscribe, sidebar, navigate, user?.id, user?.name, pushReaction, setHand, setRole, seedRoles, notify, notifyChat])
 
   useEffect(() => { if (sidebar === 'chat') setUnreadChat(0) }, [sidebar])
 
@@ -489,18 +510,15 @@ function MeetRoom() {
   }, [])
   // Google-Meet: clicking the grid's "+N others" tile opens the People panel.
   const openPeople = useCallback(() => setSidebar('people'), [])
-  // Let the lobby notification cards drive admit/deny and "open waiting room".
+  // Wire the floating chat cards' actions. "Mark as read" clears the unread
+  // badge without opening chat; tapping a card's preview opens the chat drawer
+  // (which also clears). Join-request admit/deny live only in the People panel.
   useEffect(() => {
-    registerLobbyActions({
-      onAdmit: admitUser,
-      onDeny: denyUser,
-      onOpen: openPeopleWaiting,
-      // "Mark as read" on a chat card clears the unread badge without opening
-      // chat; tapping a card's preview opens the chat drawer (which also clears).
+    registerChatActions({
       onChatRead: () => setUnreadChat(0),
       onOpenChat: () => setSidebar('chat'),
     })
-  }, [registerLobbyActions, admitUser, denyUser, openPeopleWaiting])
+  }, [registerChatActions])
 
   // ponytail: host "remove participant" (kick) was removed — no kick action.
   const promoteUser = useCallback((uid) => ctrlSend({ type: 'promote', user_id: uid }), [ctrlSend])
@@ -637,7 +655,15 @@ function MeetRoom() {
       audio={joinPrefs.audio !== false}
       video={joinPrefs.video !== false}
       onDisconnected={handleDisconnected}
-      onError={(e) => setError(e?.message || String(e))}
+      onError={(e) => {
+        // Recoverable device/permission errors → brief toast, not the fatal
+        // banner. The user keeps the call; they just have no camera/mic.
+        if (isDeviceError(e)) {
+          setToast({ kind: 'error', text: 'Camera or microphone not available — check your device and browser permissions.' })
+          return
+        }
+        setError(e?.message || String(e))
+      }}
       className="zk-room-bg flex h-dvh w-screen flex-col overflow-hidden overscroll-none text-white"
       style={{ background: CANVAS }}
     >

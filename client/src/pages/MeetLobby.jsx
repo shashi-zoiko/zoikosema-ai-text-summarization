@@ -13,6 +13,8 @@ import useMediaDevices from '../hooks/useMediaDevices'
 import useAudioLevel from '../hooks/useAudioLevel'
 import { BackgroundProcessor, backgroundEffectsSupported } from '../features/meeting/backgroundEngine.js'
 import { BLUR_PRESETS, FILTER_PRESETS, IMAGE_PRESETS, NONE_EFFECT, getPreset } from '../features/meeting/backgroundPresets.js'
+import MeetingNotificationStack from '../features/meeting/notifications/MeetingNotificationStack.jsx'
+import WalkingBirdLoader from '../features/meeting/notifications/WalkingBirdLoader.jsx'
 import Avatar from '../components/ui/Avatar'
 import Logo from '../components/ui/Logo'
 import ThemeToggle from '../components/ui/ThemeToggle'
@@ -538,15 +540,6 @@ export default function MeetLobby() {
     }
   }
 
-  const cancelWaiting = () => {
-    if (wsRef.current) {
-      try { wsRef.current.send(JSON.stringify({ type: 'leave' })); wsRef.current.close() } catch {}
-      wsRef.current = null
-    }
-    setWaitingStatus(null)
-    setJoining(false)
-  }
-
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(meetingShareText(code))
@@ -612,26 +605,7 @@ export default function MeetLobby() {
   if (waitingStatus === 'pending') {
     return (
       <Shell user={user} meeting={meeting}>
-        <div className="zk-themed mx-auto mt-8 w-full max-w-md rounded-3xl border border-[var(--c-line)] bg-[var(--c-surface)] p-8 text-center shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)]">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-[#6D28D9] to-[#7C3AED] text-white shadow-[0_12px_30px_-8px_rgba(124,58,237,0.5)]">
-            <Loader2 className="h-7 w-7 animate-spin" />
-          </div>
-          <h2 className="mt-5 text-xl font-bold text-[var(--c-fg)]">Asking to be let in</h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--c-fg-muted)]">
-            You'll join automatically once the host lets you in. This usually takes a few seconds.
-          </p>
-          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[var(--lobby-accent-line)] bg-[var(--lobby-accent-tint)] px-3 py-1.5 text-[12px]">
-            <ShieldCheck className="h-3.5 w-3.5 text-[var(--lobby-accent-fg)]" />
-            <span className="text-[var(--c-fg-muted)]">Code</span>
-            <span className="font-mono font-semibold text-[var(--c-fg)]">{code}</span>
-          </div>
-          <div>
-            <button
-              onClick={cancelWaiting}
-              className="zk-press mt-6 rounded-full border border-[var(--c-line)] bg-[var(--c-surface)] px-5 py-2 text-sm font-medium text-[var(--c-fg-dim)] transition hover:bg-[var(--c-bg-3)]"
-            >Cancel</button>
-          </div>
-        </div>
+        <WaitingApproval />
       </Shell>
     )
   }
@@ -825,6 +799,12 @@ export default function MeetLobby() {
                 </div>
               </div>
             </div>
+
+            {/* State-aware trust notification stack — sits directly under the
+                camera preview (policy · confidential · AI/ZoikoTime). */}
+            <div className="mt-4">
+              <MeetingNotificationStack meeting={meeting} user={user} />
+            </div>
           </section>
 
           {/* ── Right: meeting info card ───────────────────────────── */}
@@ -856,20 +836,6 @@ export default function MeetLobby() {
             )}
 
             <div className="my-4 h-px bg-[var(--c-line)]" />
-
-            {/* Confidential Mode */}
-            <div className="relative rounded-2xl bg-[var(--lobby-accent-tint)] p-4 ring-1 ring-[var(--lobby-accent-line)]">
-              <Info className="absolute right-3 top-3 h-4 w-4 text-[var(--lobby-accent-fg)]" />
-              <div className="flex items-start gap-2.5">
-                <Lock className="mt-0.5 h-5 w-5 shrink-0 text-[var(--lobby-accent-fg)]" />
-                <div className="pr-5">
-                  <div className="text-[14px] font-bold text-[var(--lobby-accent-fg)]">Confidential Mode</div>
-                  <div className="mt-1 text-[12.5px] leading-relaxed text-[var(--c-fg-dim)]">
-                    End-to-end encrypted. AI notes, cloud recording, and phone dial-in are disabled.
-                  </div>
-                </div>
-              </div>
-            </div>
 
             {meeting?.scheduled_at && (
               <div className="mt-3 inline-flex w-fit items-center gap-2 rounded-full border border-[var(--c-line)] bg-[var(--c-bg-2)] px-3 py-1.5 text-[12.5px] text-[var(--c-fg-dim)]">
@@ -1086,6 +1052,24 @@ function Shell({ user, meeting, children }) {
       <main className="relative flex flex-1 flex-col items-center px-3 py-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-8">
         {children}
       </main>
+    </div>
+  )
+}
+
+/**
+ * Waiting-room "asking to be let in" view — minimal host-approval screen:
+ * spinner + title + subtitle only. Rendered inside Shell.
+ */
+function WaitingApproval() {
+  return (
+    // No card box; the bird paces within the text-width band above the copy.
+    <div className="my-auto flex w-full max-w-md flex-col items-center text-center">
+      <WalkingBirdLoader />
+
+      <h2 className="mt-5 text-[26px] font-bold tracking-tight text-[var(--c-fg)] sm:text-3xl">Waiting for host approval</h2>
+      <p className="mx-auto mt-2 max-w-sm px-4 text-[14px] leading-relaxed text-[var(--c-fg-muted)]">
+        The host has been notified. You&apos;ll enter automatically once approved.
+      </p>
     </div>
   )
 }

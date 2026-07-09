@@ -34,11 +34,11 @@ def _is_admin(user: User) -> bool:
 
 
 def _require_admin(user: User):
-    # ponytail: no permission tiers exist yet — every signed-in user may reach
-    # the admin panel (get_current_user already enforces authentication). This
-    # is the ONE gate all admin endpoints route through, so restore the
-    # `_is_admin(user)` check here when roles/grants are introduced.
-    return
+    # The ONE gate all admin endpoints route through. Non-admins get a hard 403
+    # (zero data) — the panel exposes tenant-wide users, emails, activity and
+    # destructive controls, so authentication alone is not enough.
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
 
 
 # ── System-wide stats ─────────────────────────────────────────────────────
