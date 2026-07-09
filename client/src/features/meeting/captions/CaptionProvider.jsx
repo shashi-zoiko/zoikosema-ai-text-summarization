@@ -83,6 +83,10 @@ export default function CaptionProvider({ children }) {
     ({ speakerId, name, text, isFinal }) => {
       const clean = sanitize(text)
       if (!clean || !speakerId) return
+      // Drop meaningless STT artifacts — fragments with no letter in any script
+      // (e.g. "1.00", ".", "- -"). Real speech always has letters; these are
+      // recogniser noise that otherwise flashes on screen as a stray caption.
+      if (!/\p{L}/u.test(clean)) return
       dispatch({
         type: 'upsert',
         speakerId,

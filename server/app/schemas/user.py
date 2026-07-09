@@ -27,6 +27,7 @@ class UserOut(BaseModel):
     bio: str | None = None
     show_photo_in_meetings: bool = True
     show_photo_on_dashboard: bool = True
+    is_admin: bool = False
     created_at: datetime
 
 

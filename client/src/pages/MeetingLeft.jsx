@@ -10,7 +10,8 @@ import { useAuth } from '../context/AuthContext.jsx'
  *
  *   Rejoin      → back to the pre-join lobby, which re-runs the join flow;
  *                 previously-admitted users skip the waiting room (server-side).
- *   Back to Home→ the app dashboard (signed-in users) / lobby (guests).
+ *   Back to Home→ the app dashboard (signed-in users) / login (guests — they
+ *                 have no dashboard, and the lobby would just loop them back in).
  */
 export default function MeetingLeft() {
   const { code } = useParams()
@@ -18,7 +19,7 @@ export default function MeetingLeft() {
   const { user } = useAuth()
 
   const rejoin = () => navigate(meetingPath(code))
-  const goHome = () => navigate(user ? '/' : meetingPath(code))
+  const goHome = () => navigate(user ? '/' : '/login')
 
   return (
     <div className="grid min-h-dvh w-screen place-items-center bg-[#0B1220] px-5 py-10 text-white">

@@ -1229,3 +1229,79 @@ textarea { resize: vertical; }
   pointer-events: none;
   color: var(--c-fg-muted);
 }
+
+/* ── Bouncing-ball bar loader (Uiverse.io by Nawsome) ──────────────────────
+   A ball arcs across five equalizer bars that rise/fall as it lands. Scoped
+   under .zk-loader so the generic .loader/.loader__bar names can't leak. Bars
+   use the foreground token and the ball the brand accent so it reads on every
+   theme (no per-theme invert needed). Scaled up 1.4× and centred in the band. */
+.zk-loader {
+  position: relative;
+  width: 75px;
+  height: 100px;
+  margin: 35px auto;
+  scale: 1.4;
+  cursor: pointer;
+}
+.zk-loader__bar {
+  position: absolute;
+  bottom: 0;
+  width: 10px;
+  height: 50%;
+  border-radius: 3px 3px 0 0;
+  background: var(--c-fg, #000);
+  transform-origin: center bottom;
+  box-shadow: 1px 1px 0 rgba(0, 0, 0, 0.2);
+}
+.zk-loader__bar:nth-child(1) { left: 0px;  transform: scale(1, 0.2); animation: zk-barUp1 4s infinite; }
+.zk-loader__bar:nth-child(2) { left: 15px; transform: scale(1, 0.4); animation: zk-barUp2 4s infinite; }
+.zk-loader__bar:nth-child(3) { left: 30px; transform: scale(1, 0.6); animation: zk-barUp3 4s infinite; }
+.zk-loader__bar:nth-child(4) { left: 45px; transform: scale(1, 0.8); animation: zk-barUp4 4s infinite; }
+.zk-loader__bar:nth-child(5) { left: 60px; transform: scale(1, 1);   animation: zk-barUp5 4s infinite; }
+.zk-loader__ball {
+  position: absolute;
+  bottom: 10px;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--c-accent, rgb(44, 143, 255));
+  box-shadow: 0 0 8px 1px var(--c-accent, rgb(44, 143, 255));
+  animation: zk-ball 4s infinite;
+}
+/* Interactive: hover the loader to speed the whole rig up 2× (pointer already
+   set), giving it a live, responsive feel while waiting. */
+.zk-loader:hover .zk-loader__bar,
+.zk-loader:hover .zk-loader__ball { animation-duration: 2s; }
+
+@keyframes zk-ball {
+  0%   { transform: translate(0, 0); }
+  5%   { transform: translate(8px, -14px); }
+  10%  { transform: translate(15px, -10px); }
+  17%  { transform: translate(23px, -24px); }
+  20%  { transform: translate(30px, -20px); }
+  27%  { transform: translate(38px, -34px); }
+  30%  { transform: translate(45px, -30px); }
+  37%  { transform: translate(53px, -44px); }
+  40%  { transform: translate(60px, -40px); }
+  50%  { transform: translate(60px, 0); }
+  57%  { transform: translate(53px, -14px); }
+  60%  { transform: translate(45px, -10px); }
+  67%  { transform: translate(37px, -24px); }
+  70%  { transform: translate(30px, -20px); }
+  77%  { transform: translate(22px, -34px); }
+  80%  { transform: translate(15px, -30px); }
+  87%  { transform: translate(7px, -44px); }
+  90%  { transform: translate(0, -40px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes zk-barUp1 { 0%,40% { transform: scale(1, 0.2); } 50%,90% { transform: scale(1, 1); }   100% { transform: scale(1, 0.2); } }
+@keyframes zk-barUp2 { 0%,40% { transform: scale(1, 0.4); } 50%,90% { transform: scale(1, 0.8); } 100% { transform: scale(1, 0.4); } }
+@keyframes zk-barUp3 { 0%,100% { transform: scale(1, 0.6); } }
+@keyframes zk-barUp4 { 0%,40% { transform: scale(1, 0.8); } 50%,90% { transform: scale(1, 0.4); } 100% { transform: scale(1, 0.8); } }
+@keyframes zk-barUp5 { 0%,40% { transform: scale(1, 1);   } 50%,90% { transform: scale(1, 0.2); } 100% { transform: scale(1, 1); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .zk-loader__bar,
+  .zk-loader__ball { animation: none; }
+}

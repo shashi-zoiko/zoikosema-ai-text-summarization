@@ -568,8 +568,13 @@ function PrivacySection({ act }) {
   const { CONFIDENTIAL_MODES, CURRENT_CONFIDENTIAL, CONFIDENTIAL_EFFECTS, PRIVACY_CARDS } = useData()
   const navigate = useNavigate()
   const [mode, setMode] = useState(CURRENT_CONFIDENTIAL)
+  // Workspace-policy card is admin-only — a Standard User must not even see it
+  // (backend enforces too; this hides the surface). Account security below
+  // stays visible to everyone.
+  const isAdmin = can(act.role, 'editWorkspace')
   return (
     <div className="space-y-4">
+      {isAdmin && (
       <SettingsCard title="Confidential Mode Defaults" description="When end-to-end confidential meetings are suggested or enforced." icon={Shield}
         actions={<PolicyBadge state="workspace_inherited" act={act} label="Confidential Mode" compact />}>
         <div className="space-y-2">
@@ -586,6 +591,7 @@ function PrivacySection({ act }) {
           <div className="flex flex-wrap gap-2">{CONFIDENTIAL_EFFECTS.map((e) => <span key={e} className="inline-flex items-center gap-1 rounded-full border border-[var(--c-line)] bg-[var(--c-surface)] px-2 py-0.5 text-[11.5px] text-[var(--c-fg-dim)]"><Lock className="h-3 w-3" />{e}</span>)}</div>
         </div>
       </SettingsCard>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {PRIVACY_CARDS.map((c) => <SecurityCard key={c.key} c={c} act={act} onManage={c.key === 'sessions' ? () => navigate('/security') : undefined} />)}

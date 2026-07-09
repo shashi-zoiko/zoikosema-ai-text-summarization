@@ -500,15 +500,20 @@ function ReactionPicker({ onClose, onPick }) {
   return (
     <>
       <div className="fixed inset-0 z-10" onClick={onClose} />
-      <div className="absolute bottom-[calc(100%+16px)] left-1/2 z-20 -translate-x-1/2">
-        <div role="menu" className="zk-glass zk-pop-in flex items-center gap-0.5 rounded-full px-2 py-1.5">
+      {/* Mobile: pinned above the dock and centred on the VIEWPORT (the emoji
+          button sits left-of-centre, so anchoring here would clip the row).
+          Desktop (sm+): anchored above the button like the other popovers. */}
+      <div
+        className="fixed left-1/2 z-20 -translate-x-1/2 bottom-[calc(env(safe-area-inset-bottom,0px)+5.25rem)] sm:absolute sm:bottom-[calc(100%+16px)] sm:left-1/2"
+      >
+        <div role="menu" className="zk-glass zk-pop-in flex max-w-[calc(100vw-0.75rem)] items-center justify-center gap-0.5 rounded-full px-1.5 py-1.5 sm:px-2">
           {EMOJIS.map((e) => (
             <button
               key={e}
               onClick={() => onPick(e)}
               aria-label={`React with ${e}`}
-              className="grid h-11 w-11 origin-bottom place-items-center !rounded-full !border-0 !bg-transparent !p-0 !shadow-none transition-transform duration-150 hover:!bg-white/[0.08] hover:-translate-y-1 hover:scale-125"
-            ><Emoji char={e} size="26px" /></button>
+              className="grid h-10 w-10 shrink-0 origin-bottom place-items-center !rounded-full !border-0 !bg-transparent !p-0 !shadow-none transition-transform duration-150 hover:!bg-white/[0.08] hover:-translate-y-1 hover:scale-125 sm:h-11 sm:w-11"
+            ><Emoji char={e} size="24px" /></button>
           ))}
         </div>
       </div>

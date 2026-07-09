@@ -3,7 +3,7 @@ import {
 } from 'react'
 import {
   AlertTriangle, Check, Crown, Disc, Hand, Info, LogIn, LogOut,
-  MessageSquare, MonitorUp, UserPlus, X,
+  MessageSquare, MonitorUp, X,
 } from 'lucide-react'
 import Emoji from '../../emoji/Emoji'
 import { soundManager } from './sounds.js'
@@ -11,14 +11,15 @@ import { soundManager } from './sounds.js'
 /**
  * Centralised meeting notification engine.
  *
- *   <NotificationProvider>            owns toast queue + lobby request cards +
+ *   <NotificationProvider>            owns toast queue + floating chat cards +
  *                                     sound prefs, and renders the on-screen
- *                                     <NotificationCenter/> (top-right).
- *   useNotifications()                { notify, toast, syncLobby, prefs, ... }
+ *                                     overlays.
+ *   useNotifications()                { notify, toast, notifyChat, prefs, ... }
  *
  * `notify(type, opts)` is the one call site for every event: it plays the right
- * sound (throttled, mute/volume-aware) AND shows a toast. Chat unread counts and
- * waiting-room badges live on the dock; this engine owns the transient overlay.
+ * sound (throttled, mute/volume-aware) AND shows a toast. Join requests are NOT
+ * surfaced here — the host manages them solely via the People panel + header
+ * "Admit N" chip (Google-Meet model); this engine owns only transient overlays.
  */
 
 const NotificationContext = createContext(null)
@@ -52,15 +53,14 @@ const CHAT_TTL_MS = 7000
 
 export function NotificationProvider({ children }) {
   const [toasts, setToasts] = useState([])   // { id, accent, Icon, title, text, emoji, leaving }
-  const [lobby, setLobby] = useState([])     // { userId, name, color, leaving }
   const [chatCards, setChatCards] = useState([]) // { id, name, color, body, mention, at, leaving }
   const [muted, setMutedState] = useState(soundManager.muted)
   const [volume, setVolumeState] = useState(soundManager.volume)
 
   const idRef = useRef(0)
   const timersRef = useRef(new Map())        // toastId → timeout handle
-  // Lobby + chat actions are owned by the room; registered here.
-  const lobbyActionsRef = useRef({ onAdmit: null, onDeny: null, onOpen: null, onChatRead: null, onOpenChat: null })
+  // Chat-card actions are owned by the room; registered here.
+  const chatActionsRef = useRef({ onChatRead: null, onOpenChat: null })
 
   // ── Toasts ────────────────────────────────────────────────────────────────
   const dismissToast = useCallback((id) => {
@@ -119,7 +119,7 @@ export function NotificationProvider({ children }) {
 
   const markChatRead = useCallback(() => {
     dismissAllChat()
-    lobbyActionsRef.current.onChatRead?.()
+    chatActionsRef.current.onChatRead?.()
   }, [dismissAllChat])
 
   // Plays the (throttled) chat sound AND shows a floating card. Callers decide
@@ -141,44 +141,9 @@ export function NotificationProvider({ children }) {
     return id
   }, [dismissChat])
 
-  // ── Lobby request cards ─────────────────────────────────────────────────────
-  // Drive from the authoritative waiting list. New rows → card + lobby sound;
-  // removed rows (admitted/denied elsewhere) → card disappears.
-  const syncLobby = useCallback((list) => {
-    const rows = Array.isArray(list) ? list : []
-    setLobby((prev) => {
-      const prevIds = new Set(prev.filter((r) => !r.leaving).map((r) => r.userId))
-      const nextIds = new Set(rows.map((r) => r.user_id))
-      const hasNew = rows.some((r) => !prevIds.has(r.user_id))
-      if (hasNew) soundManager.play('lobby')
-      // Keep existing card objects (preserve order); append newcomers; drop gone.
-      const kept = prev.filter((r) => r.leaving || nextIds.has(r.userId))
-      const keptIds = new Set(kept.filter((r) => !r.leaving).map((r) => r.userId))
-      const added = rows
-        .filter((r) => !keptIds.has(r.user_id))
-        .map((r) => ({ userId: r.user_id, name: r.name || 'Guest', color: r.color || '#7C3AED' }))
-      return [...kept, ...added]
-    })
+  const registerChatActions = useCallback((actions) => {
+    chatActionsRef.current = { ...chatActionsRef.current, ...actions }
   }, [])
-
-  const removeLobby = useCallback((userId) => {
-    setLobby((prev) => prev.map((r) => (r.userId === userId ? { ...r, leaving: true } : r)))
-    setTimeout(() => setLobby((prev) => prev.filter((r) => r.userId !== userId)), EXIT_MS)
-  }, [])
-
-  const registerLobbyActions = useCallback((actions) => {
-    lobbyActionsRef.current = { ...lobbyActionsRef.current, ...actions }
-  }, [])
-
-  const handleAdmit = useCallback((userId) => {
-    removeLobby(userId)
-    lobbyActionsRef.current.onAdmit?.(userId)
-  }, [removeLobby])
-
-  const handleDeny = useCallback((userId) => {
-    removeLobby(userId)
-    lobbyActionsRef.current.onDeny?.(userId)
-  }, [removeLobby])
 
   // ── Sound preferences ───────────────────────────────────────────────────────
   const setMuted = useCallback((v) => { soundManager.setMuted(v); setMutedState(!!v) }, [])
@@ -205,63 +170,33 @@ export function NotificationProvider({ children }) {
     markChatRead,
     toast: pushToast,
     dismissToast,
-    syncLobby,
-    removeLobby,
-    registerLobbyActions,
+    registerChatActions,
     prefs: { muted, volume },
     setMuted,
     setVolume,
     previewSound,
-  }), [notify, notifyChat, markChatRead, pushToast, dismissToast, syncLobby, removeLobby, registerLobbyActions, muted, volume, setMuted, setVolume, previewSound])
+  }), [notify, notifyChat, markChatRead, pushToast, dismissToast, registerChatActions, muted, volume, setMuted, setVolume, previewSound])
 
   return (
     <NotificationContext.Provider value={value}>
       {children}
-      <NotificationCenter
-        toasts={toasts}
-        lobby={lobby}
-        onDismiss={dismissToast}
-        onAdmit={handleAdmit}
-        onDeny={handleDeny}
-        onOpenWaiting={() => lobbyActionsRef.current.onOpen?.()}
-      />
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
       <ChatToastStack
         cards={chatCards}
         onDismiss={dismissChat}
         onMarkRead={markChatRead}
-        onOpenChat={() => lobbyActionsRef.current.onOpenChat?.()}
+        onOpenChat={() => chatActionsRef.current.onOpenChat?.()}
       />
     </NotificationContext.Provider>
   )
 }
 
-/* ── On-screen center (top-right) ───────────────────────────────────────────── */
+/* ── Transient toasts (top-right) ───────────────────────────────────────────── */
 
-const MAX_LOBBY_CARDS = 3
-
-function NotificationCenter({ toasts, lobby, onDismiss, onAdmit, onDeny, onOpenWaiting }) {
-  const visibleLobby = lobby.slice(0, MAX_LOBBY_CARDS)
-  const overflow = lobby.filter((r) => !r.leaving).length - visibleLobby.filter((r) => !r.leaving).length
-
-  if (toasts.length === 0 && lobby.length === 0) return null
-
+function ToastStack({ toasts, onDismiss }) {
+  if (toasts.length === 0) return null
   return (
     <div className="pointer-events-none fixed right-4 top-4 z-[60] flex w-[clamp(280px,92vw,340px)] flex-col gap-2.5">
-      {/* Lobby join requests — persistent, action-required, shown first/top. */}
-      {visibleLobby.map((r) => (
-        <LobbyCard key={r.userId} req={r} onAdmit={onAdmit} onDeny={onDeny} />
-      ))}
-      {overflow > 0 && (
-        <button
-          type="button"
-          onClick={onOpenWaiting}
-          className="pointer-events-auto rounded-2xl border border-[#263244] bg-[#111827]/95 px-4 py-2.5 text-left text-[12.5px] font-medium text-[#94A3B8] shadow-[0_18px_40px_-12px_rgba(0,0,0,0.7)] backdrop-blur transition hover:text-white"
-        >
-          +{overflow} more waiting — open waiting room
-        </button>
-      )}
-
-      {/* Transient toasts. */}
       {toasts.map((t) => (
         <Toast key={t.id} toast={t} onDismiss={onDismiss} />
       ))}
@@ -434,52 +369,4 @@ function relTime(at) {
   const m = Math.floor(diff / 60_000)
   if (m < 60) return `${m}m ago`
   return `${Math.floor(m / 60)}h ago`
-}
-
-function LobbyCard({ req, onAdmit, onDeny }) {
-  return (
-    <div
-      role="alertdialog"
-      aria-label={`${req.name} wants to join`}
-      className={
-        'pointer-events-auto rounded-2xl border border-[#10B981]/30 bg-[#111827]/97 p-3.5 ' +
-        'shadow-[0_22px_50px_-12px_rgba(16,185,129,0.35)] ring-1 ring-[#10B981]/10 backdrop-blur ' +
-        (req.leaving ? 'zk-notif-out' : 'zk-notif-in')
-      }
-    >
-      <div className="mb-3 flex items-start gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[14px] font-semibold text-white"
-          style={{ background: req.color }}>
-          {(req.name || '?').slice(0, 1).toUpperCase()}
-        </span>
-        <div className="min-w-0 flex-1 pt-0.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#34D399]">
-            <UserPlus className="h-3.5 w-3.5" /> New join request
-          </div>
-          <div className="mt-1 truncate text-[13.5px] text-white">
-            <span className="font-semibold">{req.name}</span> wants to join
-          </div>
-        </div>
-      </div>
-      {/* Single primary action — Admit. Deny is the small secondary control. */}
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => onAdmit(req.userId)}
-          className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#10B981] px-4 text-[13px] font-semibold text-white transition hover:bg-[#059669]"
-        >
-          <Check className="h-4 w-4" /> Admit
-        </button>
-        <button
-          type="button"
-          onClick={() => onDeny(req.userId)}
-          aria-label={`Deny ${req.name}`}
-          title="Deny"
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[#263244] !bg-transparent text-[#94A3B8] transition hover:!bg-white/[0.06] hover:text-white"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
-  )
 }
