@@ -43,7 +43,14 @@ export function useNotebookPersistence(code, userId) {
 
   const flushNow = useCallback(async () => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
-    if (!dirtyRef.current) return
+    if (!dirtyRef.current) {
+      // Nothing pending (autosave already flushed) — still confirm the explicit
+      // Save click so it never looks like a no-op.
+      setStatus('saved')
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+      savedTimerRef.current = setTimeout(() => setStatus('idle'), 1500)
+      return
+    }
     dirtyRef.current = false
     setStatus('saving')
     try {

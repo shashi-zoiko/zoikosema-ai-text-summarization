@@ -105,7 +105,9 @@ export default function PrivateNotebook({ code, userId, onClose }) {
 
         <div className="flex items-center gap-1">
           <ActionBtn onClick={saveNow} title="Save now (Ctrl+S)">
-            <Icon name="download" size={15} /> <span className="hidden md:inline">Save</span>
+            {status === 'saved'
+              ? <><Icon name="check" size={15} /> <span className="hidden md:inline">Saved</span></>
+              : <><Icon name="download" size={15} /> <span className="hidden md:inline">{status === 'saving' ? 'Saving…' : 'Save'}</span></>}
           </ActionBtn>
           <ActionBtn onClick={onDelete} tone="danger" title="Clear notebook">
             <Icon name="trash" size={15} />
