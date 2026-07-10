@@ -21,7 +21,9 @@ function sanitize(text) {
 }
 
 // Flat map: speakerId -> { name, color, text, isFinal, ts }. One live caption
-// per speaker (we never accumulate a transcript — old text is replaced).
+// bubble per speaker — old text is replaced here. The full-meeting log lives
+// separately in `transcript` state (see CaptionProvider), appended to on
+// every final result rather than replaced.
 function reducer(state, action) {
   switch (action.type) {
     case 'upsert': {
@@ -38,6 +40,10 @@ function reducer(state, action) {
       return state
   }
 }
+
+// Hard cap on accumulated transcript lines — a many-hour meeting shouldn't
+// grow this array unboundedly in memory. Oldest lines drop off the front.
+const MAX_TRANSCRIPT_LINES = 4000
 
 /**
  * Owns the entire caption lifecycle and exposes it through two contexts.
@@ -65,6 +71,10 @@ export default function CaptionProvider({ children }) {
   })
   const [micError, setMicError] = useState(false)
   const [bySpeaker, dispatch] = useReducer(reducer, {})
+  // Full-meeting transcript — every FINAL caption, in order, across all
+  // speakers. Interims never land here (they're corrections-in-progress);
+  // only `bySpeaker` shows those, live. Consumed by the Conversations panel.
+  const [transcript, setTranscript] = useState([])
 
   const timersRef = useRef({}) // speakerId -> silence timeout
   const lastInterimRef = useRef(0)
@@ -97,6 +107,12 @@ export default function CaptionProvider({ children }) {
         ts: Date.now(),
       })
       armExpiry(speakerId)
+      if (isFinal) {
+        setTranscript((lines) => {
+          const next = [...lines, { speakerId, name: name || 'Guest', text: clean, ts: Date.now() }]
+          return next.length > MAX_TRANSCRIPT_LINES ? next.slice(next.length - MAX_TRANSCRIPT_LINES) : next
+        })
+      }
     },
     [armExpiry],
   )
@@ -169,8 +185,9 @@ export default function CaptionProvider({ children }) {
     () => ({ enabled, supported, micError, toggle }),
     [enabled, supported, micError, toggle],
   )
-  // Live value: changes per frame, consumed only by the overlay.
-  const live = useMemo(() => ({ bySpeaker }), [bySpeaker])
+  // Live value: changes per frame, consumed only by the overlay + the
+  // Conversations panel.
+  const live = useMemo(() => ({ bySpeaker, transcript }), [bySpeaker, transcript])
 
   return (
     <CaptionsControlContext.Provider value={control}>

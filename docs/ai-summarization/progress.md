@@ -33,23 +33,48 @@ inter-service networking uses the compose service names (`db`, `redis`,
 
 Added a plain circular icon button (matches the existing Info button's
 style — bordered, dark fill, no gradient) directly to the left of the
-gradient edit button, using a `MessagesSquare` icon. Wired to an
-`onOpenConversations` prop that defaults to a no-op stub — action not yet
-decided.
+gradient edit button, using a `MessagesSquare` icon.
 
 **Frontend:**
 - `client/src/features/meeting/components/MeetingHeader.jsx`
 
+### 4. Live transcript accumulation + Conversations panel
+
+`CaptionProvider` previously only kept the *latest* caption line per speaker
+(replaced on every new result, nothing accumulated). Added a second piece of
+state, `transcript` — every FINAL caption (interims excluded, since they're
+corrections-in-progress) is appended, in order, across all speakers, capped
+at 4000 lines so a long meeting can't grow it unboundedly. Exposed through
+the existing `CaptionsLiveContext` alongside `bySpeaker`.
+
+The "Conversations" button now opens `ConversationsPanel` (wired through the
+same `sidebar` state the other drawers — chat/people/info/settings — already
+use): a 50%-width, full-height panel docked to the right, dark backdrop
+behind it. Clicking anywhere on the backdrop (outside the panel) or pressing
+Escape closes it, same as clicking the header button again. Transcript lines
+are grouped under timestamp headings (`HH:MM:SS`, elapsed since the first
+captured line) — a new heading starts whenever the gap since the previous
+line exceeds 20s — then rendered as `Name: text` per line, matching the
+Google Meet / Gemini notetaker transcript layout.
+
+Caveat: this is in-memory only, scoped to each participant's own browser tab.
+Since captions are already broadcast to everyone over the LiveKit data
+channel, every participant's panel ends up showing the same full
+conversation — but it does **not** survive a refresh/rejoin, and isn't
+persisted anywhere server-side yet.
+
+**Frontend:**
+- `client/src/features/meeting/captions/CaptionProvider.jsx`
+- `client/src/features/meeting/captions/useCaptions.js`
+- `client/src/features/meeting/components/ConversationsPanel.jsx` (new)
+- `client/src/features/meeting/MeetRoomLivekit.jsx`
+
 ## Not yet implemented
 
-- The `onEdit` and `onOpenConversations` buttons' actual behavior.
-- Persisting the live-caption transcript. Captions are currently captured
-  client-side via the Web Speech API and broadcast E2EE over a LiveKit data
-  channel, but nothing stores a full transcript anywhere today.
-  - `client/src/features/meeting/captions/useSpeechRecognition.js`
-  - `client/src/features/meeting/captions/captionTransport.js`
-  - `client/src/features/meeting/captions/CaptionProvider.jsx`
-- Wiring a persisted transcript into the existing AI intelligence pipeline.
+- The `onEdit` button's actual behavior.
+- Persisting the transcript anywhere durable (currently in-memory only, lost
+  on refresh/leave, not written to the backend).
+- Wiring the transcript into the existing AI intelligence pipeline.
   `ai_generate_intelligence` currently summarizes only the chat log; the
   `MeetingIntelligence.source` model already has a reserved, unused
   `INTEL_SOURCE_TRANSCRIPT` value anticipating this.
