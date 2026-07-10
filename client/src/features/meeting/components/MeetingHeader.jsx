@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useConnectionState, useLocalParticipant } from '@livekit/components-react'
 import { ConnectionQuality, ConnectionState } from 'livekit-client'
-import { Check, Copy, Info, UserPlus } from 'lucide-react'
+import { Check, Copy, Info, Pencil, Star, UserPlus } from 'lucide-react'
 import HostMenu from './HostMenu.jsx'
 import { useRoomStore } from '../state/roomStore.js'
 import { meetingShareText } from '../../../lib/meetingUrls.js'
@@ -28,6 +28,7 @@ export default function MeetingHeader({
   onScreenEnabled,
   onOpenInfo,
   onOpenPeople,
+  onEdit = () => {},
 }) {
   const state = useConnectionState()
   const reconnecting = state === ConnectionState.Reconnecting
@@ -112,6 +113,17 @@ export default function MeetingHeader({
             onToggleScreenshare={onScreenEnabled}
           />
         )}
+
+        <button
+          type="button"
+          onClick={onEdit}
+          aria-label="Edit"
+          title="Edit"
+          className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 px-3 text-white shadow-sm transition hover:brightness-110"
+        >
+          <Pencil className="h-4 w-4" />
+          <Star className="h-3 w-3 fill-current" />
+        </button>
       </div>
     </header>
   )
