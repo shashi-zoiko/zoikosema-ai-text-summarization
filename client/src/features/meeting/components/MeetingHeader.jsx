@@ -130,10 +130,10 @@ export default function MeetingHeader({
           onClick={onOpenSummary}
           aria-label="Meet Summarizer"
           title="Meet Summarizer"
-          className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 px-3 text-white shadow-sm transition hover:brightness-110"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-pink-500 text-white shadow-sm transition hover:brightness-110"
         >
-          <span className="inline-flex items-start gap-0.5">
-            <Star className="h-2.5 w-2.5 fill-current" />
+          <span className="inline-flex items-start">
+            <Star className="h-2 w-2 fill-current" />
             <Pencil className="h-4 w-4" />
           </span>
         </button>

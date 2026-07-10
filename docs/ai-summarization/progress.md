@@ -197,6 +197,16 @@ panel opens. Once started, the button shows a disabled "Started" state
 - `client/src/features/meeting/components/MeetSummaryPanel.jsx`
 - `client/src/features/meeting/MeetRoomLivekit.jsx`
 
+### 11. Meet Summarizer header button styling tweak
+
+Made the button a true circle (`h-9 w-9`, `grid place-items-center` — same
+shape as the Info/Conversations buttons, dropping the pill-shaped
+`inline-flex`/`px-3` it had before), tightened the gap between the star and
+pencil icons to none, and shrank the star from `h-2.5 w-2.5` to `h-2 w-2`.
+
+**Frontend:**
+- `client/src/features/meeting/components/MeetingHeader.jsx`
+
 ## Not yet implemented
 
 - Replacing `MOCK_SUMMARY` with a real generated summary — feed the
