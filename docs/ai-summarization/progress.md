@@ -155,6 +155,31 @@ involved, since it's a direct response to a user action.
 - `client/src/features/meeting/captions/CaptionProvider.jsx`
 - `client/src/features/meeting/MeetRoomLivekit.jsx`
 
+### 9. Corrected item 8 — Meet Summarizer capture must NOT touch the visible CC toggle
+
+Item 8 was wrong: `forceEnable()` flipped the *same* `enabled` flag the
+visible captions bubble overlay and toolbar CC toggle read from, so clicking
+Meet Summarizer visibly turned captions on — not asked for, and not what
+"capture audio to text for the Conversations container" means.
+
+`CaptionProvider` now has two fully independent flags:
+- `enabled` — unchanged meaning: the visible CC toggle (toolbar button,
+  `C`/`Shift+C` shortcut, persisted to localStorage). `CaptionOverlay`
+  already gated the bubble UI on this directly, so it needed no changes.
+- `summarizerCapturing` — new, set once via the renamed `startCapture()`
+  (was `forceEnable()`). Never persisted, never touches `enabled` or
+  localStorage, sticky for the rest of the session once set.
+
+Speech recognition itself runs when **either** flag is true — one shared
+mic tap, since a browser only reliably runs one recognition session at a
+time — but only `enabled` decides what's shown on screen. So clicking Meet
+Summarizer now starts feeding the transcript silently in the background;
+the CC toggle stays exactly as the user left it, untouched and unaffected.
+
+**Frontend:**
+- `client/src/features/meeting/captions/CaptionProvider.jsx`
+- `client/src/features/meeting/MeetRoomLivekit.jsx`
+
 ## Not yet implemented
 
 - Replacing `MOCK_SUMMARY` with a real generated summary — feed the

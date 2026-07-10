@@ -53,11 +53,19 @@ const MAX_TRANSCRIPT_LINES = 4000
  * Flow: local mic → SpeechRecognition → throttle/sanitize → broadcast over the
  * LiveKit data channel + echo locally → per-speaker state with a silence timer.
  *
- * Also exposes an imperative `forceEnable()` via ref — MeetRoomLivekit calls
- * it directly from the Meet Summarizer button's click handler (which lives
- * outside this provider's own context subtree, so it can't reach `toggle`
- * through useCaptionControls) to guarantee capture starts regardless of
- * whatever on/off state captions were left in.
+ * There are TWO independent reasons speech recognition might be running,
+ * and they must stay independent:
+ *   - `enabled` — the visible "CC" toggle (toolbar button, C/Shift+C
+ *     shortcut, persisted to localStorage). Drives the on-screen caption
+ *     bubble overlay (CaptionOverlay gates on this directly).
+ *   - `summarizerCapturing` — set once Meet Summarizer has been used (via
+ *     the imperative `startCapture()` below, exposed through ref since the
+ *     click handler in MeetRoomLivekit lives outside this provider's own
+ *     context subtree). Feeds the Conversations transcript. Never touches
+ *     `enabled`, never persisted, and never makes the bubble overlay appear
+ *     — that stays keyed to `enabled` alone.
+ * Recognition itself runs whenever EITHER is true (one shared mic tap), but
+ * only `enabled` decides what's shown on screen.
  */
 const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
   // `isMicrophoneEnabled` is reactive — it flips the instant the participant
@@ -75,6 +83,10 @@ const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
       return false
     }
   })
+  // Independent of `enabled` — see the class doc comment above. Sticky for
+  // the rest of the session once Meet Summarizer has been used; there's no
+  // "stop" path since nothing has asked for one.
+  const [summarizerCapturing, setSummarizerCapturing] = useState(false)
   const [micError, setMicError] = useState(false)
   const [bySpeaker, dispatch] = useReducer(reducer, {})
   // Full-meeting transcript — every FINAL caption, in order, across all
@@ -143,11 +155,13 @@ const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
     [ingest, publish, localParticipant, isMicrophoneEnabled],
   )
 
-  // Capture runs only while CC is on, the API is supported, the mic wasn't
+  // Capture runs if EITHER the visible CC toggle OR the summarizer wants it
+  // (see the class doc comment) — one shared mic tap, two independent
+  // reasons to use it — as long as the API is supported, the mic wasn't
   // denied, AND the participant's meeting mic is live. Muting in the meeting
   // stops recognition immediately — no captions are generated or broadcast
   // while muted.
-  useSpeechRecognition(enabled && supported && !micError && isMicrophoneEnabled, {
+  useSpeechRecognition((enabled || summarizerCapturing) && supported && !micError && isMicrophoneEnabled, {
     lang: CAPTION_CONFIG.lang,
     onResult: handleResult,
     onError: () => setMicError(true),
@@ -165,20 +179,19 @@ const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
     })
   }, [supported])
 
-  // Imperative counterpart to `toggle` — always turns captions ON (never
-  // flips them off) and clears a stale mic-permission error, same as a
-  // manual toggle would. Called directly from the Meet Summarizer button's
-  // click handler on every click, not just the first.
-  const forceEnable = useCallback(() => {
+  // Starts capture for the Meet Summarizer transcript — deliberately does
+  // NOT touch `enabled`/localStorage, so the visible CC toggle and bubble
+  // overlay are completely unaffected by this. Clears a stale mic-permission
+  // error, same as `toggle` would. Called directly from the Meet
+  // Summarizer button's click handler, on every click (idempotent after the
+  // first — there's no corresponding "stop").
+  const startCapture = useCallback(() => {
     if (!supported) return
     setMicError(false)
-    setEnabled(true)
-    try {
-      localStorage.setItem(CAPTION_CONFIG.storageKey, '1')
-    } catch { /* storage blocked — in-memory state still works */ }
+    setSummarizerCapturing(true)
   }, [supported])
 
-  useImperativeHandle(ref, () => ({ forceEnable }), [forceEnable])
+  useImperativeHandle(ref, () => ({ startCapture }), [startCapture])
 
   // Keyboard shortcut: C / Shift+C. Ignored while typing in any field.
   useEffect(() => {

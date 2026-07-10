@@ -242,7 +242,7 @@ function MeetRoom() {
   const [showEmoji, setShowEmoji] = useState(false)
   const [showWhiteboard, setShowWhiteboard] = useState(false)
   const joinedAtRef = useRef(null) // wall-clock ms when media token landed → header timer
-  const captionProviderRef = useRef(null) // imperative forceEnable() — see CaptionProvider.jsx
+  const captionProviderRef = useRef(null) // imperative startCapture() — see CaptionProvider.jsx
   // Bridge the legacy { kind, text } toast API onto the notification engine so
   // recording / permission-denied / error paths keep working unchanged.
   const setToast = useCallback(({ kind, text, title } = {}) => {
@@ -703,9 +703,10 @@ function MeetRoom() {
           // Only the FIRST click stamps the session start — reopening later
           // must not push the zero point forward again.
           setSummarizerStartedAt((t) => t ?? Date.now())
-          // But EVERY click force-enables caption capture, regardless of
-          // whatever on/off state the host/participant left it in.
-          captionProviderRef.current?.forceEnable()
+          // But EVERY click starts transcript capture for the summarizer,
+          // independent of the visible CC toggle — doesn't touch it, doesn't
+          // show the caption bubble overlay, just feeds Conversations.
+          captionProviderRef.current?.startCapture()
           setSidebar((s) => (s === 'summary' ? null : 'summary'))
         }}
       />
