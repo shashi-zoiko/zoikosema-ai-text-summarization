@@ -1,7 +1,7 @@
 # AI Summarization — Progress Log
 
 Tracks changes made by Shashi (branch `shashi-changes`) toward the in-meeting
-AI summarizer/agenda feature. Newest entries at the top.
+AI summarizer/agenda feature, in the order implemented.
 
 ## Changes
 
@@ -29,9 +29,20 @@ inter-service networking uses the compose service names (`db`, `redis`,
 **Config:**
 - `docker-compose.yml`
 
+### 3. "Conversations" button in the meeting header
+
+Added a plain circular icon button (matches the existing Info button's
+style — bordered, dark fill, no gradient) directly to the left of the
+gradient edit button, using a `MessagesSquare` icon. Wired to an
+`onOpenConversations` prop that defaults to a no-op stub — action not yet
+decided.
+
+**Frontend:**
+- `client/src/features/meeting/components/MeetingHeader.jsx`
+
 ## Not yet implemented
 
-- The `onEdit` button's actual behavior.
+- The `onEdit` and `onOpenConversations` buttons' actual behavior.
 - Persisting the live-caption transcript. Captions are currently captured
   client-side via the Web Speech API and broadcast E2EE over a LiveKit data
   channel, but nothing stores a full transcript anywhere today.

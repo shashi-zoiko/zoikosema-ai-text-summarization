@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useConnectionState, useLocalParticipant } from '@livekit/components-react'
 import { ConnectionQuality, ConnectionState } from 'livekit-client'
-import { Check, Copy, Info, Pencil, Star, UserPlus } from 'lucide-react'
+import { Check, Copy, Info, MessagesSquare, Pencil, Star, UserPlus } from 'lucide-react'
 import HostMenu from './HostMenu.jsx'
 import { useRoomStore } from '../state/roomStore.js'
 import { meetingShareText } from '../../../lib/meetingUrls.js'
@@ -29,6 +29,7 @@ export default function MeetingHeader({
   onOpenInfo,
   onOpenPeople,
   onEdit = () => {},
+  onOpenConversations = () => {},
 }) {
   const state = useConnectionState()
   const reconnecting = state === ConnectionState.Reconnecting
@@ -116,13 +117,25 @@ export default function MeetingHeader({
 
         <button
           type="button"
+          onClick={onOpenConversations}
+          aria-label="Conversations"
+          title="Conversations"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[#263244] bg-[#111827] text-[#94A3B8] transition hover:bg-[#1E293B] hover:text-white"
+        >
+          <MessagesSquare className="h-4 w-4" />
+        </button>
+
+        <button
+          type="button"
           onClick={onEdit}
           aria-label="Edit"
           title="Edit"
           className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 px-3 text-white shadow-sm transition hover:brightness-110"
         >
-          <Pencil className="h-4 w-4" />
-          <Star className="h-3 w-3 fill-current" />
+          <span className="inline-flex items-start gap-0.5">
+            <Star className="h-2.5 w-2.5 fill-current" />
+            <Pencil className="h-4 w-4" />
+          </span>
         </button>
       </div>
     </header>
