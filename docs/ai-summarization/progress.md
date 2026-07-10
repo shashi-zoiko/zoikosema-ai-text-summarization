@@ -246,6 +246,20 @@ toggle, not just once-ever-started.
 - `client/src/features/meeting/MeetRoomLivekit.jsx`
 - `client/src/index.css`
 
+### 13. Swapped pink for blue across the Meet Summarizer color scheme
+
+No more pink anywhere in this feature. Both button gradients
+(`bg-gradient-to-br from-violet-500 to-pink-500`, on the header button and
+on the panel's "Start Summarizing" state) are now `from-violet-500
+to-blue-500`. The `zk-summarizer-glow` keyframes' pink rgba values
+(`rgba(236,72,153,*)`) are now blue (`rgba(59,130,246,*)` — Tailwind's
+blue-500), so the glow still matches the button's own gradient.
+
+**Frontend:**
+- `client/src/features/meeting/components/MeetingHeader.jsx`
+- `client/src/features/meeting/components/MeetSummaryPanel.jsx`
+- `client/src/index.css`
+
 ## Not yet implemented
 
 - Replacing `MOCK_SUMMARY` with a real generated summary — feed the

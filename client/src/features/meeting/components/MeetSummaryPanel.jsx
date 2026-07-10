@@ -97,7 +97,7 @@ export default function MeetSummaryPanel({ onClose, onStart }) {
                 'inline-flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[13px] font-semibold transition ' +
                 (capturing
                   ? 'bg-[#10B981]/15 text-[#34D399] hover:bg-[#10B981]/25'
-                  : 'bg-gradient-to-br from-violet-500 to-pink-500 text-white hover:brightness-110')
+                  : 'bg-gradient-to-br from-violet-500 to-blue-500 text-white hover:brightness-110')
               }
             >
               {capturing ? <Pause className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}

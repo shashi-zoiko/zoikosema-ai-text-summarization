@@ -135,7 +135,7 @@ export default function MeetingHeader({
           aria-label="Meet Summarizer"
           title="Meet Summarizer"
           className={
-            'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-pink-500 text-white shadow-sm transition hover:brightness-110 ' +
+            'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-blue-500 text-white shadow-sm transition hover:brightness-110 ' +
             (summarizing ? 'zk-summarizer-glow' : '')
           }
         >

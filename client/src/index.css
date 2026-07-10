@@ -574,21 +574,21 @@ h4 { line-height: 1.40; font-weight: 600; }
 
   /* Meet Summarizer header button while actively capturing — same "who's
      live" language as the tile speaking glow above, but in the button's own
-     violet→pink gradient, plus a breathing scale (the tiles only get a
+     violet→blue gradient, plus a breathing scale (the tiles only get a
      static scale bump; this one actually pulses small ↔ normal). */
   @keyframes zk-summarizer-glow {
     0%, 100% {
       box-shadow:
         0 0 0 2.5px rgba(139,92,246,0.6),
         0 0 0 6px rgba(139,92,246,0.18),
-        0 0 26px 1px rgba(236,72,153,0.5);
+        0 0 26px 1px rgba(59,130,246,0.5);
       transform: scale(1);
     }
     50% {
       box-shadow:
-        0 0 0 3px rgba(236,72,153,0.7),
-        0 0 0 10px rgba(236,72,153,0.22),
-        0 0 42px 6px rgba(236,72,153,0.6);
+        0 0 0 3px rgba(59,130,246,0.7),
+        0 0 0 10px rgba(59,130,246,0.22),
+        0 0 42px 6px rgba(59,130,246,0.6);
       transform: scale(1.08);
     }
   }
