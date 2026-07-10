@@ -3,8 +3,11 @@ import { createContext, useContext } from 'react'
 /**
  * Two separate contexts — deliberately split for performance.
  *
- * - ControlContext changes RARELY (only when CC is toggled or support/error
- *   state flips). Consumers: the toolbar button.
+ * - ControlContext changes occasionally (CC toggled, support/error state
+ *   flips, or Meet Summarizer capture toggled on/off). Consumers: the
+ *   toolbar CC button (enabled/toggle), MeetingHeader (capturing — drives
+ *   the header button's glow effect), and MeetSummaryPanel
+ *   (capturing/setCapturing — the in-panel toggle button).
  * - LiveContext changes FREQUENTLY (every interim/final caption frame).
  *   Consumers: the CaptionOverlay (bySpeaker) and the Conversations panel
  *   (transcript — the accumulated, finals-only log across the whole call).
@@ -17,6 +20,8 @@ export const CaptionsControlContext = createContext({
   supported: false,
   micError: false,
   toggle: () => {},
+  capturing: false,
+  setCapturing: () => {},
 })
 
 export const CaptionsLiveContext = createContext({ bySpeaker: {}, transcript: [] })

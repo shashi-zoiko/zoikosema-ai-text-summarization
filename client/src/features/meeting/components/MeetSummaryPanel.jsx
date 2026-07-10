@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { Sparkles, X } from 'lucide-react'
+import { Pause, Sparkles, X } from 'lucide-react'
+import { useCaptionControls } from '../captions/useCaptions.js'
 
 // Mock data — stands in for the real summary until it's generated from the
 // accumulated transcript (see ConversationsPanel/CaptionProvider) via the AI
@@ -30,12 +31,23 @@ const MOCK_SUMMARY = {
  * transcript is wired into the AI intelligence pipeline this becomes a real
  * fetch keyed off the meeting code instead of a constant.
  *
- * The header button only opens/closes this panel — actually starting
- * capture happens from the "Start Summarizing" button INSIDE here
- * (`onStart`), kept as a distinct step rather than something that fires the
- * instant the panel opens.
+ * The header button only opens/closes this panel — actually starting/
+ * stopping capture happens from the "Start/Pause Summarizing" toggle INSIDE
+ * here, reading `capturing`/`setCapturing` straight off CaptionsControlContext
+ * (this panel renders inside CaptionProvider, so no prop drilling needed).
+ * `onStart` is a separate, parent-owned callback fired only when the toggle
+ * turns ON — it stamps the session's zero point in MeetRoomLivekit, which is
+ * idempotent there (first call only), so calling it on every "on" is fine.
  */
-export default function MeetSummaryPanel({ onClose, onStart, startedAt }) {
+export default function MeetSummaryPanel({ onClose, onStart }) {
+  const { capturing, setCapturing } = useCaptionControls()
+
+  const toggleCapturing = () => {
+    const next = !capturing
+    setCapturing(next)
+    if (next) onStart?.()
+  }
+
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
     window.addEventListener('keydown', onKey)
@@ -66,7 +78,7 @@ export default function MeetSummaryPanel({ onClose, onStart, startedAt }) {
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
           <div className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-[#263244] bg-[#0B1220] px-4 py-3">
             <span className="inline-flex items-center gap-2 text-[13px] text-[#94A3B8]">
-              {startedAt ? (
+              {capturing ? (
                 <>
                   <span className="relative grid h-2 w-2 place-items-center">
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#10B981] opacity-70" />
@@ -75,22 +87,21 @@ export default function MeetSummaryPanel({ onClose, onStart, startedAt }) {
                   <span className="font-medium text-white">Summarizing this conversation</span>
                 </>
               ) : (
-                'Not started yet'
+                'Not capturing'
               )}
             </span>
             <button
               type="button"
-              onClick={onStart}
-              disabled={!!startedAt}
+              onClick={toggleCapturing}
               className={
                 'inline-flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[13px] font-semibold transition ' +
-                (startedAt
-                  ? 'cursor-default bg-[#1E293B] text-[#94A3B8]'
+                (capturing
+                  ? 'bg-[#10B981]/15 text-[#34D399] hover:bg-[#10B981]/25'
                   : 'bg-gradient-to-br from-violet-500 to-pink-500 text-white hover:brightness-110')
               }
             >
-              <Sparkles className="h-3.5 w-3.5" />
-              {startedAt ? 'Started' : 'Start Summarizing'}
+              {capturing ? <Pause className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {capturing ? 'Pause Summarizing' : 'Start Summarizing'}
             </button>
           </div>
 

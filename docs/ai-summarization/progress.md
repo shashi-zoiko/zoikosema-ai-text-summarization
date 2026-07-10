@@ -207,6 +207,45 @@ pencil icons to none, and shrank the star from `h-2.5 w-2.5` to `h-2 w-2`.
 **Frontend:**
 - `client/src/features/meeting/components/MeetingHeader.jsx`
 
+### 12. Start/Pause toggle + listening glow on the header button
+
+Two changes landed together since they share the same underlying rework:
+
+**Toggle, not one-way start.** "Start Summarizing" inside `MeetSummaryPanel`
+is now a real on/off toggle — "Pause Summarizing" (green pill, pause icon)
+once capturing, back to "Start Summarizing" (gradient, sparkle icon) when
+toggled off. `summarizerStartedAt` still only stamps on the *first* ever
+turn-on (headings in Conversations keep one stable session clock across
+pause/resume — gaps where capture was off just have no lines, which needs
+no special handling since nothing gets captured during them anyway).
+
+**Architecture simplified along the way.** Item 9's `forwardRef` +
+`useImperativeHandle` workaround on `CaptionProvider` is gone — realized
+`MeetingHeader` and `MeetSummaryPanel` both already render *inside*
+`<CaptionProvider>` in the tree, so they can read/drive `capturing` straight
+off `CaptionsControlContext` instead of routing through a ref. `MeetRoomLivekit`
+now only owns `summarizerStartedAt`; `MeetSummaryPanel` calls
+`setCapturing`/reads `capturing` from context directly and fires the
+parent's `onStart` callback (session-stamp only) whenever it toggles on.
+
+**Listening glow on the header button.** New `zk-summarizer-glow` CSS
+animation (`index.css`, registered in the existing `prefers-reduced-motion`
+guard) — a pulsing violet/pink box-shadow ring plus a breathing
+scale(1) ↔ scale(1.08), matching the visual language of the existing
+active-speaker tile glow (`zk-tile-speak`) but genuinely alternating in
+scale rather than a static bump. Applied to the Meet Summarizer header
+button whenever `capturing` is true (read from context, same as above) —
+tied to the live on/off state, so it appears and disappears with each
+toggle, not just once-ever-started.
+
+**Frontend:**
+- `client/src/features/meeting/captions/CaptionProvider.jsx`
+- `client/src/features/meeting/captions/useCaptions.js`
+- `client/src/features/meeting/components/MeetSummaryPanel.jsx`
+- `client/src/features/meeting/components/MeetingHeader.jsx`
+- `client/src/features/meeting/MeetRoomLivekit.jsx`
+- `client/src/index.css`
+
 ## Not yet implemented
 
 - Replacing `MOCK_SUMMARY` with a real generated summary — feed the

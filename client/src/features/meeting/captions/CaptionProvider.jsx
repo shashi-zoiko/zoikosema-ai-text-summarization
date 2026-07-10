@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useLocalParticipant } from '@livekit/components-react'
 import { CAPTION_CONFIG } from './config'
 import { speakerColor } from './speakerColor'
@@ -58,16 +58,17 @@ const MAX_TRANSCRIPT_LINES = 4000
  *   - `enabled` — the visible "CC" toggle (toolbar button, C/Shift+C
  *     shortcut, persisted to localStorage). Drives the on-screen caption
  *     bubble overlay (CaptionOverlay gates on this directly).
- *   - `summarizerCapturing` — set once Meet Summarizer has been used (via
- *     the imperative `startCapture()` below, exposed through ref since the
- *     click handler in MeetRoomLivekit lives outside this provider's own
- *     context subtree). Feeds the Conversations transcript. Never touches
- *     `enabled`, never persisted, and never makes the bubble overlay appear
- *     — that stays keyed to `enabled` alone.
+ *   - `summarizerCapturing` — toggled on/off from the Meet Summarizer panel,
+ *     via `capturing`/`setCapturing` on the control context (both
+ *     MeetingHeader and MeetSummaryPanel render inside this provider, so
+ *     they read/drive it directly — no prop drilling needed). Feeds the
+ *     Conversations transcript. Never touches `enabled`, never persisted,
+ *     and never makes the bubble overlay appear — that stays keyed to
+ *     `enabled` alone.
  * Recognition itself runs whenever EITHER is true (one shared mic tap), but
  * only `enabled` decides what's shown on screen.
  */
-const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
+export default function CaptionProvider({ children }) {
   // `isMicrophoneEnabled` is reactive — it flips the instant the participant
   // mutes/unmutes in the meeting. We gate capture on it so a muted mic never
   // produces captions (the Web Speech engine taps the system mic on its own,
@@ -83,9 +84,8 @@ const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
       return false
     }
   })
-  // Independent of `enabled` — see the class doc comment above. Sticky for
-  // the rest of the session once Meet Summarizer has been used; there's no
-  // "stop" path since nothing has asked for one.
+  // Independent of `enabled` — see the class doc comment above. Toggled
+  // on/off from the Meet Summarizer panel, not persisted.
   const [summarizerCapturing, setSummarizerCapturing] = useState(false)
   const [micError, setMicError] = useState(false)
   const [bySpeaker, dispatch] = useReducer(reducer, {})
@@ -179,19 +179,17 @@ const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
     })
   }, [supported])
 
-  // Starts capture for the Meet Summarizer transcript — deliberately does
-  // NOT touch `enabled`/localStorage, so the visible CC toggle and bubble
-  // overlay are completely unaffected by this. Clears a stale mic-permission
-  // error, same as `toggle` would. Called directly from the Meet
-  // Summarizer button's click handler, on every click (idempotent after the
-  // first — there's no corresponding "stop").
-  const startCapture = useCallback(() => {
+  // On/off switch for Meet Summarizer capture — deliberately does NOT touch
+  // `enabled`/localStorage, so the visible CC toggle and bubble overlay are
+  // completely unaffected by this. Turning it on clears a stale
+  // mic-permission error, same as `toggle` would. Called directly from the
+  // Meet Summarizer panel's toggle button (via context, see class doc
+  // comment).
+  const setCapturing = useCallback((value) => {
     if (!supported) return
-    setMicError(false)
-    setSummarizerCapturing(true)
+    if (value) setMicError(false)
+    setSummarizerCapturing(value)
   }, [supported])
-
-  useImperativeHandle(ref, () => ({ startCapture }), [startCapture])
 
   // Keyboard shortcut: C / Shift+C. Ignored while typing in any field.
   useEffect(() => {
@@ -216,8 +214,8 @@ const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
 
   // Control value: stable except on rare toggles → consumers barely re-render.
   const control = useMemo(
-    () => ({ enabled, supported, micError, toggle }),
-    [enabled, supported, micError, toggle],
+    () => ({ enabled, supported, micError, toggle, capturing: summarizerCapturing, setCapturing }),
+    [enabled, supported, micError, toggle, summarizerCapturing, setCapturing],
   )
   // Live value: changes per frame, consumed only by the overlay + the
   // Conversations panel.
@@ -228,6 +226,4 @@ const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
       <CaptionsLiveContext.Provider value={live}>{children}</CaptionsLiveContext.Provider>
     </CaptionsControlContext.Provider>
   )
-})
-
-export default CaptionProvider
+}

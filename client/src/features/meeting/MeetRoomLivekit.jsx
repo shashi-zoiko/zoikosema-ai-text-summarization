@@ -243,7 +243,6 @@ function MeetRoom() {
   const [showEmoji, setShowEmoji] = useState(false)
   const [showWhiteboard, setShowWhiteboard] = useState(false)
   const joinedAtRef = useRef(null) // wall-clock ms when media token landed → header timer
-  const captionProviderRef = useRef(null) // imperative startCapture() — see CaptionProvider.jsx
   // Bridge the legacy { kind, text } toast API onto the notification engine so
   // recording / permission-denied / error paths keep working unchanged.
   const setToast = useCallback(({ kind, text, title } = {}) => {
@@ -519,13 +518,11 @@ function MeetRoom() {
   }, [])
   // Google-Meet: clicking the grid's "+N others" tile opens the People panel.
   const openPeople = useCallback(() => setSidebar('people'), [])
-  // The "Start Summarizing" button INSIDE MeetSummaryPanel — not the header
-  // button, which only opens/closes the panel. Stamps the session's zero
-  // point (first call only) and starts transcript capture, independent of
-  // the visible CC toggle.
+  // Called by MeetSummaryPanel whenever its in-panel toggle turns capture ON
+  // (that button drives capturing itself via CaptionsControlContext — this
+  // just stamps the session's zero point, first call only, ever).
   const startSummarizing = useCallback(() => {
     setSummarizerStartedAt((t) => t ?? Date.now())
-    captionProviderRef.current?.startCapture()
   }, [])
   // Wire the floating chat cards' actions. "Mark as read" clears the unread
   // badge without opening chat; tapping a card's preview opens the chat drawer
@@ -693,7 +690,7 @@ function MeetRoom() {
           providers around their children, so caption updates never re-render
           the grid. */}
       <MeetingCryptoProvider keyB64={e2eeKey}>
-      <CaptionProvider ref={captionProviderRef}>
+      <CaptionProvider>
       <MeetingHeader
         code={code}
         ctrlConnected={ctrlConnected}
@@ -779,11 +776,7 @@ function MeetRoom() {
           <ConversationsPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
         )}
         {sidebar === 'summary' && (
-          <MeetSummaryPanel
-            onClose={() => setSidebar(null)}
-            startedAt={summarizerStartedAt}
-            onStart={startSummarizing}
-          />
+          <MeetSummaryPanel onClose={() => setSidebar(null)} onStart={startSummarizing} />
         )}
         {sidebar === 'settings' && (
           <SettingsDrawer

@@ -5,6 +5,7 @@ import { ConnectionQuality, ConnectionState } from 'livekit-client'
 import { Check, Copy, Info, MessagesSquare, Pencil, Star, UserPlus } from 'lucide-react'
 import HostMenu from './HostMenu.jsx'
 import { useRoomStore } from '../state/roomStore.js'
+import { useCaptionControls } from '../captions/useCaptions.js'
 import { meetingShareText } from '../../../lib/meetingUrls.js'
 
 /**
@@ -34,6 +35,9 @@ export default function MeetingHeader({
   const state = useConnectionState()
   const reconnecting = state === ConnectionState.Reconnecting
   const connecting = state === ConnectionState.Connecting
+  // Drives the Meet Summarizer button's listening glow — reads straight off
+  // context since this header renders inside CaptionProvider.
+  const { capturing: summarizing } = useCaptionControls()
 
   return (
     <header
@@ -130,7 +134,10 @@ export default function MeetingHeader({
           onClick={onOpenSummary}
           aria-label="Meet Summarizer"
           title="Meet Summarizer"
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-pink-500 text-white shadow-sm transition hover:brightness-110"
+          className={
+            'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-pink-500 text-white shadow-sm transition hover:brightness-110 ' +
+            (summarizing ? 'zk-summarizer-glow' : '')
+          }
         >
           <span className="inline-flex items-start">
             <Star className="h-2 w-2 fill-current" />
