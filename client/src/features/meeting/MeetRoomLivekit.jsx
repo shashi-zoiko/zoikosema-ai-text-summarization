@@ -242,6 +242,7 @@ function MeetRoom() {
   const [showEmoji, setShowEmoji] = useState(false)
   const [showWhiteboard, setShowWhiteboard] = useState(false)
   const joinedAtRef = useRef(null) // wall-clock ms when media token landed → header timer
+  const captionProviderRef = useRef(null) // imperative forceEnable() — see CaptionProvider.jsx
   // Bridge the legacy { kind, text } toast API onto the notification engine so
   // recording / permission-denied / error paths keep working unchanged.
   const setToast = useCallback(({ kind, text, title } = {}) => {
@@ -683,7 +684,7 @@ function MeetRoom() {
           providers around their children, so caption updates never re-render
           the grid. */}
       <MeetingCryptoProvider keyB64={e2eeKey}>
-      <CaptionProvider>
+      <CaptionProvider ref={captionProviderRef}>
       <MeetingHeader
         code={code}
         ctrlConnected={ctrlConnected}
@@ -702,6 +703,9 @@ function MeetRoom() {
           // Only the FIRST click stamps the session start — reopening later
           // must not push the zero point forward again.
           setSummarizerStartedAt((t) => t ?? Date.now())
+          // But EVERY click force-enables caption capture, regardless of
+          // whatever on/off state the host/participant left it in.
+          captionProviderRef.current?.forceEnable()
           setSidebar((s) => (s === 'summary' ? null : 'summary'))
         }}
       />

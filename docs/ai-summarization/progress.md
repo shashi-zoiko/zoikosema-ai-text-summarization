@@ -131,6 +131,30 @@ conversation.") instead of the normal "captions are off" message.
   since it's still all mock data with nothing timestamped to filter)
 - `client/src/features/meeting/components/ConversationsPanel.jsx`
 
+### 8. Meet Summarizer now force-enables captions on every click
+
+Previously, if captions were toggled off, clicking Meet Summarizer opened
+the panel but nothing ever got captured — capture is entirely gated on the
+captions on/off state in `CaptionProvider`. Now every click of Meet
+Summarizer force-enables capture regardless of that state (also clears a
+stale mic-permission error, same as the manual CC toggle would), so the
+host/participant never has to separately remember to turn captions on for
+the summarizer to work.
+
+Implementation note: the click handler lives in `MeetRoomLivekit.jsx`, which
+renders `<CaptionProvider>` but isn't itself a descendant of its context —
+so it can't reach `toggle` through `useCaptionControls()`. First tried
+threading a "signal" prop through and reacting to it with a `useEffect`
+inside `CaptionProvider`, but that's exactly the setState-in-effect
+anti-pattern (and the lint rule caught it). Fixed by exposing an imperative
+`forceEnable()` off `CaptionProvider` via `forwardRef` +
+`useImperativeHandle`, called directly from the click handler — no effect
+involved, since it's a direct response to a user action.
+
+**Frontend:**
+- `client/src/features/meeting/captions/CaptionProvider.jsx`
+- `client/src/features/meeting/MeetRoomLivekit.jsx`
+
 ## Not yet implemented
 
 - Replacing `MOCK_SUMMARY` with a real generated summary — feed the

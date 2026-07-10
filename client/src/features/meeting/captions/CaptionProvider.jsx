@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useReducer, useRef, useState } from 'react'
 import { useLocalParticipant } from '@livekit/components-react'
 import { CAPTION_CONFIG } from './config'
 import { speakerColor } from './speakerColor'
@@ -52,8 +52,14 @@ const MAX_TRANSCRIPT_LINES = 4000
  *
  * Flow: local mic → SpeechRecognition → throttle/sanitize → broadcast over the
  * LiveKit data channel + echo locally → per-speaker state with a silence timer.
+ *
+ * Also exposes an imperative `forceEnable()` via ref — MeetRoomLivekit calls
+ * it directly from the Meet Summarizer button's click handler (which lives
+ * outside this provider's own context subtree, so it can't reach `toggle`
+ * through useCaptionControls) to guarantee capture starts regardless of
+ * whatever on/off state captions were left in.
  */
-export default function CaptionProvider({ children }) {
+const CaptionProvider = forwardRef(function CaptionProvider({ children }, ref) {
   // `isMicrophoneEnabled` is reactive — it flips the instant the participant
   // mutes/unmutes in the meeting. We gate capture on it so a muted mic never
   // produces captions (the Web Speech engine taps the system mic on its own,
@@ -159,6 +165,21 @@ export default function CaptionProvider({ children }) {
     })
   }, [supported])
 
+  // Imperative counterpart to `toggle` — always turns captions ON (never
+  // flips them off) and clears a stale mic-permission error, same as a
+  // manual toggle would. Called directly from the Meet Summarizer button's
+  // click handler on every click, not just the first.
+  const forceEnable = useCallback(() => {
+    if (!supported) return
+    setMicError(false)
+    setEnabled(true)
+    try {
+      localStorage.setItem(CAPTION_CONFIG.storageKey, '1')
+    } catch { /* storage blocked — in-memory state still works */ }
+  }, [supported])
+
+  useImperativeHandle(ref, () => ({ forceEnable }), [forceEnable])
+
   // Keyboard shortcut: C / Shift+C. Ignored while typing in any field.
   useEffect(() => {
     const onKey = (e) => {
@@ -194,4 +215,6 @@ export default function CaptionProvider({ children }) {
       <CaptionsLiveContext.Provider value={live}>{children}</CaptionsLiveContext.Provider>
     </CaptionsControlContext.Provider>
   )
-}
+})
+
+export default CaptionProvider
