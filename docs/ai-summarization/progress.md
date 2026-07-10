@@ -260,17 +260,65 @@ blue-500), so the glow still matches the button's own gradient.
 - `client/src/features/meeting/components/MeetSummaryPanel.jsx`
 - `client/src/index.css`
 
+### 14. Removed MOCK_SUMMARY — panel now calls the real intelligence pipeline
+
+Investigated the existing backend before touching anything (see the full
+findings this was based on, condensed below) — turned out **no backend
+changes were needed at all**. `POST /api/meetings/{code}/intelligence`
+already accepts an arbitrary inline `chat_log: list[dict]` in its request
+body; `_format_chat_log` (`server/app/core/ai.py`) reads `time`/`name`/`body`
+(with `timestamp`/`sender`/`user`/`text`/`content` fallbacks), so our caption
+transcript maps onto it directly with no schema changes.
+
+**What actually changed, frontend only:**
+- `MOCK_SUMMARY` constant is gone.
+- On open, `MeetSummaryPanel` now `GET`s `/api/meetings/{code}/intelligence`
+  to load whatever summary already exists (server returns `200` with a
+  `null` body if none — not a 404 — so this cleanly lands on the empty
+  state, not an error).
+- Host/co-host (`isHostOrCohost`) gets a **Generate/Regenerate Summary**
+  button. It reshapes the live `transcript` (from `useLiveCaptions()`) into
+  `{time, name, body}` entries and `POST`s them as `chat_log` with
+  `force: true`. Polls every 2.5s while the response status is
+  `generating`/`pending`, same pattern as the existing full-page dashboard
+  (`pages/MeetingIntelligence.jsx`).
+- Non-host participants see a read-only view (no generate button) — the
+  backend already enforces this server-side (403 for non-host POSTs), the
+  frontend just doesn't render a button that would fail anyway.
+
+**Response shape turned out richer than the mock ever was** — the real
+`ai_generate_intelligence` payload has `tldr`, `score`, `topics`,
+`decisions`, `action_items` (`{task, owner, due, priority, depends_on}`),
+`risks`, `speakers`, `sentiment`, `follow_ups`, `contradictions`,
+`knowledge_nuggets` — not `{title, summary, key_takeaways}`. Mapped it onto
+this panel's existing visual structure rather than inventing a new one:
+`intel.tldr` → the paragraph under the "Meeting Summary" heading;
+`action_items` (assignee = `owner`) + `decisions` + `risks` flattened into
+one Key Takeaways list, same assignee-tagged-vs-plain-point rendering as
+before. This is a materially better fit for "important points in the
+project / anything important" than the old made-up mock shape was.
+
+Also confirmed: `INTEL_SOURCE_TRANSCRIPT` (mentioned in earlier items as a
+dormant field) is still never set anywhere server-side — every row this
+panel creates is still tagged `source=INTEL_SOURCE_CHAT` internally, since
+the endpoint has no source-awareness at all; it just calls
+`ai_generate_intelligence` on whatever `chat_log` it's given, transcript or
+otherwise. Fine functionally (the AI doesn't care what the source column
+says), but worth knowing if `source` is ever surfaced/filtered on later.
+
+**Frontend:**
+- `client/src/features/meeting/components/MeetSummaryPanel.jsx`
+- `client/src/features/meeting/MeetRoomLivekit.jsx` (now passes `code` and
+  `isHostOrCohost` down)
+
 ## Not yet implemented
 
-- Replacing `MOCK_SUMMARY` with a real generated summary — feed the
-  accumulated transcript (item 4) into the AI intelligence pipeline.
-  `ai_generate_intelligence` currently summarizes only the chat log; the
-  `MeetingIntelligence.source` model already has a reserved, unused
-  `INTEL_SOURCE_TRANSCRIPT` value anticipating this.
-  - `server/app/core/ai.py`
-  - `server/app/api/intelligence.py`
-  - `server/app/models/meeting.py`
-- Persisting the transcript anywhere durable (currently in-memory only, lost
-  on refresh/leave, not written to the backend).
+- Persisting the transcript anywhere durable server-side. It's still only
+  ever sent inline in the POST body at generate-time — nothing accumulates
+  it across sessions, so a transcript from a call that's already ended
+  can't be summarized later.
 - Edit / copy / share actions on the generated summary (named in the
   original feature ask — not yet built on top of the panel structure).
+- `source` on `MeetingIntelligence` still always says `chat` even when the
+  content was actually a caption transcript — cosmetic/data-hygiene gap,
+  not a functional one.

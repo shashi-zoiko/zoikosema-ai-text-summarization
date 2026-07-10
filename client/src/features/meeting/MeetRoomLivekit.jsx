@@ -776,7 +776,12 @@ function MeetRoom() {
           <ConversationsPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
         )}
         {sidebar === 'summary' && (
-          <MeetSummaryPanel onClose={() => setSidebar(null)} onStart={startSummarizing} />
+          <MeetSummaryPanel
+            onClose={() => setSidebar(null)}
+            onStart={startSummarizing}
+            code={code}
+            isHostOrCohost={isHostOrCohost}
+          />
         )}
         {sidebar === 'settings' && (
           <SettingsDrawer
