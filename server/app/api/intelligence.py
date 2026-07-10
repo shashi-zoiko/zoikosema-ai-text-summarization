@@ -16,7 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
-from app.core.ai import ai_generate_intelligence
+from app.api.admin import _is_admin
+from app.core.ai import ai_generate_intelligence, groq_summarize_transcript
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.meeting import (
@@ -28,11 +29,12 @@ from app.models.meeting import (
     INTEL_STATUS_READY,
     INTEL_STATUS_FAILED,
     INTEL_SOURCE_CHAT,
+    INTEL_SOURCE_TRANSCRIPT,
     ROLE_HOST,
     ROLE_COHOST,
 )
 from app.models.user import User
-from app.schemas.meeting import IntelligenceGenerateIn, MeetingIntelligenceOut
+from app.schemas.meeting import IntelligenceEditIn, IntelligenceGenerateIn, MeetingIntelligenceOut
 
 router = APIRouter(prefix="/api/meetings", tags=["intelligence"])
 
@@ -71,6 +73,14 @@ def _is_host_or_cohost(meeting: Meeting, user: User, db: Session) -> bool:
         )
     )
     return row is not None
+
+
+def _is_host_or_platform_admin(meeting: Meeting, user: User) -> bool:
+    """Strict gate for transcript-sourced summaries — host or platform admin
+    ONLY, deliberately excluding co-hosts and other participants (per the
+    product ask: not visible to other viewers). Unlike `_is_host_or_cohost`,
+    this never touches the DB (no MeetingParticipant lookup needed)."""
+    return meeting.host_id == user.id or _is_admin(user)
 
 
 def _intel_to_out(rec: MeetingIntelligence, meeting: Meeting) -> dict:
@@ -115,25 +125,34 @@ def run_generation(
     participants: list[dict] | None,
     requested_by_id: int | None,
     recording: MeetingRecording | None = None,
+    transcript: list[dict] | None = None,
 ) -> MeetingIntelligence:
     """Core generation pipeline used by both the API endpoint and the
     auto-trigger after recording upload.
 
     Always inserts a fresh row so history is preserved; sets status to
     `ready` or `failed` based on the AI call outcome.
-    """
-    if recording is None:
-        recording = db.scalar(
-            select(MeetingRecording)
-            .where(MeetingRecording.meeting_id == meeting.id)
-            .order_by(desc(MeetingRecording.created_at))
-            .limit(1)
-        )
 
-    if chat_log is None or len(chat_log) == 0:
-        chat_log = _load_chat_log_from_recording(recording) if recording else []
-    if participants is None:
-        participants = _resolve_participants(meeting, db)
+    Branches on `transcript`: when present (the post-meeting spoken
+    transcript, posted by the client when the host leaves), calls Groq via
+    `groq_summarize_transcript` and stores `{title, summary, key_takeaways}`
+    with `source=INTEL_SOURCE_TRANSCRIPT`. Otherwise runs the existing
+    chat-log → Claude path with `source=INTEL_SOURCE_CHAT`, unchanged.
+    """
+    is_transcript = bool(transcript)
+
+    if not is_transcript:
+        if recording is None:
+            recording = db.scalar(
+                select(MeetingRecording)
+                .where(MeetingRecording.meeting_id == meeting.id)
+                .order_by(desc(MeetingRecording.created_at))
+                .limit(1)
+            )
+        if chat_log is None or len(chat_log) == 0:
+            chat_log = _load_chat_log_from_recording(recording) if recording else []
+        if participants is None:
+            participants = _resolve_participants(meeting, db)
 
     duration_seconds = recording.duration if recording else None
 
@@ -142,18 +161,21 @@ def run_generation(
         recording_id=recording.id if recording else None,
         requested_by_id=requested_by_id,
         status=INTEL_STATUS_GENERATING,
-        source=INTEL_SOURCE_CHAT,
+        source=INTEL_SOURCE_TRANSCRIPT if is_transcript else INTEL_SOURCE_CHAT,
     )
     db.add(intel)
     db.commit()
     db.refresh(intel)
 
-    result = ai_generate_intelligence(
-        chat_log=chat_log,
-        meeting_title=meeting.title,
-        participants=participants,
-        duration_seconds=duration_seconds,
-    )
+    if is_transcript:
+        result = groq_summarize_transcript(transcript=transcript, meeting_title=meeting.title)
+    else:
+        result = ai_generate_intelligence(
+            chat_log=chat_log,
+            meeting_title=meeting.title,
+            participants=participants,
+            duration_seconds=duration_seconds,
+        )
 
     intel.completed_at = datetime.now(timezone.utc)
     intel.model_used = result.pop("_model", None)
@@ -169,7 +191,10 @@ def run_generation(
     else:
         intel.status = INTEL_STATUS_READY
         intel.payload = result
-        intel.tldr = (result.get("tldr") or "")[:1000] or None
+        # Chat-based payloads have `tldr`; transcript-based ones have `title`
+        # instead — either way this column is the cheap-list-view headline.
+        headline = result.get("tldr") or result.get("title") or ""
+        intel.tldr = headline[:1000] or None
 
     db.commit()
     db.refresh(intel)
@@ -244,12 +269,16 @@ def get_intelligence(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Return the most recent intelligence row for the meeting, or null."""
+    """Return the most recent intelligence row for the meeting, or null.
+
+    Access is source-aware: transcript-sourced rows (the post-meeting Groq
+    summary) are host/admin-only — not visible to co-hosts or other
+    participants — while chat-sourced rows keep the original any-participant
+    read access. We fetch the row first since the check depends on it.
+    """
     meeting = db.scalar(select(Meeting).where(Meeting.code == code))
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
-    if not _has_access(meeting, user, db):
-        raise HTTPException(status_code=403, detail="Not a participant of this meeting")
 
     rec = db.scalar(
         select(MeetingIntelligence)
@@ -258,7 +287,16 @@ def get_intelligence(
         .limit(1)
     )
     if not rec:
+        if not _has_access(meeting, user, db):
+            raise HTTPException(status_code=403, detail="Not a participant of this meeting")
         return None
+
+    if rec.source == INTEL_SOURCE_TRANSCRIPT:
+        if not _is_host_or_platform_admin(meeting, user):
+            raise HTTPException(status_code=403, detail="Only the host or an admin can view this summary")
+    elif not _has_access(meeting, user, db):
+        raise HTTPException(status_code=403, detail="Not a participant of this meeting")
+
     return _intel_to_out(rec, meeting)
 
 
@@ -271,17 +309,35 @@ def generate_intelligence(
 ):
     """Generate (or return cached) intelligence for a meeting.
 
-    Source resolution:
-      1. `data.chat_log` if supplied (typical: client posts the in-memory log
-         right after the meeting ends).
-      2. The latest recording's chat_log file on disk.
-
-    Hosts + co-hosts can always generate. Plain participants can re-fetch but
-    not regenerate, to prevent token-burn from arbitrary attendees.
+    Two independent paths, chosen by whether `data.transcript` is present:
+      - Transcript path (post-meeting spoken transcript → Groq): host or
+        platform admin ONLY — stricter than the chat path below, per the
+        product ask that this summary is not visible to other viewers.
+        Always generates fresh (no cache short-circuit — this only ever
+        fires once, automatically, when the host leaves).
+      - Chat path (unchanged): `data.chat_log` if supplied, else the latest
+        recording's chat_log file. Hosts + co-hosts can generate; plain
+        participants can re-fetch but not regenerate, to prevent token-burn
+        from arbitrary attendees. Cached short-circuit within
+        `_CACHE_SECONDS` unless `force=true`.
     """
     meeting = db.scalar(select(Meeting).where(Meeting.code == code))
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if data.transcript:
+        if not _is_host_or_platform_admin(meeting, user):
+            raise HTTPException(status_code=403, detail="Only the host or an admin can generate this summary")
+        intel = run_generation(
+            db,
+            meeting,
+            chat_log=None,
+            participants=None,
+            requested_by_id=user.id,
+            transcript=data.transcript,
+        )
+        return _intel_to_out(intel, meeting)
+
     if not _has_access(meeting, user, db):
         raise HTTPException(status_code=403, detail="Not a participant of this meeting")
     if not _is_host_or_cohost(meeting, user, db):
@@ -297,6 +353,7 @@ def generate_intelligence(
             .where(
                 MeetingIntelligence.meeting_id == meeting.id,
                 MeetingIntelligence.status == INTEL_STATUS_READY,
+                MeetingIntelligence.source == INTEL_SOURCE_CHAT,
                 MeetingIntelligence.created_at >= cutoff,
             )
             .order_by(desc(MeetingIntelligence.created_at))
@@ -313,6 +370,53 @@ def generate_intelligence(
         requested_by_id=user.id,
     )
     return _intel_to_out(intel, meeting)
+
+
+@router.patch("/{code}/intelligence", response_model=MeetingIntelligenceOut)
+def edit_intelligence(
+    code: str,
+    data: IntelligenceEditIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Edit the latest transcript-sourced summary's fields in place (no new
+    row — this corrects the existing one). Host/admin-only, same gate as
+    generating and reading a transcript-sourced summary.
+
+    Only chat-sourced meetings have no transcript-sourced row to edit yet —
+    404s rather than silently editing the wrong kind of row.
+    """
+    meeting = db.scalar(select(Meeting).where(Meeting.code == code))
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    if not _is_host_or_platform_admin(meeting, user):
+        raise HTTPException(status_code=403, detail="Only the host or an admin can edit this summary")
+
+    rec = db.scalar(
+        select(MeetingIntelligence)
+        .where(
+            MeetingIntelligence.meeting_id == meeting.id,
+            MeetingIntelligence.source == INTEL_SOURCE_TRANSCRIPT,
+        )
+        .order_by(desc(MeetingIntelligence.created_at))
+        .limit(1)
+    )
+    if not rec:
+        raise HTTPException(status_code=404, detail="No transcript summary to edit")
+
+    payload = dict(rec.payload or {})
+    if data.title is not None:
+        payload["title"] = data.title
+        rec.tldr = data.title[:1000] or None
+    if data.summary is not None:
+        payload["summary"] = data.summary
+    if data.key_takeaways is not None:
+        payload["key_takeaways"] = data.key_takeaways
+    rec.payload = payload
+
+    db.commit()
+    db.refresh(rec)
+    return _intel_to_out(rec, meeting)
 
 
 @router.get("/{code}/intelligence/history", response_model=list[MeetingIntelligenceOut])

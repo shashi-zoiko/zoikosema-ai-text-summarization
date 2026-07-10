@@ -3,8 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   AlertTriangle, ArrowLeft, Brain, CheckCircle2, ChevronRight, Clock, Copy,
-  Download, FileText, GitMerge, Lightbulb, ListChecks, Loader2, Mic, RefreshCw,
-  ShieldAlert, Sparkles, Target, TrendingUp, Users2, Zap,
+  Download, FileText, GitMerge, Lightbulb, ListChecks, Loader2, Mic, Pencil,
+  Plus, RefreshCw, Save, ShieldAlert, Sparkles, Target, Trash2, TrendingUp,
+  Users2, X, Zap,
 } from 'lucide-react'
 
 import { api } from '../api/client'
@@ -151,6 +152,29 @@ function intelToMarkdown(meetingTitle, code, payload) {
   return lines.join('\n')
 }
 
+// Same idea as intelToMarkdown, but for the simpler transcript-sourced
+// payload shape ({title, summary, key_takeaways}) — the post-meeting Groq
+// summary, not the chat-based rich analysis above.
+function transcriptToMarkdown(meetingTitle, code, payload) {
+  if (!payload) return ''
+  const lines = []
+  lines.push(`# ${payload.title || meetingTitle || 'Meeting'} — Summary`)
+  lines.push(`_${code}_`)
+  lines.push('')
+  if (payload.summary) {
+    lines.push(payload.summary)
+    lines.push('')
+  }
+  if (payload.key_takeaways?.length) {
+    lines.push('## Key Takeaways')
+    for (const t of payload.key_takeaways) {
+      lines.push(`- ${t.assignee ? `**${t.assignee}:** ` : ''}${t.text}`)
+    }
+    lines.push('')
+  }
+  return lines.join('\n')
+}
+
 function EmptyState({ icon, title, hint }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--c-line)] bg-[var(--c-bg-2)]/40 px-4 py-8 text-center">
@@ -190,6 +214,114 @@ function SectionCard({ title, icon, count, tone = 'neutral', children, action })
   )
 }
 
+// Transcript-sourced summary (Groq, generated once when the host leaves) —
+// deliberately a much simpler view than the chat-based sections below:
+// title, summary, key takeaways, with inline editing. Rendered instead of
+// (not alongside) the rich chat-based sections when `intel.source ===
+// 'transcript'`, since score/topics/speakers/sentiment/etc. don't apply to
+// this payload shape.
+function TranscriptSummaryView({
+  payload, editing,
+  editTitle, setEditTitle,
+  editSummary, setEditSummary,
+  editTakeaways, setEditTakeaways,
+}) {
+  if (editing) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--c-fg-muted)]">
+            Title
+          </label>
+          <input
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            className="w-full rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)] px-3.5 py-2.5 text-[16px] font-bold text-[var(--c-fg)] outline-none focus:border-[var(--c-accent)]"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--c-fg-muted)]">
+            Summary
+          </label>
+          <textarea
+            rows={4}
+            value={editSummary}
+            onChange={(e) => setEditSummary(e.target.value)}
+            className="w-full rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)] px-3.5 py-2.5 text-[14px] leading-relaxed text-[var(--c-fg)] outline-none focus:border-[var(--c-accent)]"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--c-fg-muted)]">
+            Key takeaways
+          </label>
+          <div className="space-y-2">
+            {editTakeaways.map((item, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <input
+                  placeholder="Assignee"
+                  value={item.assignee || ''}
+                  onChange={(e) => setEditTakeaways((arr) => arr.map((it, j) => (j === i ? { ...it, assignee: e.target.value } : it)))}
+                  className="w-28 shrink-0 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-2)] px-2.5 py-2 text-[12.5px] text-[var(--c-fg)] outline-none focus:border-[var(--c-accent)]"
+                />
+                <input
+                  placeholder="Takeaway"
+                  value={item.text || ''}
+                  onChange={(e) => setEditTakeaways((arr) => arr.map((it, j) => (j === i ? { ...it, text: e.target.value } : it)))}
+                  className="flex-1 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-2)] px-2.5 py-2 text-[13px] text-[var(--c-fg)] outline-none focus:border-[var(--c-accent)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setEditTakeaways((arr) => arr.filter((_, j) => j !== i))}
+                  aria-label="Remove takeaway"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[var(--c-fg-muted)] transition hover:bg-[var(--c-danger-soft)] hover:text-[var(--c-danger)]"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setEditTakeaways((arr) => [...arr, { assignee: '', text: '' }])}
+              className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[var(--c-accent)] hover:underline"
+            >
+              <Plus className="h-3.5 w-3.5" /> Add takeaway
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <h1 className="text-center text-[24px] font-bold leading-tight tracking-tight text-[var(--c-fg)]">
+        {payload.title || 'Meeting Summary'}
+      </h1>
+      <p className="mt-4 text-[14px] leading-relaxed text-[var(--c-fg-dim)]">
+        {payload.summary || 'No summary produced.'}
+      </p>
+      <h3 className="mb-3 mt-8 text-[11px] font-semibold uppercase tracking-[0.10em] text-[var(--c-fg-muted)]">
+        Key Takeaways
+      </h3>
+      {(payload.key_takeaways?.length || 0) === 0 ? (
+        <EmptyState icon={<ListChecks className="h-4 w-4" />} title="Nothing captured" hint="No action items, decisions, or important points were identified." />
+      ) : (
+        <ul className="space-y-2.5">
+          {payload.key_takeaways.map((item, i) => (
+            <li key={i} className="flex gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)]/40 p-3 text-[14px] leading-relaxed">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--c-accent)]" />
+              <span>
+                {item.assignee && <span className="font-semibold text-[var(--c-fg)]">{item.assignee}: </span>}
+                <span className="text-[var(--c-fg-dim)]">{item.text}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export default function MeetingIntelligence() {
   const { code } = useParams()
   const navigate = useNavigate()
@@ -197,6 +329,13 @@ export default function MeetingIntelligence() {
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+
+  // Edit mode for transcript-sourced summaries only (see isTranscript below).
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [editTitle, setEditTitle] = useState('')
+  const [editSummary, setEditSummary] = useState('')
+  const [editTakeaways, setEditTakeaways] = useState([])
 
   useEffect(() => {
     let cancelled = false
@@ -248,9 +387,12 @@ export default function MeetingIntelligence() {
 
   const payload = intel?.payload || null
   const status = intel?.status
+  const isTranscript = intel?.source === 'transcript'
 
   const exportMarkdown = (download) => {
-    const md = intelToMarkdown(intel?.meeting_title, code, payload)
+    const md = isTranscript
+      ? transcriptToMarkdown(intel?.meeting_title, code, payload)
+      : intelToMarkdown(intel?.meeting_title, code, payload)
     if (!md) return
     if (download) {
       const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
@@ -258,12 +400,41 @@ export default function MeetingIntelligence() {
       a.href = URL.createObjectURL(blob)
       a.download = `${(intel?.meeting_title || code || 'meeting')
         .replace(/[^a-z0-9-_]+/gi, '-')
-        .toLowerCase()}-intelligence.md`
+        .toLowerCase()}-${isTranscript ? 'summary' : 'intelligence'}.md`
       a.click()
       // Defer revoke so the click actually fires the download in Chromium.
       setTimeout(() => URL.revokeObjectURL(a.href), 1000)
     } else {
       navigator.clipboard?.writeText(md)
+    }
+  }
+
+  const startEdit = () => {
+    setEditTitle(payload?.title || '')
+    setEditSummary(payload?.summary || '')
+    setEditTakeaways(
+      (payload?.key_takeaways || []).map((t) => ({ assignee: t.assignee || '', text: t.text || '' })),
+    )
+    setEditing(true)
+  }
+
+  const saveEdit = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      const key_takeaways = editTakeaways
+        .filter((t) => (t.text || '').trim())
+        .map((t) => ({ assignee: t.assignee?.trim() || undefined, text: t.text.trim() }))
+      const fresh = await api(`/api/meetings/${code}/intelligence`, {
+        method: 'PATCH',
+        body: { title: editTitle, summary: editSummary, key_takeaways },
+      })
+      setIntel(fresh)
+      setEditing(false)
+    } catch (e) {
+      setError(e.message || 'Save failed')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -305,7 +476,12 @@ export default function MeetingIntelligence() {
           </button>
         </motion.div>
         <motion.div variants={fadeUp} className="mt-3 flex flex-wrap items-center gap-3">
-          <Badge tone="accent" size="md"><Brain className="h-3 w-3" /> Meeting Intelligence</Badge>
+          <Badge tone="accent" size="md">
+            <Brain className="h-3 w-3" /> {isTranscript ? 'Meeting Summary' : 'Meeting Intelligence'}
+          </Badge>
+          {intel?.source && (
+            <Badge tone="neutral" size="sm">source: {intel.source}</Badge>
+          )}
           {intel?.model_used && (
             <Badge tone="neutral" size="sm">model: {intel.model_used}</Badge>
           )}
@@ -325,22 +501,48 @@ export default function MeetingIntelligence() {
         </motion.p>
 
         <motion.div variants={fadeUp} className="mt-4 flex flex-wrap items-center gap-2">
-          <Button
-            variant="primary"
-            onClick={regenerate}
-            loading={generating}
-            leftIcon={<RefreshCw className="h-4 w-4" />}
-          >
-            {intel ? 'Regenerate' : 'Generate intelligence'}
-          </Button>
-          {payload && status === 'ready' && (
+          {isTranscript ? (
+            editing ? (
+              <>
+                <Button variant="primary" onClick={saveEdit} loading={saving} leftIcon={<Save className="h-4 w-4" />}>
+                  Save
+                </Button>
+                <Button variant="outline" onClick={() => setEditing(false)} leftIcon={<X className="h-4 w-4" />}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              status === 'ready' && (
+                <>
+                  <Button variant="outline" onClick={startEdit} leftIcon={<Pencil className="h-4 w-4" />}>
+                    Edit
+                  </Button>
+                  <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
+                    Download
+                  </Button>
+                </>
+              )
+            )
+          ) : (
             <>
-              <Button variant="outline" onClick={() => exportMarkdown(false)} leftIcon={<Copy className="h-4 w-4" />}>
-                Copy as markdown
+              <Button
+                variant="primary"
+                onClick={regenerate}
+                loading={generating}
+                leftIcon={<RefreshCw className="h-4 w-4" />}
+              >
+                {intel ? 'Regenerate' : 'Generate intelligence'}
               </Button>
-              <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
-                Download .md
-              </Button>
+              {payload && status === 'ready' && (
+                <>
+                  <Button variant="outline" onClick={() => exportMarkdown(false)} leftIcon={<Copy className="h-4 w-4" />}>
+                    Copy as markdown
+                  </Button>
+                  <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
+                    Download .md
+                  </Button>
+                </>
+              )}
             </>
           )}
           {intel?.latency_ms != null && (
@@ -386,6 +588,22 @@ export default function MeetingIntelligence() {
       )}
 
       {intel && status !== 'generating' && payload && (
+        isTranscript ? (
+          <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
+            <Card glow className="p-6">
+              <TranscriptSummaryView
+                payload={payload}
+                editing={editing}
+                editTitle={editTitle}
+                setEditTitle={setEditTitle}
+                editSummary={editSummary}
+                setEditSummary={setEditSummary}
+                editTakeaways={editTakeaways}
+                setEditTakeaways={setEditTakeaways}
+              />
+            </Card>
+          </motion.section>
+        ) : (
         <>
           {/* ============ TL;DR ============ */}
           <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
@@ -690,6 +908,7 @@ export default function MeetingIntelligence() {
             </SectionCard>
           </section>
         </>
+        )
       )}
     </div>
   )

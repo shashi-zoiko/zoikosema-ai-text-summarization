@@ -25,9 +25,11 @@ import ReactionOverlay from './components/ReactionOverlay.jsx'
 import ParticipantsPanel from './components/ParticipantsPanel.jsx'
 import SettingsDrawer from './components/SettingsDrawer.jsx'
 import MeetingInfoDrawer from './components/MeetingInfoDrawer.jsx'
+import ConversationsPanel from './components/ConversationsPanel.jsx'
+import MeetSummaryPanel from './components/MeetSummaryPanel.jsx'
 import CaptionProvider from './captions/CaptionProvider.jsx'
 import CaptionOverlay from './captions/CaptionOverlay.jsx'
-import { useCaptionControls } from './captions/useCaptions.js'
+import { useCaptionControls, useLiveCaptions } from './captions/useCaptions.js'
 import { backgroundEffectsSupported } from './backgroundEngine.js'
 import { getPreset, NONE_EFFECT } from './backgroundPresets.js'
 import { LkBackgroundProcessor } from './lkBackgroundProcessor.js'
@@ -116,6 +118,19 @@ function isDeviceError(e) {
   if (DEVICE_ERROR_NAMES.has(name)) return true
   return /requested device not found|could not start (video|audio)|permission denied|device not found|notreadable|overconstrained/i
     .test(e?.message || '')
+}
+
+// Reshape the accumulated caption transcript into the {time, name, body}
+// shape server/app/core/ai.py's _format_chat_log already reads (accepts
+// timestamp/sender/user/text/content fallbacks too) — same mapping
+// MeetSummaryPanel used to build before the summary moved to the post-meeting
+// intelligence page.
+function transcriptToChatLog(transcript) {
+  return transcript.map((line) => ({
+    time: new Date(line.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    name: line.name,
+    body: line.text,
+  }))
 }
 
 export default function MeetRoomLivekit() {
@@ -214,7 +229,12 @@ function MeetRoom() {
   const [recording, setRecording] = useState({ recording: false, recording_id: null })
 
   // Local UI state
-  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | null
+  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | 'conversations' | 'summary' | null
+  // Set once, the first time "Start Summarizing" (inside MeetSummaryPanel,
+  // NOT the header button that just opens the panel) is clicked — the zero
+  // point for both the Conversations and Meet Summarizer panels' timestamps.
+  // Before this is set, neither panel has a session to show yet.
+  const [summarizerStartedAt, setSummarizerStartedAt] = useState(null)
   // Bumped whenever the header admit-chip / lobby "open" is used, so the People
   // panel scrolls its waiting section into view.
   const [waitingScrollSignal, setWaitingScrollSignal] = useState(0)
@@ -236,6 +256,12 @@ function MeetRoom() {
   const [showEmoji, setShowEmoji] = useState(false)
   const [showWhiteboard, setShowWhiteboard] = useState(false)
   const joinedAtRef = useRef(null) // wall-clock ms when media token landed → header timer
+  // Synced by <TranscriptRefSync> (rendered inside CaptionProvider, below) so
+  // userLeave — which lives outside the provider's own context subtree and
+  // can't call useLiveCaptions() directly — can read the latest transcript
+  // synchronously at leave-time without triggering a re-render on every
+  // caption.
+  const transcriptRef = useRef([])
   // Bridge the legacy { kind, text } toast API onto the notification engine so
   // recording / permission-denied / error paths keep working unchanged.
   const setToast = useCallback(({ kind, text, title } = {}) => {
@@ -511,6 +537,12 @@ function MeetRoom() {
   }, [])
   // Google-Meet: clicking the grid's "+N others" tile opens the People panel.
   const openPeople = useCallback(() => setSidebar('people'), [])
+  // Called by MeetSummaryPanel whenever its in-panel toggle turns capture ON
+  // (that button drives capturing itself via CaptionsControlContext — this
+  // just stamps the session's zero point, first call only, ever).
+  const startSummarizing = useCallback(() => {
+    setSummarizerStartedAt((t) => t ?? Date.now())
+  }, [])
   // Wire the floating chat cards' actions. "Mark as read" clears the unread
   // badge without opening chat; tapping a card's preview opens the chat drawer
   // (which also clears). Join-request admit/deny live only in the People panel.
@@ -577,6 +609,19 @@ function MeetRoom() {
   const userLeftRef = useRef(false)
   const userLeave = useCallback(() => {
     userLeftRef.current = true
+    // Host leaving is what triggers the post-meeting summary (Groq, via the
+    // same /intelligence endpoint the chat-based path already uses, branched
+    // on `transcript` — see server/app/api/intelligence.py). Fire-and-forget:
+    // don't block the exit navigation below on this network call, and it
+    // survives the component unmounting since fetch() isn't tied to React
+    // lifecycle. Only the host can generate it (backend also enforces this),
+    // and only if anything was actually captured.
+    if (isHost && transcriptRef.current.length > 0) {
+      api(`/api/meetings/${code}/intelligence`, {
+        method: 'POST',
+        body: { transcript: transcriptToChatLog(transcriptRef.current), force: true },
+      }).catch(() => { /* best-effort — nothing the user can act on mid-leave */ })
+    }
     // Google-Meet-style hang-up tone. Played via the shared SoundManager (a
     // detached <audio> element) so it keeps sounding after we navigate away and
     // this component unmounts.
@@ -586,7 +631,7 @@ function MeetRoom() {
     // Home). Only this path shows it; auth-expiry / server errors go to the
     // error splash, and host-ended / removed go home (handled below).
     navigate(meetingLeftPath(code), { replace: true })
-  }, [navigate, code])
+  }, [navigate, code, isHost])
 
   const handleDisconnected = useCallback((reason) => {
     // Only navigate when the user actually clicked Leave OR the SFU
@@ -678,6 +723,7 @@ function MeetRoom() {
           the grid. */}
       <MeetingCryptoProvider keyB64={e2eeKey}>
       <CaptionProvider>
+      <TranscriptRefSync transcriptRef={transcriptRef} />
       <MeetingHeader
         code={code}
         ctrlConnected={ctrlConnected}
@@ -691,6 +737,8 @@ function MeetRoom() {
         onScreenEnabled={setScreenEnabled}
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         onOpenPeople={openPeopleWaiting}
+        onOpenConversations={() => setSidebar((s) => (s === 'conversations' ? null : 'conversations'))}
+        onOpenSummary={() => setSidebar((s) => (s === 'summary' ? null : 'summary'))}
       />
 
       <div className="relative flex min-h-0 flex-1">
@@ -757,6 +805,12 @@ function MeetRoom() {
             onClose={() => setSidebar(null)}
           />
         )}
+        {sidebar === 'conversations' && (
+          <ConversationsPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
+        )}
+        {sidebar === 'summary' && (
+          <MeetSummaryPanel onClose={() => setSidebar(null)} onStart={startSummarizing} />
+        )}
         {sidebar === 'settings' && (
           <SettingsDrawer
             onClose={() => setSidebar(null)}
@@ -816,6 +870,19 @@ function MeetRoom() {
 }
 
 /* ── Subcomponents ─────────────────────────────────────────────────────── */
+
+/**
+ * Keeps `transcriptRef` (owned by MeetRoom, read by userLeave) in sync with
+ * the live transcript. Exists only because userLeave's own scope sits
+ * outside CaptionProvider's context subtree and can't call useLiveCaptions()
+ * directly — this tiny bridge is the one place that can, rendered as a child
+ * of <CaptionProvider>. Renders nothing.
+ */
+function TranscriptRefSync({ transcriptRef }) {
+  const { transcript } = useLiveCaptions()
+  useEffect(() => { transcriptRef.current = transcript }, [transcript, transcriptRef])
+  return null
+}
 
 /**
  * Bridges the shared <MeetingDock> to LiveKit's local-participant state.

@@ -21,7 +21,9 @@ function sanitize(text) {
 }
 
 // Flat map: speakerId -> { name, color, text, isFinal, ts }. One live caption
-// per speaker (we never accumulate a transcript — old text is replaced).
+// bubble per speaker — old text is replaced here. The full-meeting log lives
+// separately in `transcript` state (see CaptionProvider), appended to on
+// every final result rather than replaced.
 function reducer(state, action) {
   switch (action.type) {
     case 'upsert': {
@@ -39,6 +41,10 @@ function reducer(state, action) {
   }
 }
 
+// Hard cap on accumulated transcript lines — a many-hour meeting shouldn't
+// grow this array unboundedly in memory. Oldest lines drop off the front.
+const MAX_TRANSCRIPT_LINES = 4000
+
 /**
  * Owns the entire caption lifecycle and exposes it through two contexts.
  * Must render inside <LiveKitRoom> (uses LiveKit hooks for the local
@@ -46,6 +52,21 @@ function reducer(state, action) {
  *
  * Flow: local mic → SpeechRecognition → throttle/sanitize → broadcast over the
  * LiveKit data channel + echo locally → per-speaker state with a silence timer.
+ *
+ * There are TWO independent reasons speech recognition might be running,
+ * and they must stay independent:
+ *   - `enabled` — the visible "CC" toggle (toolbar button, C/Shift+C
+ *     shortcut, persisted to localStorage). Drives the on-screen caption
+ *     bubble overlay (CaptionOverlay gates on this directly).
+ *   - `summarizerCapturing` — toggled on/off from the Meet Summarizer panel,
+ *     via `capturing`/`setCapturing` on the control context (both
+ *     MeetingHeader and MeetSummaryPanel render inside this provider, so
+ *     they read/drive it directly — no prop drilling needed). Feeds the
+ *     Conversations transcript. Never touches `enabled`, never persisted,
+ *     and never makes the bubble overlay appear — that stays keyed to
+ *     `enabled` alone.
+ * Recognition itself runs whenever EITHER is true (one shared mic tap), but
+ * only `enabled` decides what's shown on screen.
  */
 export default function CaptionProvider({ children }) {
   // `isMicrophoneEnabled` is reactive — it flips the instant the participant
@@ -63,8 +84,15 @@ export default function CaptionProvider({ children }) {
       return false
     }
   })
+  // Independent of `enabled` — see the class doc comment above. Toggled
+  // on/off from the Meet Summarizer panel, not persisted.
+  const [summarizerCapturing, setSummarizerCapturing] = useState(false)
   const [micError, setMicError] = useState(false)
   const [bySpeaker, dispatch] = useReducer(reducer, {})
+  // Full-meeting transcript — every FINAL caption, in order, across all
+  // speakers. Interims never land here (they're corrections-in-progress);
+  // only `bySpeaker` shows those, live. Consumed by the Conversations panel.
+  const [transcript, setTranscript] = useState([])
 
   const timersRef = useRef({}) // speakerId -> silence timeout
   const lastInterimRef = useRef(0)
@@ -97,6 +125,12 @@ export default function CaptionProvider({ children }) {
         ts: Date.now(),
       })
       armExpiry(speakerId)
+      if (isFinal) {
+        setTranscript((lines) => {
+          const next = [...lines, { speakerId, name: name || 'Guest', text: clean, ts: Date.now() }]
+          return next.length > MAX_TRANSCRIPT_LINES ? next.slice(next.length - MAX_TRANSCRIPT_LINES) : next
+        })
+      }
     },
     [armExpiry],
   )
@@ -121,11 +155,13 @@ export default function CaptionProvider({ children }) {
     [ingest, publish, localParticipant, isMicrophoneEnabled],
   )
 
-  // Capture runs only while CC is on, the API is supported, the mic wasn't
+  // Capture runs if EITHER the visible CC toggle OR the summarizer wants it
+  // (see the class doc comment) — one shared mic tap, two independent
+  // reasons to use it — as long as the API is supported, the mic wasn't
   // denied, AND the participant's meeting mic is live. Muting in the meeting
   // stops recognition immediately — no captions are generated or broadcast
   // while muted.
-  useSpeechRecognition(enabled && supported && !micError && isMicrophoneEnabled, {
+  useSpeechRecognition((enabled || summarizerCapturing) && supported && !micError && isMicrophoneEnabled, {
     lang: CAPTION_CONFIG.lang,
     onResult: handleResult,
     onError: () => setMicError(true),
@@ -141,6 +177,18 @@ export default function CaptionProvider({ children }) {
       } catch { /* storage blocked — in-memory state still works */ }
       return next
     })
+  }, [supported])
+
+  // On/off switch for Meet Summarizer capture — deliberately does NOT touch
+  // `enabled`/localStorage, so the visible CC toggle and bubble overlay are
+  // completely unaffected by this. Turning it on clears a stale
+  // mic-permission error, same as `toggle` would. Called directly from the
+  // Meet Summarizer panel's toggle button (via context, see class doc
+  // comment).
+  const setCapturing = useCallback((value) => {
+    if (!supported) return
+    if (value) setMicError(false)
+    setSummarizerCapturing(value)
   }, [supported])
 
   // Keyboard shortcut: C / Shift+C. Ignored while typing in any field.
@@ -166,11 +214,12 @@ export default function CaptionProvider({ children }) {
 
   // Control value: stable except on rare toggles → consumers barely re-render.
   const control = useMemo(
-    () => ({ enabled, supported, micError, toggle }),
-    [enabled, supported, micError, toggle],
+    () => ({ enabled, supported, micError, toggle, capturing: summarizerCapturing, setCapturing }),
+    [enabled, supported, micError, toggle, summarizerCapturing, setCapturing],
   )
-  // Live value: changes per frame, consumed only by the overlay.
-  const live = useMemo(() => ({ bySpeaker }), [bySpeaker])
+  // Live value: changes per frame, consumed only by the overlay + the
+  // Conversations panel.
+  const live = useMemo(() => ({ bySpeaker, transcript }), [bySpeaker, transcript])
 
   return (
     <CaptionsControlContext.Provider value={control}>

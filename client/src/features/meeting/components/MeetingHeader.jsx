@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useConnectionState, useLocalParticipant } from '@livekit/components-react'
 import { ConnectionQuality, ConnectionState } from 'livekit-client'
-import { Check, Copy, Info, UserPlus } from 'lucide-react'
+import { Check, Copy, Info, MessagesSquare, Pencil, Star, UserPlus } from 'lucide-react'
 import HostMenu from './HostMenu.jsx'
 import { useRoomStore } from '../state/roomStore.js'
+import { useCaptionControls } from '../captions/useCaptions.js'
 import { meetingShareText } from '../../../lib/meetingUrls.js'
 
 /**
@@ -28,10 +29,15 @@ export default function MeetingHeader({
   onScreenEnabled,
   onOpenInfo,
   onOpenPeople,
+  onOpenSummary = () => {},
+  onOpenConversations = () => {},
 }) {
   const state = useConnectionState()
   const reconnecting = state === ConnectionState.Reconnecting
   const connecting = state === ConnectionState.Connecting
+  // Drives the Meet Summarizer button's listening glow — reads straight off
+  // context since this header renders inside CaptionProvider.
+  const { capturing: summarizing } = useCaptionControls()
 
   return (
     <header
@@ -112,6 +118,32 @@ export default function MeetingHeader({
             onToggleScreenshare={onScreenEnabled}
           />
         )}
+
+        <button
+          type="button"
+          onClick={onOpenConversations}
+          aria-label="Conversations"
+          title="Conversations"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[#263244] bg-[#111827] text-[#94A3B8] transition hover:bg-[#1E293B] hover:text-white"
+        >
+          <MessagesSquare className="h-4 w-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenSummary}
+          aria-label="Meet Summarizer"
+          title="Meet Summarizer"
+          className={
+            'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-blue-500 text-white shadow-sm transition hover:brightness-110 ' +
+            (summarizing ? 'zk-summarizer-glow' : '')
+          }
+        >
+          <span className="inline-flex items-start">
+            <Star className="h-2 w-2 fill-current" />
+            <Pencil className="h-4 w-4" />
+          </span>
+        </button>
       </div>
     </header>
   )

@@ -1,4 +1,5 @@
-"""AI assistant service powered by Anthropic Claude."""
+"""AI assistant service — chat/intelligence powered by Anthropic Claude,
+post-meeting transcript summarization powered by Groq (see bottom of file)."""
 import json
 import logging
 import re
@@ -411,6 +412,147 @@ def ai_generate_intelligence(
             result = base
     except Exception as e:
         log.exception("ai_generate_intelligence failed")
+        meta["_error"] = f"AI request failed: {e}"
+
+    meta["_latency_ms"] = int((time.monotonic() - started) * 1000)
+    result.update(meta)
+    return result
+
+
+# ── Post-meeting transcript summarizer (Groq) ───────────────────────────────
+# Separate vendor from the Anthropic-based functions above, used specifically
+# for turning the in-meeting SPOKEN transcript (captured client-side via the
+# caption pipeline, never the text chat log) into a short recap once a
+# meeting ends. Kept in this module rather than a new file since it's the
+# same "lazy client + prompt + JSON-parse" shape as ai_generate_intelligence.
+
+def _groq_api_key(settings) -> str:
+    """Generic AI_API_KEY (when AI_PROVIDER=groq) wins, since that's the name
+    the deploy env actually sets; GROQ_API_KEY is the vendor-specific
+    fallback for anyone who configures it that way instead."""
+    if settings.ai_provider == "groq" and settings.ai_api_key:
+        return settings.ai_api_key
+    return settings.groq_api_key
+
+
+def _groq_model(settings) -> str:
+    """Same precedence as _groq_api_key: generic AI_MODEL wins when
+    AI_PROVIDER=groq, else the GROQ_MODEL default."""
+    if settings.ai_provider == "groq" and settings.ai_model:
+        return settings.ai_model
+    return settings.groq_model
+
+
+def _get_groq_client():
+    """Lazy-import groq to avoid startup crash if not installed."""
+    try:
+        import groq
+        settings = get_settings()
+        key = _groq_api_key(settings)
+        if not key:
+            return None
+        return groq.Groq(api_key=key)
+    except ImportError:
+        log.warning("groq package not installed — transcript summarizer disabled")
+        return None
+
+
+def _empty_transcript_summary() -> dict:
+    """Default-shaped transcript summary. Returned when there's nothing
+    meaningful to summarize so the UI can always render the same structure."""
+    return {"title": "", "summary": "", "key_takeaways": []}
+
+
+def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meeting") -> dict:
+    """Summarize a spoken-conversation transcript into {title, summary,
+    key_takeaways} using Groq.
+
+    `transcript` is the same {time, name, body}-shaped list `_format_chat_log`
+    already reads (with timestamp/sender/user/text/content fallback keys) —
+    the client builds it from the accumulated caption transcript, not chat.
+
+    Returns a dict shaped like `_empty_transcript_summary()`, plus metadata
+    keys `_model`, `_input_tokens`, `_output_tokens`, `_latency_ms`, `_error`
+    — mirrors `ai_generate_intelligence`'s error-surfacing convention so
+    callers/UI handle both the same way.
+    """
+    client = _get_groq_client()
+    started = time.monotonic()
+    result = _empty_transcript_summary()
+    meta = {
+        "_model": None,
+        "_input_tokens": None,
+        "_output_tokens": None,
+        "_latency_ms": None,
+        "_error": None,
+    }
+
+    if not client:
+        meta["_error"] = "Groq API key not configured."
+        result.update(meta)
+        return result
+
+    if not transcript:
+        meta["_error"] = "No transcript content available to summarize."
+        meta["_latency_ms"] = int((time.monotonic() - started) * 1000)
+        result.update(meta)
+        return result
+
+    settings = get_settings()
+    convo = _format_chat_log(transcript)
+
+    system = (
+        "You are ZoikoSema's post-meeting summarizer. Read a meeting's spoken "
+        "conversation transcript and produce a concise recap in pure JSON.\n\n"
+        "Rules:\n"
+        "- Output JSON ONLY. No prose before or after. No markdown code fences.\n"
+        '- Schema: {"title": string, "summary": string, "key_takeaways": '
+        '[{"assignee": string|null, "text": string}]}\n'
+        '- "title" is a short (under ~8 words) headline for what this meeting '
+        "was about.\n"
+        '- "summary" is 2-4 sentences covering what was discussed and decided.\n'
+        '- "key_takeaways" mixes: work assigned to specific people (set '
+        '"assignee" to their name, exactly as it appears in the transcript), '
+        "important project decisions/points, and any other important fact — "
+        'omit "assignee" (use null) for anything not assigned to a person.\n'
+        "- Never invent names, tasks, or decisions that don't appear in the "
+        "transcript. If nothing substantive was discussed, say so plainly in "
+        '"summary" and return an empty "key_takeaways" array.'
+    )
+    user_prompt = (
+        f"Meeting title: {meeting_title}\n\n"
+        f"Transcript (oldest first):\n{convo}\n\n"
+        "Return the JSON object now."
+    )
+
+    model = _groq_model(settings)
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=1024,
+            response_format={"type": "json_object"},
+        )
+        meta["_model"] = model
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            meta["_input_tokens"] = getattr(usage, "prompt_tokens", None)
+            meta["_output_tokens"] = getattr(usage, "completion_tokens", None)
+        text = response.choices[0].message.content if response.choices else ""
+        parsed = _extract_json(text)
+        if parsed is None:
+            meta["_error"] = "Model did not return parseable JSON."
+        else:
+            base = _empty_transcript_summary()
+            for k in base:
+                if k in parsed:
+                    base[k] = parsed[k]
+            result = base
+    except Exception as e:
+        log.exception("groq_summarize_transcript failed")
         meta["_error"] = f"AI request failed: {e}"
 
     meta["_latency_ms"] = int((time.monotonic() - started) * 1000)

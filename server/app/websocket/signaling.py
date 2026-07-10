@@ -905,15 +905,25 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 # until everyone leaves. Deliberate admin teardown still lives in
                 # the REST POST /api/meetings/{code}/end endpoint.
 
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, RuntimeError):
+            # RuntimeError alongside WebSocketDisconnect: Starlette raises a bare
+            # RuntimeError ("WebSocket is not connected. Need to call 'accept'
+            # first.") instead of WebSocketDisconnect when the client already
+            # tore down its end of the socket (fast reconnect/double-connect
+            # race, e.g. React dev-mode double-mount) before we reach the next
+            # receive_json() — same disconnect, different exception type.
             pass
         finally:
             await meet_manager.leave(room, websocket)
             leaving = _conn_info.pop(websocket, None)
-            # Only clear the reverse-lookup if it still points to *this* WS —
-            # a newer session of the same user may have already replaced it
-            # via the dedup at join, and we don't want to evict it.
-            if _user_ws.get((meeting.id, user.id)) is websocket:
+            # Only clear shared (meeting,user)-keyed state — including the
+            # participant's live status below — if THIS socket is still the
+            # active one. A newer tab/reconnect may have already superseded us
+            # (dedup at join) and owns the key now; a stale connection's
+            # cleanup running after that point must not stomp the newer
+            # session's ADMITTED status back to disconnected.
+            still_active = _user_ws.get((meeting.id, user.id)) is websocket
+            if still_active:
                 _user_ws.pop((meeting.id, user.id), None)
 
             if leaving:
@@ -925,6 +935,8 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
             # Update participant status (off-loop so a mass leave at meeting end
             # doesn't serialize every disconnect on the event loop).
             def _mark_disconnected():
+                if not still_active:
+                    return
                 db.refresh(participant)
                 if participant.status == STATUS_ADMITTED:
                     participant.status = STATUS_DISCONNECTED
