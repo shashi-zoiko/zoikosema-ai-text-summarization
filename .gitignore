@@ -70,3 +70,4 @@ Thumbs.db
 # Misc
 # =========================
 *.cache
+server/venv_broken_harish/
