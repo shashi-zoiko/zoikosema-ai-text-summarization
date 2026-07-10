@@ -1,4 +1,5 @@
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision'
+import { getHardwareProfile } from './videoQuality.js'
 
 /**
  * Virtual-background engine — Google Meet / Teams style camera background
@@ -135,8 +136,16 @@ export class BackgroundProcessor {
         setTimeout(res, 1500)
       })
     }
-    const w = this.video.videoWidth || 1280
-    const h = this.video.videoHeight || 720
+    let w = this.video.videoWidth || 1280
+    let h = this.video.videoHeight || 720
+    // Hardware-safe fallback: virtual background is CPU/GPU-heavy (per-frame
+    // segmentation + canvas composite + re-encode). On weak machines, cap the
+    // processed output at 720p even when the camera is capturing 1080p, so
+    // turning on a background doesn't stutter. Strong machines keep full res.
+    if (h > 720 && getHardwareProfile().weakCpu) {
+      w = Math.round((w * 720) / h)
+      h = 720
+    }
     this.canvas.width = w
     this.canvas.height = h
 

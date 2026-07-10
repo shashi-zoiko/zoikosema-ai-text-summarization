@@ -308,7 +308,7 @@ async def channel_ws(websocket: WebSocket, channel_id: int, token: str = ""):
     )
 
     try:
-        while True:
+        while True:          
             data = await websocket.receive_json()
             kind = data.get("type")
 
