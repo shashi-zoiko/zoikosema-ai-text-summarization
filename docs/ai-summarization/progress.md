@@ -109,6 +109,28 @@ showing an hour segment past 60 minutes.
 - `client/src/features/meeting/components/ConversationsPanel.jsx`
 - `client/src/features/meeting/MeetRoomLivekit.jsx`
 
+### 7. Conversations/Summarizer session now starts at the summarizer click, not the meeting join
+
+Supersedes item 6's use of `joinedAt`. The session zero-point is now
+`summarizerStartedAt` — a timestamp stamped in `MeetRoomLivekit.jsx` the
+*first* time the Meet Summarizer button is clicked (later clicks don't move
+it). Both `ConversationsPanel` and `MeetSummaryPanel` receive it as a
+`startedAt` prop, so they share one session boundary.
+
+`ConversationsPanel` now filters the transcript to lines with
+`ts >= startedAt` — anything said before the summarizer was first opened is
+excluded, not just relabeled — and headings count up from `00:00` at that
+point rather than reading the meeting's overall duration. Before the
+summarizer has ever been clicked (`startedAt` is `null`), the panel shows a
+distinct empty state ("Click Meet Summarizer to start capturing the
+conversation.") instead of the normal "captions are off" message.
+
+**Frontend:**
+- `client/src/features/meeting/MeetRoomLivekit.jsx` (also now passes
+  `startedAt` to `MeetSummaryPanel` — that component doesn't consume it yet,
+  since it's still all mock data with nothing timestamped to filter)
+- `client/src/features/meeting/components/ConversationsPanel.jsx`
+
 ## Not yet implemented
 
 - Replacing `MOCK_SUMMARY` with a real generated summary — feed the

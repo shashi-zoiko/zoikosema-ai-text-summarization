@@ -7,9 +7,8 @@ import { useLiveCaptions } from '../captions/useCaptions.js'
 // stamping every few seconds of dialogue.
 const HEADING_GAP_MS = 20000
 
-// Same mm:ss / h:mm:ss convention as the header's own Duration clock
-// (MeetingHeader.jsx, MeetingInfoDrawer.jsx) — headings read as the actual
-// meeting clock time a line was said at, not elapsed-since-first-caption.
+// mm:ss / h:mm:ss, same convention as the header's own Duration clock
+// (MeetingHeader.jsx, MeetingInfoDrawer.jsx).
 function formatElapsed(ms) {
   const s = Math.max(0, Math.floor(ms / 1000))
   const hh = Math.floor(s / 3600)
@@ -20,13 +19,14 @@ function formatElapsed(ms) {
 }
 
 // Transcript lines → time-headed groups, e.g.:
-//   02:40
+//   00:00
 //   Alice: ...
 //   Bob: ...
-//   05:12
+//   02:32
 //   Alice: ...
-// `t0` is the meeting's join time — headings track the same clock as the
-// header's Duration readout, not a clock that restarts at the first caption.
+// `t0` is the moment the Meet Summarizer session started — headings are
+// elapsed time since then, always starting at 00:00, never the meeting's
+// own join time.
 function groupTranscript(transcript, t0) {
   if (!transcript.length) return []
   const groups = []
@@ -44,19 +44,22 @@ function groupTranscript(transcript, t0) {
 
 /**
  * Full in-meeting transcript, grouped under timestamp headings — the
- * "Conversations" view opened from the gradient header button. A 50%-width,
- * full-height panel over the call; clicking the backdrop (anywhere outside
- * the panel) closes it, same as pressing Escape.
+ * "Conversations" view opened from the header. A 50%-width, full-height
+ * panel over the call; clicking the backdrop (anywhere outside the panel)
+ * closes it, same as pressing Escape.
+ *
+ * `startedAt` is the Meet Summarizer session's start time (set on its first
+ * click, shared with MeetSummaryPanel) — lines said before that are excluded
+ * and headings count up from 00:00 from that point, not the meeting's join
+ * time. Until the summarizer has been started at all, there's no session to
+ * show yet.
  */
-export default function ConversationsPanel({ onClose, joinedAt }) {
+export default function ConversationsPanel({ onClose, startedAt }) {
   const { transcript } = useLiveCaptions()
-  // Fall back to the first caption's own timestamp only if the meeting's
-  // join time wasn't passed in — headings should still render, just without
-  // the true meeting-clock alignment. The final `0` fallback is never
-  // actually used: groupTranscript short-circuits on an empty transcript
-  // before t0 comes into play.
-  const t0 = joinedAt || transcript[0]?.ts || 0
-  const groups = useMemo(() => groupTranscript(transcript, t0), [transcript, t0])
+  const groups = useMemo(() => {
+    if (!startedAt) return []
+    return groupTranscript(transcript.filter((line) => line.ts >= startedAt), startedAt)
+  }, [transcript, startedAt])
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
@@ -92,8 +95,11 @@ export default function ConversationsPanel({ onClose, joinedAt }) {
                 <MessagesSquare className="h-5 w-5" />
               </span>
               <p className="text-[13px] leading-relaxed text-[#94A3B8]">
-                No conversation captured yet.<br />
-                Turn on captions to start building the transcript.
+                {startedAt ? (
+                  <>No conversation captured yet.<br />Turn on captions to start building the transcript.</>
+                ) : (
+                  <>Nothing to show yet.<br />Click Meet Summarizer to start capturing the conversation.</>
+                )}
               </p>
             </div>
           ) : (

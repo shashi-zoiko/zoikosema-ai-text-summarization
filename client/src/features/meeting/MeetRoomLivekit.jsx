@@ -216,7 +216,11 @@ function MeetRoom() {
   const [recording, setRecording] = useState({ recording: false, recording_id: null })
 
   // Local UI state
-  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | null
+  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | 'conversations' | 'summary' | null
+  // Set once, the first time the Meet Summarizer button is clicked — the zero
+  // point for both the Conversations and Meet Summarizer panels' timestamps.
+  // Before this is set, neither panel has a session to show yet.
+  const [summarizerStartedAt, setSummarizerStartedAt] = useState(null)
   // Bumped whenever the header admit-chip / lobby "open" is used, so the People
   // panel scrolls its waiting section into view.
   const [waitingScrollSignal, setWaitingScrollSignal] = useState(0)
@@ -694,7 +698,12 @@ function MeetRoom() {
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         onOpenPeople={openPeopleWaiting}
         onOpenConversations={() => setSidebar((s) => (s === 'conversations' ? null : 'conversations'))}
-        onOpenSummary={() => setSidebar((s) => (s === 'summary' ? null : 'summary'))}
+        onOpenSummary={() => {
+          // Only the FIRST click stamps the session start — reopening later
+          // must not push the zero point forward again.
+          setSummarizerStartedAt((t) => t ?? Date.now())
+          setSidebar((s) => (s === 'summary' ? null : 'summary'))
+        }}
       />
 
       <div className="relative flex min-h-0 flex-1">
@@ -762,10 +771,10 @@ function MeetRoom() {
           />
         )}
         {sidebar === 'conversations' && (
-          <ConversationsPanel onClose={() => setSidebar(null)} joinedAt={joinedAtRef.current} />
+          <ConversationsPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
         )}
         {sidebar === 'summary' && (
-          <MeetSummaryPanel onClose={() => setSidebar(null)} />
+          <MeetSummaryPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
         )}
         {sidebar === 'settings' && (
           <SettingsDrawer
