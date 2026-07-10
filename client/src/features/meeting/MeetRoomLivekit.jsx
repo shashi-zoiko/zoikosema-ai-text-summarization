@@ -26,6 +26,7 @@ import ParticipantsPanel from './components/ParticipantsPanel.jsx'
 import SettingsDrawer from './components/SettingsDrawer.jsx'
 import MeetingInfoDrawer from './components/MeetingInfoDrawer.jsx'
 import ConversationsPanel from './components/ConversationsPanel.jsx'
+import MeetSummaryPanel from './components/MeetSummaryPanel.jsx'
 import CaptionProvider from './captions/CaptionProvider.jsx'
 import CaptionOverlay from './captions/CaptionOverlay.jsx'
 import { useCaptionControls } from './captions/useCaptions.js'
@@ -693,6 +694,7 @@ function MeetRoom() {
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         onOpenPeople={openPeopleWaiting}
         onOpenConversations={() => setSidebar((s) => (s === 'conversations' ? null : 'conversations'))}
+        onOpenSummary={() => setSidebar((s) => (s === 'summary' ? null : 'summary'))}
       />
 
       <div className="relative flex min-h-0 flex-1">
@@ -761,6 +763,9 @@ function MeetRoom() {
         )}
         {sidebar === 'conversations' && (
           <ConversationsPanel onClose={() => setSidebar(null)} />
+        )}
+        {sidebar === 'summary' && (
+          <MeetSummaryPanel onClose={() => setSidebar(null)} />
         )}
         {sidebar === 'settings' && (
           <SettingsDrawer

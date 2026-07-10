@@ -28,7 +28,7 @@ export default function MeetingHeader({
   onScreenEnabled,
   onOpenInfo,
   onOpenPeople,
-  onEdit = () => {},
+  onOpenSummary = () => {},
   onOpenConversations = () => {},
 }) {
   const state = useConnectionState()
@@ -127,9 +127,9 @@ export default function MeetingHeader({
 
         <button
           type="button"
-          onClick={onEdit}
-          aria-label="Edit"
-          title="Edit"
+          onClick={onOpenSummary}
+          aria-label="Meet Summarizer"
+          title="Meet Summarizer"
           className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 px-3 text-white shadow-sm transition hover:brightness-110"
         >
           <span className="inline-flex items-start gap-0.5">

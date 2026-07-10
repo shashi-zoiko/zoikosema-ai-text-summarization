@@ -69,17 +69,42 @@ persisted anywhere server-side yet.
 - `client/src/features/meeting/components/ConversationsPanel.jsx` (new)
 - `client/src/features/meeting/MeetRoomLivekit.jsx`
 
+### 5. "Meet Summarizer" panel (mock data)
+
+Renamed the gradient header button from generic "Edit" to "Meet Summarizer"
+(`onEdit` prop renamed to `onOpenSummary` in `MeetingHeader.jsx`, same icon —
+pencil + star, unchanged). It now opens `MeetSummaryPanel`, same overlay
+shell as `ConversationsPanel` (50%-width, full-height, backdrop click /
+Escape to close), wired through the `sidebar` state the same way (`sidebar
+=== 'summary'`).
+
+Panel layout: a big, bold, centered title, a paragraph summary below it,
+then a "Key Takeaways" section — each takeaway is a bullet; ones with an
+assignee render as `Name: text` (action items), the rest as plain important
+points (project status, risks, decisions).
+
+**This renders a hardcoded `MOCK_SUMMARY` constant** — title, summary text,
+and takeaways are not generated from anything yet. The shape of that
+constant (`{ title, summary, keyTakeaways: [{ assignee?, text }] }`) is
+intended to match what a real response will look like once this is wired to
+the transcript from item 4 via the AI intelligence pipeline.
+
+**Frontend:**
+- `client/src/features/meeting/components/MeetSummaryPanel.jsx` (new)
+- `client/src/features/meeting/components/MeetingHeader.jsx`
+- `client/src/features/meeting/MeetRoomLivekit.jsx`
+
 ## Not yet implemented
 
-- The `onEdit` button's actual behavior.
-- Persisting the transcript anywhere durable (currently in-memory only, lost
-  on refresh/leave, not written to the backend).
-- Wiring the transcript into the existing AI intelligence pipeline.
+- Replacing `MOCK_SUMMARY` with a real generated summary — feed the
+  accumulated transcript (item 4) into the AI intelligence pipeline.
   `ai_generate_intelligence` currently summarizes only the chat log; the
   `MeetingIntelligence.source` model already has a reserved, unused
   `INTEL_SOURCE_TRANSCRIPT` value anticipating this.
   - `server/app/core/ai.py`
   - `server/app/api/intelligence.py`
   - `server/app/models/meeting.py`
-- Frontend summary panel with edit / copy / share actions (the actual
-  feature this button is meant to expose).
+- Persisting the transcript anywhere durable (currently in-memory only, lost
+  on refresh/leave, not written to the backend).
+- Edit / copy / share actions on the generated summary (named in the
+  original feature ask — not yet built on top of the panel structure).
