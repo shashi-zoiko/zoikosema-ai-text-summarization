@@ -1,8 +1,10 @@
 name: CI/CD Deploy
 
+# Auto-deploy-on-push disabled here: this fork has no GCP_SA_KEY / DATABASE_URL
+# / LIVEKIT_* secrets configured, so every push to main was failing at the
+# auth step. Still runnable manually (Actions tab -> CI/CD Deploy -> Run
+# workflow) once those secrets exist, for whoever actually deploys this.
 on:
-  push:
-    branches: [main]
   workflow_dispatch: {}
 
 env:
