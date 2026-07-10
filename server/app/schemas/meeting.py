@@ -144,6 +144,22 @@ class IntelligenceGenerateIn(BaseModel):
     participants: list[dict] | None = None
     # Force a fresh generation even if a recent ready record exists.
     force: bool = False
+    # Post-meeting SPOKEN transcript (from the in-meeting caption pipeline,
+    # never the text chat log) — {time, name, body}-shaped, oldest-first, same
+    # as `chat_log`. When present, generation branches to Groq
+    # (core/ai.groq_summarize_transcript) instead of Claude, and the result is
+    # stored with source=INTEL_SOURCE_TRANSCRIPT. Host/admin-only — see
+    # generate_intelligence().
+    transcript: list[dict] | None = None
+
+
+class IntelligenceEditIn(BaseModel):
+    """Host/admin edit of a transcript-sourced summary's fields — see
+    edit_intelligence() in api/intelligence.py. Only fields the caller
+    actually sends get overwritten."""
+    title: str | None = None
+    summary: str | None = None
+    key_takeaways: list[dict] | None = None
 
 
 class MeetingIntelligenceOut(BaseModel):

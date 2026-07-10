@@ -311,14 +311,89 @@ says), but worth knowing if `source` is ever surfaced/filtered on later.
 - `client/src/features/meeting/MeetRoomLivekit.jsx` (now passes `code` and
   `isHostOrCohost` down)
 
+### 15. Superseded item 14 — Groq, host-leave trigger, existing Intelligence page, host/admin-only
+
+Redirected mid-build: instead of a fetch/Generate-button living inside
+`MeetSummaryPanel` and reusing the rich Claude-based `ai_generate_intelligence`
+schema (item 14), the summary now:
+- Uses **Groq** as a second, separate AI vendor (`groq` package,
+  `core/ai.groq_summarize_transcript`) — not Claude — producing the simpler
+  `{title, summary, key_takeaways}` shape item 14's mock originally had.
+- Generates **once, automatically, when the host leaves** — never mid-meeting.
+  `MeetRoomLivekit.jsx`'s `userLeave` fire-and-forgets a POST with the
+  accumulated transcript if `isHost && transcriptRef.current.length > 0`.
+  (`transcriptRef` is kept in sync by a tiny bridge component,
+  `TranscriptRefSync`, rendered inside `<CaptionProvider>` — `userLeave`'s own
+  scope sits outside that context subtree and can't call `useLiveCaptions()`
+  directly, same constraint that drove item 9's ref approach before it got
+  simplified away.)
+- Displays on the **existing** `/:code/intelligence` page
+  (`pages/MeetingIntelligence.jsx`), not a new page — branches its rendering
+  on `intel.source === 'transcript'`: a compact `TranscriptSummaryView`
+  (title/summary/key-takeaways, with inline Edit) instead of the rich
+  chat-based sections, which don't apply to this payload shape.
+- Is **host/admin-only** — stricter than the existing chat-based intelligence
+  (which any participant can read). New `_is_host_or_platform_admin()` in
+  `api/intelligence.py`; `get_intelligence` branches its access check on the
+  fetched row's `source` (chat rows keep the old any-participant rule).
+- `MeetSummaryPanel` reverted to capture-only (Start/Pause toggle + a note
+  pointing at the Intelligence page) — no fetch, no summary content, matching
+  "not generated mid-meeting."
+
+**Backend, `server/app/api/intelligence.py`:**
+- `IntelligenceGenerateIn.transcript: list[dict] | None` — when present,
+  `run_generation()` branches to `groq_summarize_transcript` instead of
+  `ai_generate_intelligence`, tags the row `source=INTEL_SOURCE_TRANSCRIPT`
+  (finally giving that dormant enum value a real purpose), and always
+  generates fresh (no 60s cache short-circuit — this only ever fires once
+  per meeting-end).
+- `generate_intelligence`: transcript path requires `_is_host_or_platform_admin`
+  (host or `is_admin`, imported from `api/admin.py`); chat path unchanged
+  (`_is_host_or_cohost`). Cache-lookup query now also filters
+  `source == INTEL_SOURCE_CHAT` so a transcript row can never be returned as
+  a stale "cached chat" result.
+- `get_intelligence`: fetches the row first, then branches access —
+  transcript-sourced rows require host/admin, chat-sourced keep `_has_access`.
+- New `PATCH /{code}/intelligence` (`edit_intelligence`) — host/admin-only,
+  edits the latest transcript-sourced row's `title`/`summary`/`key_takeaways`
+  in place (no new row). New `IntelligenceEditIn` schema.
+
+**`server/app/core/ai.py` / `config.py` — the actual Groq call:**
+- `groq_summarize_transcript(transcript, meeting_title)` — same
+  lazy-client/error-surfacing shape as `ai_generate_intelligence`
+  (`_model`/`_input_tokens`/`_output_tokens`/`_latency_ms`/`_error` metadata
+  keys), prompts for strict JSON (`response_format: json_object`), reuses
+  the existing `_extract_json`/`_format_chat_log` helpers.
+- Config: added `groq_api_key`/`groq_model` — but the user's own `.env`
+  (added directly, not through me) uses generic `AI_PROVIDER=groq` /
+  `AI_API_KEY=...` / `AI_MODEL=llama-3.3-70b-versatile` instead of
+  vendor-specific names. Added `ai_provider`/`ai_api_key` fields plus
+  `_groq_api_key()`/`_groq_model()` helpers in `ai.py` so the generic names
+  win when `AI_PROVIDER=groq`, falling back to `GROQ_API_KEY`/`GROQ_MODEL`
+  otherwise — so the key actually gets picked up either way.
+- `requirements.txt`: added `groq>=0.11.0`. **Not yet installed in the
+  running dev venv** — the dev server was live/in-use during this session,
+  so installing into it would have meant killing an active session without
+  asking first. Needs `pip install -r requirements.txt` (or just `pip
+  install groq`) next time the server restarts, or the transcript path will
+  fail at `import groq` (caught gracefully, surfaces as `_error`, doesn't
+  crash anything).
+
+**Frontend:**
+- `client/src/features/meeting/MeetRoomLivekit.jsx` (`transcriptRef`,
+  `TranscriptRefSync`, `transcriptToChatLog`, `userLeave`)
+- `client/src/features/meeting/components/MeetSummaryPanel.jsx` (reverted to
+  capture-only)
+- `client/src/pages/MeetingIntelligence.jsx` (`TranscriptSummaryView`,
+  `transcriptToMarkdown`, edit state + `saveEdit`, branched action buttons)
+
 ## Not yet implemented
 
+- Installing `groq` into the actual dev venv (see above) and confirming an
+  end-to-end run with a real meeting.
 - Persisting the transcript anywhere durable server-side. It's still only
   ever sent inline in the POST body at generate-time — nothing accumulates
   it across sessions, so a transcript from a call that's already ended
   can't be summarized later.
-- Edit / copy / share actions on the generated summary (named in the
-  original feature ask — not yet built on top of the panel structure).
-- `source` on `MeetingIntelligence` still always says `chat` even when the
-  content was actually a caption transcript — cosmetic/data-hygiene gap,
-  not a functional one.
+- Copy-to-clipboard for the transcript summary (Edit and Download exist;
+  Copy — as the chat-based path already has — doesn't yet).

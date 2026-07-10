@@ -83,6 +83,20 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     ai_model: str = "claude-sonnet-4-20250514"
 
+    # Post-meeting transcript summarizer — separate vendor from the
+    # Anthropic-based chat/intelligence features above, used specifically for
+    # turning the spoken-conversation transcript into {title, summary,
+    # key_takeaways} once a meeting ends. `ai_provider`/`ai_api_key` are the
+    # generic names the deploy env actually sets (AI_PROVIDER/AI_API_KEY);
+    # `groq_api_key`/`groq_model` are vendor-specific fallbacks so this still
+    # works if someone configures it that way instead. See
+    # core/ai._get_groq_client() / groq_summarize_transcript() for how these
+    # are combined.
+    ai_provider: str = "anthropic"   # "anthropic" | "groq"
+    ai_api_key: str = ""
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
+
     # Recording retention — recordings older than this are auto-deleted.
     # Set to 0 to disable the cleanup loop entirely.
     recording_retention_days: int = 30
