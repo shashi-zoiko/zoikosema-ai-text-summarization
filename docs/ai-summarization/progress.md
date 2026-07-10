@@ -180,6 +180,23 @@ the CC toggle stays exactly as the user left it, untouched and unaffected.
 - `client/src/features/meeting/captions/CaptionProvider.jsx`
 - `client/src/features/meeting/MeetRoomLivekit.jsx`
 
+### 10. "Start Summarizing" button moved inside the Meet Summarizer panel
+
+The header's gradient button now only opens/closes the panel — it no longer
+triggers capture itself. A new "Start Summarizing" button lives INSIDE
+`MeetSummaryPanel` (a status row above the title: a pulsing green dot +
+"Summarizing this conversation" once started, or "Not started yet" with the
+button, before). Clicking it is what now calls `startSummarizing()` in
+`MeetRoomLivekit.jsx` — stamps `summarizerStartedAt` (first click only) and
+calls `captionProviderRef.current?.startCapture()`, same as before, just
+moved to a deliberate in-panel action instead of firing the instant the
+panel opens. Once started, the button shows a disabled "Started" state
+(there's no stop).
+
+**Frontend:**
+- `client/src/features/meeting/components/MeetSummaryPanel.jsx`
+- `client/src/features/meeting/MeetRoomLivekit.jsx`
+
 ## Not yet implemented
 
 - Replacing `MOCK_SUMMARY` with a real generated summary — feed the

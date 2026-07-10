@@ -217,7 +217,8 @@ function MeetRoom() {
 
   // Local UI state
   const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | 'conversations' | 'summary' | null
-  // Set once, the first time the Meet Summarizer button is clicked — the zero
+  // Set once, the first time "Start Summarizing" (inside MeetSummaryPanel,
+  // NOT the header button that just opens the panel) is clicked — the zero
   // point for both the Conversations and Meet Summarizer panels' timestamps.
   // Before this is set, neither panel has a session to show yet.
   const [summarizerStartedAt, setSummarizerStartedAt] = useState(null)
@@ -518,6 +519,14 @@ function MeetRoom() {
   }, [])
   // Google-Meet: clicking the grid's "+N others" tile opens the People panel.
   const openPeople = useCallback(() => setSidebar('people'), [])
+  // The "Start Summarizing" button INSIDE MeetSummaryPanel — not the header
+  // button, which only opens/closes the panel. Stamps the session's zero
+  // point (first call only) and starts transcript capture, independent of
+  // the visible CC toggle.
+  const startSummarizing = useCallback(() => {
+    setSummarizerStartedAt((t) => t ?? Date.now())
+    captionProviderRef.current?.startCapture()
+  }, [])
   // Wire the floating chat cards' actions. "Mark as read" clears the unread
   // badge without opening chat; tapping a card's preview opens the chat drawer
   // (which also clears). Join-request admit/deny live only in the People panel.
@@ -699,16 +708,7 @@ function MeetRoom() {
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         onOpenPeople={openPeopleWaiting}
         onOpenConversations={() => setSidebar((s) => (s === 'conversations' ? null : 'conversations'))}
-        onOpenSummary={() => {
-          // Only the FIRST click stamps the session start — reopening later
-          // must not push the zero point forward again.
-          setSummarizerStartedAt((t) => t ?? Date.now())
-          // But EVERY click starts transcript capture for the summarizer,
-          // independent of the visible CC toggle — doesn't touch it, doesn't
-          // show the caption bubble overlay, just feeds Conversations.
-          captionProviderRef.current?.startCapture()
-          setSidebar((s) => (s === 'summary' ? null : 'summary'))
-        }}
+        onOpenSummary={() => setSidebar((s) => (s === 'summary' ? null : 'summary'))}
       />
 
       <div className="relative flex min-h-0 flex-1">
@@ -779,7 +779,11 @@ function MeetRoom() {
           <ConversationsPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
         )}
         {sidebar === 'summary' && (
-          <MeetSummaryPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
+          <MeetSummaryPanel
+            onClose={() => setSidebar(null)}
+            startedAt={summarizerStartedAt}
+            onStart={startSummarizing}
+          />
         )}
         {sidebar === 'settings' && (
           <SettingsDrawer

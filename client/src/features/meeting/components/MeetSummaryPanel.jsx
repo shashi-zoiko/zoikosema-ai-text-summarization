@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { X } from 'lucide-react'
+import { Sparkles, X } from 'lucide-react'
 
 // Mock data — stands in for the real summary until it's generated from the
 // accumulated transcript (see ConversationsPanel/CaptionProvider) via the AI
@@ -29,8 +29,13 @@ const MOCK_SUMMARY = {
  * click / Escape to close). Renders MOCK_SUMMARY for now; once the caption
  * transcript is wired into the AI intelligence pipeline this becomes a real
  * fetch keyed off the meeting code instead of a constant.
+ *
+ * The header button only opens/closes this panel — actually starting
+ * capture happens from the "Start Summarizing" button INSIDE here
+ * (`onStart`), kept as a distinct step rather than something that fires the
+ * instant the panel opens.
  */
-export default function MeetSummaryPanel({ onClose }) {
+export default function MeetSummaryPanel({ onClose, onStart, startedAt }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
     window.addEventListener('keydown', onKey)
@@ -59,6 +64,36 @@ export default function MeetSummaryPanel({ onClose }) {
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+          <div className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-[#263244] bg-[#0B1220] px-4 py-3">
+            <span className="inline-flex items-center gap-2 text-[13px] text-[#94A3B8]">
+              {startedAt ? (
+                <>
+                  <span className="relative grid h-2 w-2 place-items-center">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#10B981] opacity-70" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-[#10B981]" />
+                  </span>
+                  <span className="font-medium text-white">Summarizing this conversation</span>
+                </>
+              ) : (
+                'Not started yet'
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={onStart}
+              disabled={!!startedAt}
+              className={
+                'inline-flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[13px] font-semibold transition ' +
+                (startedAt
+                  ? 'cursor-default bg-[#1E293B] text-[#94A3B8]'
+                  : 'bg-gradient-to-br from-violet-500 to-pink-500 text-white hover:brightness-110')
+              }
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {startedAt ? 'Started' : 'Start Summarizing'}
+            </button>
+          </div>
+
           <h1 className="text-center text-2xl font-bold text-white">{MOCK_SUMMARY.title}</h1>
 
           <p className="mt-4 text-[14px] leading-relaxed text-[#CBD5E1]">
