@@ -6,6 +6,7 @@ Video meetings + team chat product. Web app (React) and desktop app (Electron) s
 
 - **Client** (`client/`): React 19 + Vite, Tailwind CSS 4, Zustand for state, React Router, Electron for desktop packaging, LiveKit (`livekit-client`, `@livekit/components-react`) for video/audio, Tiptap for rich text (chat).
 - **Server** (`server/`): FastAPI + SQLAlchemy 2.0 + Pydantic v2, Postgres (`psycopg2`), Redis (pub/sub, presence, idempotency cache), JWT auth (`python-jose` + `passlib`/`bcrypt`), LiveKit server SDK (`livekit-api`) for room/token admin.
+- Governance spine (`server/app/connect/`): audit ledger, tenant isolation, event bus/outbox, idempotency — the "Zoiko Connect" plane. New governed features (e.g. Sema Calendar & Mail) extend this, they don't fork a parallel one.
 - Infra: Docker/Docker Compose, GCP deployment (see `docs/GCP_DEPLOYMENT.md`), `infra/`.
 
 ## Commands
@@ -38,3 +39,4 @@ Root: `dev.ps1` boots both client and server for local dev on Windows/PowerShell
 - This is a Windows dev machine; use PowerShell syntax when running shell commands directly (not WSL/bash-isms), though the Bash tool (Git Bash) is also available.
 - Auth/session and video-room code (LiveKit tokens, admission/waiting-room logic) is sensitive — read `docs/guest-join.md` and `docs/livekit-production.md` before changing it.
 - Check `PRODUCTION_READINESS_AUDIT.md` before assuming a subsystem is production-hardened.
+- **Sema Calendar & Mail** (in progress, `feature/sema-calendar-mail`): governed by `architecture/SEMA_CALENDAR_MAIL_SPEC.md` (approved spec, Class 3) — read `architecture/SEMA_CALENDAR_MAIL_CONTEXT.md` first, it maps the spec onto this codebase (what to reuse from `app/connect/`, what's net-new, current phase/open questions) before writing any calendar/mail code.
