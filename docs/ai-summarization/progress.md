@@ -52,10 +52,9 @@ same `sidebar` state the other drawers — chat/people/info/settings — already
 use): a 50%-width, full-height panel docked to the right, dark backdrop
 behind it. Clicking anywhere on the backdrop (outside the panel) or pressing
 Escape closes it, same as clicking the header button again. Transcript lines
-are grouped under timestamp headings (`HH:MM:SS`, elapsed since the first
-captured line) — a new heading starts whenever the gap since the previous
-line exceeds 20s — then rendered as `Name: text` per line, matching the
-Google Meet / Gemini notetaker transcript layout.
+are grouped under timestamp headings — a new heading starts whenever the gap
+since the previous line exceeds 20s — then rendered as `Name: text` per
+line, matching the Google Meet / Gemini notetaker transcript layout.
 
 Caveat: this is in-memory only, scoped to each participant's own browser tab.
 Since captions are already broadcast to everyone over the LiveKit data
@@ -92,6 +91,22 @@ the transcript from item 4 via the AI intelligence pipeline.
 **Frontend:**
 - `client/src/features/meeting/components/MeetSummaryPanel.jsx` (new)
 - `client/src/features/meeting/components/MeetingHeader.jsx`
+- `client/src/features/meeting/MeetRoomLivekit.jsx`
+
+### 6. Fixed Conversations heading clock to match the meeting's Duration
+
+Headings in item 4 initially showed time elapsed since the *first captured
+caption* (always starting at `00:00:00`), which drifts from the actual
+meeting clock — e.g. a caption said 2m40s into the call showed as `00:00:05`
+instead of `02:40`. `ConversationsPanel` now takes a `joinedAt` prop (passed
+from `MeetRoomLivekit.jsx`, same value the header's own Duration readout
+uses) and computes each heading relative to that, so a heading always
+matches what the header clock read at that moment. Format also switched
+from a forced `HH:MM:SS` to the header's own convention — `mm:ss`, only
+showing an hour segment past 60 minutes.
+
+**Frontend:**
+- `client/src/features/meeting/components/ConversationsPanel.jsx`
 - `client/src/features/meeting/MeetRoomLivekit.jsx`
 
 ## Not yet implemented

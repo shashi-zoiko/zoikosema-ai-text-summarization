@@ -762,7 +762,7 @@ function MeetRoom() {
           />
         )}
         {sidebar === 'conversations' && (
-          <ConversationsPanel onClose={() => setSidebar(null)} />
+          <ConversationsPanel onClose={() => setSidebar(null)} joinedAt={joinedAtRef.current} />
         )}
         {sidebar === 'summary' && (
           <MeetSummaryPanel onClose={() => setSidebar(null)} />

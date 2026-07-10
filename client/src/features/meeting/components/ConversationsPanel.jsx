@@ -7,24 +7,28 @@ import { useLiveCaptions } from '../captions/useCaptions.js'
 // stamping every few seconds of dialogue.
 const HEADING_GAP_MS = 20000
 
+// Same mm:ss / h:mm:ss convention as the header's own Duration clock
+// (MeetingHeader.jsx, MeetingInfoDrawer.jsx) — headings read as the actual
+// meeting clock time a line was said at, not elapsed-since-first-caption.
 function formatElapsed(ms) {
   const s = Math.max(0, Math.floor(ms / 1000))
   const hh = Math.floor(s / 3600)
   const mm = Math.floor((s % 3600) / 60)
   const ss = s % 60
   const pad = (n) => String(n).padStart(2, '0')
-  return `${pad(hh)}:${pad(mm)}:${pad(ss)}`
+  return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${pad(mm)}:${pad(ss)}`
 }
 
 // Transcript lines → time-headed groups, e.g.:
-//   00:00:05
+//   02:40
 //   Alice: ...
 //   Bob: ...
-//   00:02:08
+//   05:12
 //   Alice: ...
-function groupTranscript(transcript) {
+// `t0` is the meeting's join time — headings track the same clock as the
+// header's Duration readout, not a clock that restarts at the first caption.
+function groupTranscript(transcript, t0) {
   if (!transcript.length) return []
-  const t0 = transcript[0].ts
   const groups = []
   let lastTs = null
   for (const line of transcript) {
@@ -44,9 +48,15 @@ function groupTranscript(transcript) {
  * full-height panel over the call; clicking the backdrop (anywhere outside
  * the panel) closes it, same as pressing Escape.
  */
-export default function ConversationsPanel({ onClose }) {
+export default function ConversationsPanel({ onClose, joinedAt }) {
   const { transcript } = useLiveCaptions()
-  const groups = useMemo(() => groupTranscript(transcript), [transcript])
+  // Fall back to the first caption's own timestamp only if the meeting's
+  // join time wasn't passed in — headings should still render, just without
+  // the true meeting-clock alignment. The final `0` fallback is never
+  // actually used: groupTranscript short-circuits on an empty transcript
+  // before t0 comes into play.
+  const t0 = joinedAt || transcript[0]?.ts || 0
+  const groups = useMemo(() => groupTranscript(transcript, t0), [transcript, t0])
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
