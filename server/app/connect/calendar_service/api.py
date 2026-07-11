@@ -1,7 +1,7 @@
 """REST facade for Calendar Service. Thin: parse → call service → serialize."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date as date_, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
 from app.connect.calendar_service import service
+from app.connect.calendar_service.availability import suggest_available_slots
 from app.connect.shared.errors import DomainError
 from app.connect.shared.tenant import TenantContext, resolve_tenant
 from app.core.database import get_db
@@ -72,3 +73,24 @@ def list_calendar_events(
 ):
     events = service.list_calendar_events(db, ctx, time_min=time_min, time_max=time_max)
     return [_to_out(e) for e in events]
+
+
+class FreeSlotOut(BaseModel):
+    start_at: datetime
+    end_at: datetime
+
+
+@router.get("/availability", response_model=list[FreeSlotOut])
+def get_availability(
+    on_date: date_ = Query(...),
+    duration_minutes: int = Query(default=30, ge=5, le=480),
+    day_start_hour: int = Query(default=9, ge=0, le=23),
+    day_end_hour: int = Query(default=18, ge=1, le=24),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    slots = suggest_available_slots(
+        db, ctx, on_date=on_date, duration_minutes=duration_minutes,
+        day_start_hour=day_start_hour, day_end_hour=day_end_hour,
+    )
+    return [FreeSlotOut(start_at=s.start_at, end_at=s.end_at) for s in slots]

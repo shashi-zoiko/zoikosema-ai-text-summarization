@@ -128,3 +128,19 @@ Second provider, same sync semantics as slice 2 (full pull, fixed window). Branc
 **Explicitly not built in this slice:** anything CalDAV/Apple (still adapter-interface-only per the spec's own Build/Integrate/Defer table), Azure AD app registration itself (same category of external-provisioning follow-up as Google's).
 
 **Follow-ups:** register an Azure AD app with `Calendars.Read`/`User.Read`/`offline_access` and set the four `microsoft_calendar_*` config values — otherwise `outlook.exchange_code` raises `Invalid` immediately, same failure shape as the unconfigured-Google case in slice 1.
+
+## 8. Slice 4 — Sema Meet scheduling suggestions, L1 (done)
+
+Spec §4 L1 ("Suggest"): compute free/busy slots for the current user, never write anything. Branch: `sema/sema-meet-scheduling-l1`.
+
+**Reused as-is:** `connect_calendar_events` (slice 2/3's synced data) and the legacy `app/models/meeting.py::Meeting` table — this is the first Sema code that reads across both planes in one query, which is fine; they're the same Postgres database via the same SQLAlchemy session, just two different declarative bases.
+
+**Built new:**
+- `app/connect/calendar_service/availability.py` — `suggest_available_slots()`, pure read/compute, no audit log and no outbox event (nothing is mutated or governed, so neither applies — see the module docstring for why this is a deliberate omission, not a gap).
+- `GET /api/connect/calendar/availability` — `on_date`, `duration_minutes`, `day_start_hour`, `day_end_hour` query params, returns free slots.
+
+**Known approximation, stated deliberately:** legacy `Meeting` rows have `scheduled_at` but no duration/end field (a live call's real length isn't known ahead of time), so each non-cancelled scheduled meeting is treated as occupying a flat `DEFAULT_MEETING_DURATION_MINUTES = 60` for conflict purposes. If this produces bad suggestions in practice, the correct fix is adding a real duration estimate to `Meeting`, not tuning this file.
+
+**Bug caught and fixed during this slice, before commit:** the initial free-slot merge loop didn't clamp busy intervals to the `[day_start, day_end]` window — a busy interval starting after `day_end` (e.g. an event at 19:00 when the window ends at 18:00) produced a phantom free slot extending past `day_end` (`09:00–19:00` instead of `09:00–18:00`). Verified with a standalone reproduction of the merge algorithm before and after the fix (7 cases incl. the regression); the venv on this machine is still broken (see §5 follow-up #4) so this couldn't be run through the actual FastAPI/DB stack, only the pure algorithm in isolation.
+
+**Explicitly not built in this slice:** multi-attendee coordination (only the current user's own availability), any UI, actually creating the meeting from a suggested slot (that's L2 — a staged proposal in the Action Review Queue, which doesn't exist yet and is correctly out of scope for L1).
