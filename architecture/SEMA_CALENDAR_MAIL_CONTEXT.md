@@ -60,9 +60,9 @@ main
  └─ feature/sema-calendar-mail        (epic branch — everything Sema lands here first)
      ├─ sema/provider-connections-token-vault   (done — see §5)
      ├─ sema/google-calendar-readonly-sync      (done — see §6)
-     ├─ sema/outlook-calendar-readonly-sync     (next)
-     ├─ sema/sema-meet-scheduling-l1
-     └─ sema/rsvp-reminders-imip
+     ├─ sema/outlook-calendar-readonly-sync     (done — see §7)
+     ├─ sema/sema-meet-scheduling-l1            (done — see §8)
+     └─ sema/rsvp-reminders-imip                (next)
 ```
 
 Each sub-branch is cut from `feature/sema-calendar-mail`'s current tip, stays open days not weeks, and merges back via PR before the next one is cut. `feature/sema-calendar-mail` only merges to `main` at a real Phase exit gate (§18 of the spec), not continuously.
@@ -144,3 +144,20 @@ Spec §4 L1 ("Suggest"): compute free/busy slots for the current user, never wri
 **Bug caught and fixed during this slice, before commit:** the initial free-slot merge loop didn't clamp busy intervals to the `[day_start, day_end]` window — a busy interval starting after `day_end` (e.g. an event at 19:00 when the window ends at 18:00) produced a phantom free slot extending past `day_end` (`09:00–19:00` instead of `09:00–18:00`). Verified with a standalone reproduction of the merge algorithm before and after the fix (7 cases incl. the regression); the venv on this machine is still broken (see §5 follow-up #4) so this couldn't be run through the actual FastAPI/DB stack, only the pure algorithm in isolation.
 
 **Explicitly not built in this slice:** multi-attendee coordination (only the current user's own availability), any UI, actually creating the meeting from a suggested slot (that's L2 — a staged proposal in the Action Review Queue, which doesn't exist yet and is correctly out of scope for L1).
+
+## 9. Session status (as of 2026-07-11, end of this working session)
+
+Slices 1-4 are built, committed, and merged into `feature/sema-calendar-mail` (pushed to `upstream/feature/sema-calendar-mail`, currently at `04cec5b0`). Local slice branches (`sema/provider-connections-token-vault`, `sema/google-calendar-readonly-sync`, `sema/outlook-calendar-readonly-sync`, `sema/sema-meet-scheduling-l1`) are left in place, not deleted — harmless to keep, useful if anyone wants to review a single slice's diff in isolation.
+
+**What Phase 1 (§2's scope list) still needs**, in the same agile one-slice-at-a-time style:
+- `sema/rsvp-reminders-imip` — extend the existing `.ics` generator (`app/core/calendar.py`) and reminder job (`app/core/meeting_reminders.py`) for calendar-sourced events, per §2's original scope. Not started.
+- Admin consent UI/flow for connecting a provider (today it's API-only: `POST /api/connect/provider-connections` expects an already-obtained `authorization_code` — nothing generates the Google/Microsoft consent-screen redirect URL yet).
+- Read-only ZoikoTime availability signal, still gated on open question #1 in §3 (stub behind a feature flag, default off) — not started, not blocking anything built so far.
+
+**What is NOT done and should not be started next** (still correctly deferred per §4's doctrine): Work Graph, Policy Engine, Action Review Queue, any L2+ autonomy, Mail Connect, DLP. Nothing built this session needed them, which is itself evidence the phasing call was right.
+
+**Cross-cutting follow-ups accumulated across all 4 slices** (nobody has done these yet — needed before any of this runs for real, not just slice 4's local concern):
+1. Run all three migrations in order: `connect_v3_002_provider_connections.sql`, `connect_v3_003_calendar_events.sql` (§1's `connect_v3_001_init.sql` is presumably already applied).
+2. Generate and set `TOKEN_VAULT_KEY`.
+3. Register both a Google Cloud OAuth app (Calendar scope) and an Azure AD app (`Calendars.Read`/`User.Read`/`offline_access`), set the resulting 7 config values (`google_calendar_*` ×3, `microsoft_calendar_*` ×4).
+4. Recreate `server/venv` fresh on this machine — every slice this session was syntax-checked with `py_compile` and, where the logic was non-trivial (the availability merge algorithm), with a standalone reproduction outside the app — but none were run through the actual FastAPI/DB stack, because the venv can't import `psycopg2`/run at all right now.
