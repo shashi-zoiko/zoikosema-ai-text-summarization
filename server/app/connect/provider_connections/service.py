@@ -11,28 +11,22 @@ from app.connect.audit import service as audit
 from app.connect.events import types as etypes
 from app.connect.events.bus import publish
 from app.connect.events.outbox import enqueue
-from app.connect.provider_connections.adapters import google as google_adapter
+from app.connect.provider_connections.adapters import get_adapter
 from app.connect.provider_connections.models import ProviderConnection
 from app.connect.shared import crypto
 from app.connect.shared.envelope import EventEnvelope
-from app.connect.shared.errors import Invalid, NotFound
+from app.connect.shared.errors import NotFound
 from app.connect.shared.ids import uuid7_str
 from app.connect.shared.telemetry import get_correlation_id
 from app.connect.shared.tenant import TenantContext
 from sqlalchemy.orm import Session as DbSession
 
-PROVIDERS = ("google_calendar", "microsoft_calendar")
-
 
 async def connect_provider(
     db: DbSession, ctx: TenantContext, *, provider: str, authorization_code: str,
 ) -> ProviderConnection:
-    if provider not in PROVIDERS:
-        raise Invalid(f"Unknown provider: {provider}")
-    if provider != "google_calendar":
-        raise Invalid(f"Provider not yet supported: {provider}")
-
-    tokens = await google_adapter.exchange_code(authorization_code)
+    adapter = get_adapter(provider)
+    tokens = await adapter.exchange_code(authorization_code)
 
     existing = (
         db.query(ProviderConnection)

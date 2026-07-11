@@ -6,27 +6,22 @@ service.py talks to this through `exchange_code()` / `refresh_access_token()`
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 
+from app.connect.provider_connections.adapters.shared import (
+    ExchangedTokens,
+    RawEvent,
+    RefreshedAccessToken,
+)
 from app.connect.shared.errors import Invalid
 from app.core.config import get_settings
 
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 _EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-
-
-@dataclass(frozen=True)
-class ExchangedTokens:
-    refresh_token: str
-    access_token: str
-    access_token_expires_at: datetime
-    scopes: list[str]
-    account_email: str
 
 
 async def exchange_code(code: str) -> ExchangedTokens:
@@ -67,12 +62,6 @@ async def exchange_code(code: str) -> ExchangedTokens:
     )
 
 
-@dataclass(frozen=True)
-class RefreshedAccessToken:
-    access_token: str
-    access_token_expires_at: datetime
-
-
 async def refresh_access_token(refresh_token: str) -> RefreshedAccessToken:
     settings = get_settings()
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -89,19 +78,6 @@ async def refresh_access_token(refresh_token: str) -> RefreshedAccessToken:
         access_token=data["access_token"],
         access_token_expires_at=datetime.now(timezone.utc) + timedelta(seconds=data["expires_in"]),
     )
-
-
-@dataclass(frozen=True)
-class RawEvent:
-    provider_event_id: str
-    title: str | None
-    description: str | None
-    location: str | None
-    start_at: datetime | None
-    end_at: datetime | None
-    all_day: bool
-    status: str
-    attendees: list[dict[str, Any]]
 
 
 def _parse_when(when: dict[str, Any]) -> tuple[datetime | None, bool]:

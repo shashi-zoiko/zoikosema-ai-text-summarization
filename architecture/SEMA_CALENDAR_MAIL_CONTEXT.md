@@ -108,3 +108,23 @@ Full-pull sync (no incremental syncToken yet) over a fixed window (7 days back, 
 1. Run `connect_v3_003_calendar_events.sql` (after `connect_v3_002_...`, migrations are ordered).
 2. Same 3 provider/vault follow-ups from §5 still apply — this slice is unusable without a real Google OAuth app and `TOKEN_VAULT_KEY`.
 3. `all_day` events currently store midnight-UTC as `start_at`/`end_at` (see `_parse_when` docstring in `adapters/google.py`) — fine for storage, but any client rendering must branch on `all_day` rather than trusting the instant.
+
+## 7. Slice 3 — Outlook/Microsoft Calendar read-only sync (done)
+
+Second provider, same sync semantics as slice 2 (full pull, fixed window). Branch: `sema/outlook-calendar-readonly-sync`.
+
+**Refactor done first, before adding the new adapter:** slice 2's `ExchangedTokens`/`RefreshedAccessToken`/`RawEvent` dataclasses lived in `adapters/google.py`. With a second provider about to define the identical shapes, that would've been copy-pasted duplication — pulled them out to `adapters/shared.py` and pointed `google.py` at the shared versions before writing `outlook.py`. Also added `adapters/get_adapter(provider)` (a `{provider_string: module}` registry) so `provider_connections/service.py` and `calendar_service/service.py` each dropped their Google-only `if provider != "google_calendar": raise` and now dispatch generically — both files are provider-agnostic for the first time.
+
+**Built new:**
+- `app/connect/provider_connections/adapters/outlook.py` — Microsoft identity platform (`/oauth2/v2.0/token`) + Graph (`/v1.0/me`, `/v1.0/me/calendarview`) adapter, same three functions as `google.py` (`exchange_code`, `refresh_access_token`, `list_events`), same `RawEvent` shape.
+- `app/connect/provider_connections/adapters/shared.py` — the extracted dataclasses (see refactor note above).
+- New config fields: `microsoft_calendar_client_id/secret/redirect_uri/tenant` (tenant defaults to `"common"` — personal + any org account; narrow to a GUID to restrict to one Azure AD tenant).
+
+**Provider quirks worth knowing if this breaks later:**
+- Graph pagination returns a full next-page URL (`@odata.nextLink`) that already carries the query string — resending `params` on the follow-up request would double-encode them, so `outlook.py`'s loop drops `params` after the first page. Google's pagination (`nextPageToken`) is a bare token that gets re-added to `params` each time — the two loops are *not* interchangeable, don't try to unify them.
+- Graph's event resource has no `status` field like Google's `confirmed/tentative/cancelled`; only `isCancelled` (bool). Mapped to `"cancelled"` / `"confirmed"` — Graph has no wire concept of "tentative" at the event level, so that status value never appears for Outlook events (Google's does).
+- `Prefer: outlook.timezone="UTC"` header forces Graph to return timestamps already in UTC — without it, Graph returns the mailbox's configured timezone and the naive `dateTime` string would silently be misinterpreted as UTC by `_parse_graph_datetime`.
+
+**Explicitly not built in this slice:** anything CalDAV/Apple (still adapter-interface-only per the spec's own Build/Integrate/Defer table), Azure AD app registration itself (same category of external-provisioning follow-up as Google's).
+
+**Follow-ups:** register an Azure AD app with `Calendars.Read`/`User.Read`/`offline_access` and set the four `microsoft_calendar_*` config values — otherwise `outlook.exchange_code` raises `Invalid` immediately, same failure shape as the unconfigured-Google case in slice 1.

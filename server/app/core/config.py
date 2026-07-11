@@ -130,6 +130,14 @@ class Settings(BaseSettings):
     google_calendar_client_secret: str = ""
     google_calendar_redirect_uri: str = ""
 
+    # Microsoft Graph (Outlook Calendar) OAuth app registration.
+    microsoft_calendar_client_id: str = ""
+    microsoft_calendar_client_secret: str = ""
+    microsoft_calendar_redirect_uri: str = ""
+    # "common" accepts both personal Microsoft accounts and any Azure AD
+    # tenant; override to a specific tenant GUID to restrict to one org.
+    microsoft_calendar_tenant: str = "common"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
