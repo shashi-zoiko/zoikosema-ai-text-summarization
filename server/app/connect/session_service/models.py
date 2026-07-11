@@ -5,7 +5,7 @@ are thin SQLAlchemy mappings that only INSERT/UPDATE rows.
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Column, DateTime, String, text
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -39,7 +39,11 @@ class SessionMember(ConnectBase):
     __table_args__ = {"extend_existing": True}
 
     id = Column(UUID(as_uuid=False), primary_key=True)
-    session_id = Column(UUID(as_uuid=False), nullable=False)
+    # DDL already has this FK (connect_v3_001_init.sql); it was missing here,
+    # which breaks SQLAlchemy's relationship config for Session.members the
+    # moment ANY connect_v3 model is queried (mapper configuration is
+    # registry-wide, not per-class) - found while integration-testing Sema.
+    session_id = Column(UUID(as_uuid=False), ForeignKey("connect_sessions.id"), nullable=False)
     tenant_id = Column(String, nullable=False)
     user_id = Column(BigInteger, nullable=False)
     role = Column(String, nullable=False, default="participant")
