@@ -50,3 +50,42 @@ These need an answer (from the user, or by inspecting parts of the codebase not 
 3. **Token storage bar for Phase 1** — spec requires HSM/KMS-backed vault (§7.4) as the end state. Is per-tenant envelope encryption via the existing DB (e.g. `pgcrypto` / app-level AES-GCM with a KMS-held key) acceptable for Phase 1, with a hardening ticket for full HSM-backed vault before Phase 3 (Gmail restricted scopes), or must the vault be built to final spec before any refresh token is persisted?
 
 Until these are answered, the concrete Phase 1 build plan (migrations, adapter interfaces, API routes, client feature module) is a design exercise, not a commitment — proposing it next as a plan rather than starting to write code.
+
+## 4. Branching model and slice sequencing (decided 2026-07-11)
+
+Working agile, one small slice at a time, not a big-bang build:
+
+```
+main
+ └─ feature/sema-calendar-mail        (epic branch — everything Sema lands here first)
+     ├─ sema/provider-connections-token-vault   (done — see §5)
+     ├─ sema/google-calendar-readonly-sync      (next)
+     ├─ sema/outlook-calendar-readonly-sync
+     ├─ sema/sema-meet-scheduling-l1
+     └─ sema/rsvp-reminders-imip
+```
+
+Each sub-branch is cut from `feature/sema-calendar-mail`'s current tip, stays open days not weeks, and merges back via PR before the next one is cut. `feature/sema-calendar-mail` only merges to `main` at a real Phase exit gate (§18 of the spec), not continuously.
+
+**Work Graph and Policy Engine are explicitly deferred**, confirmed again this session — Phase 1 is L0/L1 only (suggest/observe), so there is no agent mutation yet to govern. Building the graph/policy substrate now would be premature; it lands in Phase 2 when Action Review Queue and L2+ actions actually need it. Before writing code for any new slice: check this file and `app/connect/` for something to extend before adding something new (the repo already has audit, events/outbox, tenancy, and idempotency — governed features should reuse those, not fork parallel ones).
+
+## 5. Slice 1 — Provider Connection Token Vault (done)
+
+Minimal OAuth token vault, scoped to unblock every later calendar/mail slice (nothing can sync without a stored, encrypted provider token). Branch: `sema/provider-connections-token-vault`.
+
+**Reused as-is:** `ConnectBase`, `uuid7_str`, `TenantContext`/`resolve_tenant`, `EventEnvelope`, `audit.log`, `events/outbox.enqueue`, `events/bus.publish`, the `session_service` module shape (`models.py`/`service.py`/`api.py`), the `connect_v3_*.sql` RLS/trigger idioms. `cryptography` and `httpx` were already transitive deps (via `python-jose[cryptography]` and `anthropic`) — made explicit in `requirements.txt` rather than added new.
+
+**Built new (had no analog in the repo):**
+- `server/migrations/connect_v3_002_provider_connections.sql` — `connect_provider_connections` table (RLS + touch trigger, same pattern as `connect_v3_001_init.sql`). **Not yet run against any database** — same "runs once as a dedicated job" convention as the init migration; needs an operator to apply it.
+- `app/connect/shared/crypto.py` — Fernet envelope encryption for refresh/access tokens, keyed by a new `TOKEN_VAULT_KEY` setting. This is the Phase 1 stopgap referenced in open question #3 above (§7.4 in the spec wants HSM/KMS — that's a later hardening pass, not blocking Phase 1).
+- `app/connect/provider_connections/` — `models.py`, `service.py` (`connect_provider`, `list_connections`, `disconnect_provider`), `api.py` (`POST /api/connect/provider-connections`, `GET .../provider-connections`, `DELETE .../provider-connections/{provider}`), `adapters/google.py` (authorization-code → token exchange + userinfo lookup, isolated so calendar sync's adapter can follow the same shape).
+- New config fields: `token_vault_key`, `google_calendar_client_id/secret/redirect_uri`.
+- New event types: `provider_connection.connected.v1`, `provider_connection.disconnected.v1`.
+
+**Explicitly not built in this slice:** token refresh-on-expiry logic, Microsoft adapter (rejected with a 400 for now — table/API accept the value, adapter doesn't exist yet), any calendar sync itself. Those are the next slices.
+
+**Follow-ups before this is usable end-to-end (not done this session):**
+1. Run `connect_v3_002_provider_connections.sql` against a real Postgres instance.
+2. Generate a `TOKEN_VAULT_KEY` (`Fernet.generate_key()`) and set it in env — without it, `crypto.encrypt`/`decrypt` raise `TokenVaultMisconfigured` rather than silently storing plaintext.
+3. Register a Google Cloud OAuth app with Calendar API scopes and set `google_calendar_client_id/secret/redirect_uri` — this is separate from whatever OAuth app (if any) backs today's login flow, and is the same registration this file's open question #2 already flagged.
+4. Local dev note, unrelated to this code: `server/venv/` on this machine is a stale copy from another contributor's machine (hardcoded paths, missing `python.exe`) — recreate it fresh (`python -m venv venv`) before running the server locally.

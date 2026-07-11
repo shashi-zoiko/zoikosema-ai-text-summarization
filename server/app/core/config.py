@@ -118,6 +118,18 @@ class Settings(BaseSettings):
     # Redis (control-plane fanout + idempotency cache)
     redis_url: str = ""
 
+    # Sema Calendar & Mail — provider connection token vault (Phase 1 minimal
+    # form, see architecture/SEMA_CALENDAR_MAIL_CONTEXT.md open question #3).
+    # Fernet key (Fernet.generate_key()); empty in dev disables encrypt/decrypt
+    # by raising, so a missing key fails loudly instead of storing plaintext.
+    token_vault_key: str = ""
+
+    # Google Calendar OAuth app (distinct from the login-OAuth app, if any —
+    # this one requests Calendar API scopes, not identity scopes).
+    google_calendar_client_id: str = ""
+    google_calendar_client_secret: str = ""
+    google_calendar_redirect_uri: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

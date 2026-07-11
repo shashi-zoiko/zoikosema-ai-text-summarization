@@ -30,3 +30,7 @@ CONVERSATION_MEMBER_REMOVED = "conversation.member.removed.v1"
 PRESENCE_CHANGED = "presence.changed.v1"
 TYPING_STARTED = "typing.started.v1"
 TYPING_STOPPED = "typing.stopped.v1"
+
+# Provider connection plane (Sema Calendar & Mail, spec §7.4)
+PROVIDER_CONNECTION_CONNECTED = "provider_connection.connected.v1"
+PROVIDER_CONNECTION_DISCONNECTED = "provider_connection.disconnected.v1"
