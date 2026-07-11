@@ -147,17 +147,30 @@ Spec §4 L1 ("Suggest"): compute free/busy slots for the current user, never wri
 
 ## 9. Session status (as of 2026-07-11, end of this working session)
 
-Slices 1-4 are built, committed, and merged into `feature/sema-calendar-mail` (pushed to `upstream/feature/sema-calendar-mail`, currently at `04cec5b0`). Local slice branches (`sema/provider-connections-token-vault`, `sema/google-calendar-readonly-sync`, `sema/outlook-calendar-readonly-sync`, `sema/sema-meet-scheduling-l1`) are left in place, not deleted — harmless to keep, useful if anyone wants to review a single slice's diff in isolation.
+Slices 1-4 are built, committed, merged into `feature/sema-calendar-mail`, and **verified end-to-end against a real Postgres database** (Supabase dev project, session-pooler connection) — not just syntax-checked. `feature/sema-calendar-mail` is at `b2615a3c` on `upstream`. Local slice branches are left in place, not deleted.
 
-**What Phase 1 (§2's scope list) still needs**, in the same agile one-slice-at-a-time style:
+### What got verified, and how
+
+A one-off manual integration script (not committed — lived in a scratch dir) exercised the real code paths with the Google/Outlook HTTP calls mocked (no real OAuth credentials exist yet, see follow-up #3 below): created a provider connection, confirmed the token round-trips through `crypto.encrypt`/`decrypt` correctly, confirmed the audit row and outbox event were written, ran `sync_calendar` and confirmed a `connect_calendar_events` row was created from the mocked response, created a legacy `Meeting` fixture, and confirmed `suggest_available_slots` correctly excluded both the synced event and the meeting's assumed 60-minute block from the free slots. Then `disconnect_provider` and confirmed tokens were purged. All assertions passed. Test rows were cleaned up afterward (audit rows deliberately left — append-only by design, can't be deleted, harmless).
+
+### Two real, pre-existing bugs found while doing this — both fixed, neither caused by Sema code
+
+1. **`server/venv/` was tracked in git** (~5000 files, committed before `.gitignore` excluded it — gitignore doesn't retroactively untrack). Every branch switch that touched a locally-rebuilt venv silently reverted tracked files back to another contributor's machine-specific build, corrupting the venv. Fixed with `git rm -r --cached server/venv/` on `feature/sema-calendar-mail` (commit `b2615a3c`) — turned out `main` already had the equivalent fix from an earlier, unrelated PR (`668bcd0`), which `feature/sema-calendar-mail` had branched off *before* that fix landed, so only the Sema branch needed it.
+2. **`SessionMember.session_id` was missing its `ForeignKey` declaration** in `app/connect/session_service/models.py` — the database already has the real FK (`connect_v3_001_init.sql:202`), but the SQLAlchemy model didn't declare it, which broke `Session.members`' relationship configuration the moment *any* `connect_v3` model was queried (SQLAlchemy configures mappers registry-wide, not per-class) — meaning every read against the entire `connect_v3` plane, Sema or not, was silently broken until this integration test surfaced it. Fixed on its own branch off `main`, `fix/session-member-missing-fk` (commit `10a1d868`, pushed to `upstream`, not yet merged to `main` — needs a PR).
+
+### What Phase 1 (§2's scope list) still needs, in the same agile one-slice-at-a-time style
+
 - `sema/rsvp-reminders-imip` — extend the existing `.ics` generator (`app/core/calendar.py`) and reminder job (`app/core/meeting_reminders.py`) for calendar-sourced events, per §2's original scope. Not started.
 - Admin consent UI/flow for connecting a provider (today it's API-only: `POST /api/connect/provider-connections` expects an already-obtained `authorization_code` — nothing generates the Google/Microsoft consent-screen redirect URL yet).
 - Read-only ZoikoTime availability signal, still gated on open question #1 in §3 (stub behind a feature flag, default off) — not started, not blocking anything built so far.
 
-**What is NOT done and should not be started next** (still correctly deferred per §4's doctrine): Work Graph, Policy Engine, Action Review Queue, any L2+ autonomy, Mail Connect, DLP. Nothing built this session needed them, which is itself evidence the phasing call was right.
+**What is NOT done and should not be started next** (still correctly deferred per §4's doctrine): Work Graph, Policy Engine, Action Review Queue, any L2+ autonomy, Mail Connect, DLP. Nothing built or tested this session needed them, which is itself evidence the phasing call was right.
 
-**Cross-cutting follow-ups accumulated across all 4 slices** (nobody has done these yet — needed before any of this runs for real, not just slice 4's local concern):
-1. Run all three migrations in order: `connect_v3_002_provider_connections.sql`, `connect_v3_003_calendar_events.sql` (§1's `connect_v3_001_init.sql` is presumably already applied).
-2. Generate and set `TOKEN_VAULT_KEY`.
-3. Register both a Google Cloud OAuth app (Calendar scope) and an Azure AD app (`Calendars.Read`/`User.Read`/`offline_access`), set the resulting 7 config values (`google_calendar_*` ×3, `microsoft_calendar_*` ×4).
-4. Recreate `server/venv` fresh on this machine — every slice this session was syntax-checked with `py_compile` and, where the logic was non-trivial (the availability merge algorithm), with a standalone reproduction outside the app — but none were run through the actual FastAPI/DB stack, because the venv can't import `psycopg2`/run at all right now.
+### Remaining follow-ups (updated — most of §5/§6/§7's original list is now done)
+
+1. ~~Run migrations~~ — done, against the Supabase dev DB (`connect_v3_001/002/003` all applied, plus `init_db()` for legacy tables).
+2. ~~Generate `TOKEN_VAULT_KEY`~~ — done, in `server/.env` (gitignored, not committed).
+3. **Still open:** register a real Google Cloud OAuth app (Calendar scope) and a real Azure AD app (`Calendars.Read`/`User.Read`/`offline_access`), set the resulting 7 config values (`google_calendar_*` ×3, `microsoft_calendar_*` ×4) in `.env`. Nothing built so far has been tested against a real Google/Microsoft account — only against mocked adapter responses. The `authorization_code` → token exchange and the actual OAuth consent screen both need a human in a browser regardless of credentials; that step can't be automated.
+4. ~~Recreate `server/venv`~~ — done, and the git-tracking issue that kept breaking it is fixed (see bug #1 above).
+5. **New:** get `fix/session-member-missing-fk` reviewed and merged to `main` — it's a correctness fix for existing, non-Sema code and shouldn't wait on Sema's own phase gate.
+6. The Supabase dev DB used for this session's testing now has a `TOKEN_VAULT_KEY`-encrypted-nothing-real-yet schema applied (empty of real data, test rows cleaned up) — fine to keep using for further slice development, but the password that was shared in chat to set it up should be rotated from the Supabase dashboard as routine hygiene.
