@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
-  AlertTriangle, ArrowLeft, Brain, CheckCircle2, ChevronRight, Clock, Copy,
+  AlertTriangle, ArrowLeft, Brain, CheckCircle2, ChevronRight, Copy,
   Download, FileText, GitMerge, Lightbulb, ListChecks, Loader2, Mic, Pencil,
-  Plus, RefreshCw, Save, ShieldAlert, Sparkles, Target, Trash2, TrendingUp,
+  Plus, Printer, RefreshCw, Save, ShieldAlert, Sparkles, Target, Trash2, TrendingUp,
   Users2, X, Zap,
 } from 'lucide-react'
 
@@ -175,6 +175,84 @@ function transcriptToMarkdown(meetingTitle, code, payload) {
   return lines.join('\n')
 }
 
+function intelToHtmlDoc(meetingTitle, code, payload) {
+  if (!payload) return ''
+  const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  const parts = [`<h1>${esc(meetingTitle || 'Meeting')} — Intelligence</h1><p><em>${esc(code)}</em></p>`]
+  if (payload.tldr) parts.push(`<h2>TL;DR</h2><p>${esc(payload.tldr)}</p>`)
+  if (payload.action_items?.length) {
+    parts.push('<h2>Action Items</h2><ul>')
+    for (const a of payload.action_items) parts.push(`<li>${esc(a.task)}${a.owner ? ` <em>(${esc(a.owner)})</em>` : ''}</li>`)
+    parts.push('</ul>')
+  }
+  if (payload.decisions?.length) {
+    parts.push('<h2>Decisions</h2><ul>')
+    for (const d of payload.decisions) parts.push(`<li><strong>${esc(d.title)}</strong>${d.detail ? ` — ${esc(d.detail)}` : ''}</li>`)
+    parts.push('</ul>')
+  }
+  if (payload.risks?.length) {
+    parts.push('<h2>Risks</h2><ul>')
+    for (const r of payload.risks) parts.push(`<li>${r.severity ? `<strong>[${esc(r.severity)}]</strong> ` : ''}${esc(r.title)}${r.rationale ? ` — ${esc(r.rationale)}` : ''}</li>`)
+    parts.push('</ul>')
+  }
+  if (payload.topics?.length) {
+    parts.push('<h2>Topics</h2><ol>')
+    for (const t of payload.topics) parts.push(`<li><strong>${esc(t.title)}</strong>${t.summary ? `<br/>${esc(t.summary)}` : ''}</li>`)
+    parts.push('</ol>')
+  }
+  const s = payload.score || {}
+  if (s.overall != null) {
+    parts.push(`<h2>Score</h2><p>Overall: ${s.overall}/100 | Productivity: ${s.productivity}/100 | Clarity: ${s.clarity}/100 | Decision speed: ${s.decision_speed}/100 | Participation: ${s.participation}/100</p>`)
+  }
+  if (payload.knowledge_nuggets?.length) {
+    parts.push('<h2>Knowledge Nuggets</h2><ul>')
+    for (const n of payload.knowledge_nuggets) parts.push(`<li>${esc(n)}</li>`)
+    parts.push('</ul>')
+  }
+  return htmlWrap(parts.join('\n'))
+}
+
+function transcriptToHtmlDoc(meetingTitle, code, payload) {
+  if (!payload) return ''
+  const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  const parts = [`<h1>${esc(payload.title || meetingTitle || 'Meeting')} — Summary</h1><p><em>${esc(code)}</em></p>`]
+  if (payload.summary) parts.push(`<p>${esc(payload.summary)}</p>`)
+  if (payload.key_takeaways?.length) {
+    parts.push('<h2>Key Takeaways</h2><ul>')
+    for (const t of payload.key_takeaways) {
+      parts.push(`<li>${t.assignee ? `<strong>${esc(t.assignee)}:</strong> ` : ''}${esc(t.text)}</li>`)
+    }
+    parts.push('</ul>')
+  }
+  return htmlWrap(parts.join('\n'))
+}
+
+function htmlWrap(body) {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Meeting Summary</title>
+<style>
+body{font-family:Calibri,Helvetica,Arial,sans-serif;max-width:800px;margin:2em auto;padding:0 1em;color:#1a1a1a;line-height:1.6}
+h1{font-size:24px;border-bottom:2px solid #ddd;padding-bottom:8px}
+h2{font-size:18px;margin-top:24px;color:#333}
+p,li{font-size:14px}
+ul,ol{padding-left:24px}
+em{color:#666}
+strong{color:#000}
+</style>
+</head>
+<body>${body}</body></html>`
+}
+
+function downloadBlob(content, filename, mime) {
+  const blob = new Blob([content], { type: mime })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}
+
 function EmptyState({ icon, title, hint }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--c-line)] bg-[var(--c-bg-2)]/40 px-4 py-8 text-center">
@@ -300,13 +378,13 @@ function TranscriptSummaryView({
       <p className="mt-4 text-[14px] leading-relaxed text-[var(--c-fg-dim)]">
         {payload.summary || 'No summary produced.'}
       </p>
-      <h3 className="mb-3 mt-8 text-[11px] font-semibold uppercase tracking-[0.10em] text-[var(--c-fg-muted)]">
+      <h3 className="mb-4 mt-12 text-[11px] font-semibold uppercase tracking-[0.10em] text-[var(--c-fg-muted)]">
         Key Takeaways
       </h3>
       {(payload.key_takeaways?.length || 0) === 0 ? (
         <EmptyState icon={<ListChecks className="h-4 w-4" />} title="Nothing captured" hint="No action items, decisions, or important points were identified." />
       ) : (
-        <ul className="space-y-2.5">
+        <ul className="space-y-3">
           {payload.key_takeaways.map((item, i) => (
             <li key={i} className="flex gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)]/40 p-3 text-[14px] leading-relaxed">
               <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--c-accent)]" />
@@ -389,24 +467,38 @@ export default function MeetingIntelligence() {
   const status = intel?.status
   const isTranscript = intel?.source === 'transcript'
 
+  const slug = `${(intel?.meeting_title || code || 'meeting').replace(/[^a-z0-9-_]+/gi, '-').toLowerCase()}-${isTranscript ? 'summary' : 'intelligence'}`
+
   const exportMarkdown = (download) => {
     const md = isTranscript
       ? transcriptToMarkdown(intel?.meeting_title, code, payload)
       : intelToMarkdown(intel?.meeting_title, code, payload)
     if (!md) return
     if (download) {
-      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `${(intel?.meeting_title || code || 'meeting')
-        .replace(/[^a-z0-9-_]+/gi, '-')
-        .toLowerCase()}-${isTranscript ? 'summary' : 'intelligence'}.md`
-      a.click()
-      // Defer revoke so the click actually fires the download in Chromium.
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+      downloadBlob(md, `${slug}.md`, 'text/markdown;charset=utf-8')
     } else {
       navigator.clipboard?.writeText(md)
     }
+  }
+
+  const exportDoc = () => {
+    const html = isTranscript
+      ? transcriptToHtmlDoc(intel?.meeting_title, code, payload)
+      : intelToHtmlDoc(intel?.meeting_title, code, payload)
+    if (html) downloadBlob(html, `${slug}.doc`, 'application/msword')
+  }
+
+  const exportPdf = () => {
+    const html = isTranscript
+      ? transcriptToHtmlDoc(intel?.meeting_title, code, payload)
+      : intelToHtmlDoc(intel?.meeting_title, code, payload)
+    if (!html) return
+    const w = window.open('', '_blank')
+    if (!w) return
+    w.document.write(html)
+    w.document.close()
+    w.focus()
+    w.print()
   }
 
   const startEdit = () => {
@@ -479,12 +571,7 @@ export default function MeetingIntelligence() {
           <Badge tone="accent" size="md">
             <Brain className="h-3 w-3" /> {isTranscript ? 'Meeting Summary' : 'Meeting Intelligence'}
           </Badge>
-          {intel?.source && (
-            <Badge tone="neutral" size="sm">source: {intel.source}</Badge>
-          )}
-          {intel?.model_used && (
-            <Badge tone="neutral" size="sm">model: {intel.model_used}</Badge>
-          )}
+
           {status === 'ready' && (
             <Badge tone="success" size="sm"><CheckCircle2 className="h-3 w-3" /> Ready</Badge>
           )}
@@ -517,9 +604,17 @@ export default function MeetingIntelligence() {
                   <Button variant="outline" onClick={startEdit} leftIcon={<Pencil className="h-4 w-4" />}>
                     Edit
                   </Button>
-                  <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
-                    Download
-                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
+                      .md
+                    </Button>
+                    <Button variant="outline" onClick={exportDoc} leftIcon={<Download className="h-4 w-4" />}>
+                      .doc
+                    </Button>
+                    <Button variant="outline" onClick={exportPdf} leftIcon={<Printer className="h-4 w-4" />}>
+                      PDF
+                    </Button>
+                  </div>
                 </>
               )
             )
@@ -538,19 +633,20 @@ export default function MeetingIntelligence() {
                   <Button variant="outline" onClick={() => exportMarkdown(false)} leftIcon={<Copy className="h-4 w-4" />}>
                     Copy as markdown
                   </Button>
-                  <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
-                    Download .md
-                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
+                      .md
+                    </Button>
+                    <Button variant="outline" onClick={exportDoc} leftIcon={<Download className="h-4 w-4" />}>
+                      .doc
+                    </Button>
+                    <Button variant="outline" onClick={exportPdf} leftIcon={<Printer className="h-4 w-4" />}>
+                      PDF
+                    </Button>
+                  </div>
                 </>
               )}
             </>
-          )}
-          {intel?.latency_ms != null && (
-            <span className="text-[11.5px] text-[var(--c-fg-muted)]">
-              <Clock className="mr-1 inline h-3 w-3" />
-              {intel.latency_ms} ms
-              {intel.input_tokens != null && ` · ${intel.input_tokens}→${intel.output_tokens} tokens`}
-            </span>
           )}
         </motion.div>
 

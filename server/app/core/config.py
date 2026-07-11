@@ -1,9 +1,14 @@
 from functools import lru_cache
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parent.parent.parent / ".env",
+        extra="ignore",
+    )
 
     database_url: str = "postgresql+psycopg2://zoiko:zoiko_dev@localhost:5432/zoiko"
     # SQLAlchemy connection-pool sizing (Postgres only). Sized for a single

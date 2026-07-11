@@ -635,21 +635,6 @@ async def issue_media_token(
     Lazy-provisions the LiveKit room on first call.
     """
     settings = get_settings()
-    if settings.media_provider.lower() != "livekit":
-        # The lobby falls back to the mesh room when this 503s and the
-        # meeting's media_provider is not 'livekit'; this only fires when
-        # someone deep-links /room-lk on a deployment that hasn't enabled
-        # the SFU yet. Keep the detail actionable so the failure mode
-        # surfaces in admin/support tickets instead of a generic 500.
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "LiveKit is not enabled in this environment. "
-                "Set MEDIA_PROVIDER=livekit + LIVEKIT_* credentials on the "
-                "server (see infra/livekit/README.md) to enable the SFU room."
-            ),
-        )
-
     meeting = _get_meeting_or_404(code, db)
     if not meeting.is_active:
         raise HTTPException(status_code=410, detail="Meeting has ended")
