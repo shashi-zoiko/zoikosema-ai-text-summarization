@@ -34,3 +34,6 @@ TYPING_STOPPED = "typing.stopped.v1"
 # Provider connection plane (Sema Calendar & Mail, spec §7.4)
 PROVIDER_CONNECTION_CONNECTED = "provider_connection.connected.v1"
 PROVIDER_CONNECTION_DISCONNECTED = "provider_connection.disconnected.v1"
+
+# Calendar plane (Sema Calendar & Mail, spec §12.2)
+CALENDAR_SYNC_COMPLETED = "calendar.sync.completed.v1"

@@ -59,8 +59,8 @@ Working agile, one small slice at a time, not a big-bang build:
 main
  └─ feature/sema-calendar-mail        (epic branch — everything Sema lands here first)
      ├─ sema/provider-connections-token-vault   (done — see §5)
-     ├─ sema/google-calendar-readonly-sync      (next)
-     ├─ sema/outlook-calendar-readonly-sync
+     ├─ sema/google-calendar-readonly-sync      (done — see §6)
+     ├─ sema/outlook-calendar-readonly-sync     (next)
      ├─ sema/sema-meet-scheduling-l1
      └─ sema/rsvp-reminders-imip
 ```
@@ -89,3 +89,22 @@ Minimal OAuth token vault, scoped to unblock every later calendar/mail slice (no
 2. Generate a `TOKEN_VAULT_KEY` (`Fernet.generate_key()`) and set it in env — without it, `crypto.encrypt`/`decrypt` raise `TokenVaultMisconfigured` rather than silently storing plaintext.
 3. Register a Google Cloud OAuth app with Calendar API scopes and set `google_calendar_client_id/secret/redirect_uri` — this is separate from whatever OAuth app (if any) backs today's login flow, and is the same registration this file's open question #2 already flagged.
 4. Local dev note, unrelated to this code: `server/venv/` on this machine is a stale copy from another contributor's machine (hardcoded paths, missing `python.exe`) — recreate it fresh (`python -m venv venv`) before running the server locally.
+
+## 6. Slice 2 — Google Calendar read-only sync (done)
+
+Full-pull sync (no incremental syncToken yet) over a fixed window (7 days back, 90 days forward), using slice 1's token vault. Branch: `sema/google-calendar-readonly-sync`.
+
+**Reused as-is:** everything from slice 1's reuse list, plus `ProviderConnection` itself (loaded, not duplicated) and `provider_connections/adapters/google.py` (extended in place with `refresh_access_token()` and `list_events()`, rather than starting a second Google adapter file).
+
+**Built new:**
+- `server/migrations/connect_v3_003_calendar_events.sql` — `connect_calendar_events` (plain synced-data table, RLS + touch trigger; FK to `connect_provider_connections`). **Not yet run.**
+- `app/connect/calendar_service/` — `models.py`, `service.py` (`sync_calendar`, `list_calendar_events`), `api.py` (`POST /api/connect/calendar/sync`, `GET .../calendar/events`).
+- Access-token refresh-on-demand (`_ensure_valid_access_token` in `calendar_service/service.py`) — the thing slice 1 explicitly deferred. Kept local to this module rather than promoted to a shared helper since it has exactly one caller today; extract if/when a second consumer needs it.
+- New event type: `calendar.sync.completed.v1` — one per sync run, not per event. Per-event `calendar.event.synced.v1` (which §1's table above anticipated) was deliberately **not** added: nothing subscribes to per-event fanout yet (no Work Graph, no live UI), and Google sync windows can return hundreds of events, so it would be pure write volume with no reader. Add it when a real consumer needs it.
+
+**Explicitly not built in this slice:** incremental sync via `syncToken` (§7.1's 410-Gone-triggers-full-resync requirement), push notification channels/webhooks, Outlook adapter, timezone-aware display beyond raw UTC storage, any UI.
+
+**Follow-ups before this is usable end-to-end:**
+1. Run `connect_v3_003_calendar_events.sql` (after `connect_v3_002_...`, migrations are ordered).
+2. Same 3 provider/vault follow-ups from §5 still apply — this slice is unusable without a real Google OAuth app and `TOKEN_VAULT_KEY`.
+3. `all_day` events currently store midnight-UTC as `start_at`/`end_at` (see `_parse_when` docstring in `adapters/google.py`) — fine for storage, but any client rendering must branch on `all_day` rather than trusting the instant.

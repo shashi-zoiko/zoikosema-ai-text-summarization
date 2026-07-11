@@ -1,14 +1,14 @@
-"""Google Calendar OAuth adapter — authorization-code exchange only.
+"""Google Calendar OAuth + Calendar API adapter.
 
 Provider-specific network calls live here and nowhere else in this module;
-service.py talks to this through `exchange_code()`, not to Google directly.
-Calendar sync itself (the next slice) adds its own adapter file alongside
-this one following the same shape.
+service.py talks to this through `exchange_code()` / `refresh_access_token()`
+/ `list_events()`, not to Google directly.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import httpx
 
@@ -17,6 +17,7 @@ from app.core.config import get_settings
 
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 
 
 @dataclass(frozen=True)
@@ -64,3 +65,97 @@ async def exchange_code(code: str) -> ExchangedTokens:
         scopes=token_data.get("scope", "").split(),
         account_email=account_email,
     )
+
+
+@dataclass(frozen=True)
+class RefreshedAccessToken:
+    access_token: str
+    access_token_expires_at: datetime
+
+
+async def refresh_access_token(refresh_token: str) -> RefreshedAccessToken:
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(_TOKEN_URL, data={
+            "refresh_token": refresh_token,
+            "client_id": settings.google_calendar_client_id,
+            "client_secret": settings.google_calendar_client_secret,
+            "grant_type": "refresh_token",
+        })
+    if resp.status_code != 200:
+        raise Invalid(f"Google token refresh failed: {resp.text}")
+    data = resp.json()
+    return RefreshedAccessToken(
+        access_token=data["access_token"],
+        access_token_expires_at=datetime.now(timezone.utc) + timedelta(seconds=data["expires_in"]),
+    )
+
+
+@dataclass(frozen=True)
+class RawEvent:
+    provider_event_id: str
+    title: str | None
+    description: str | None
+    location: str | None
+    start_at: datetime | None
+    end_at: datetime | None
+    all_day: bool
+    status: str
+    attendees: list[dict[str, Any]]
+
+
+def _parse_when(when: dict[str, Any]) -> tuple[datetime | None, bool]:
+    if "date" in when:
+        # All-day events give a bare date, not a dateTime; midnight UTC is a
+        # placeholder — display code must treat all_day events specially,
+        # not read start_at as a real instant.
+        return datetime.fromisoformat(when["date"]).replace(tzinfo=timezone.utc), True
+    if "dateTime" in when:
+        return datetime.fromisoformat(when["dateTime"]), False
+    return None, False
+
+
+_STATUS_MAP = {"confirmed": "confirmed", "tentative": "tentative", "cancelled": "cancelled"}
+
+
+async def list_events(access_token: str, *, time_min: datetime, time_max: datetime) -> list[RawEvent]:
+    events: list[RawEvent] = []
+    page_token: str | None = None
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        while True:
+            params = {
+                "timeMin": time_min.isoformat(),
+                "timeMax": time_max.isoformat(),
+                "singleEvents": "true",
+                "orderBy": "startTime",
+                "maxResults": "250",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = await client.get(
+                _EVENTS_URL, params=params, headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code != 200:
+                raise Invalid(f"Google Calendar list events failed: {resp.text}")
+            data = resp.json()
+            for item in data.get("items", []):
+                start_at, all_day = _parse_when(item.get("start", {}))
+                end_at, _ = _parse_when(item.get("end", {}))
+                events.append(RawEvent(
+                    provider_event_id=item["id"],
+                    title=item.get("summary"),
+                    description=item.get("description"),
+                    location=item.get("location"),
+                    start_at=start_at,
+                    end_at=end_at,
+                    all_day=all_day,
+                    status=_STATUS_MAP.get(item.get("status", "confirmed"), "confirmed"),
+                    attendees=[
+                        {"email": a.get("email"), "response_status": a.get("responseStatus")}
+                        for a in item.get("attendees", [])
+                    ],
+                ))
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+    return events
