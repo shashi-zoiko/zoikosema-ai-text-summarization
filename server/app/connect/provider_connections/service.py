@@ -7,6 +7,11 @@ all inside one transaction.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+from jose import JWTError, jwt
+from sqlalchemy.orm import Session as DbSession
+
 from app.connect.audit import service as audit
 from app.connect.events import types as etypes
 from app.connect.events.bus import publish
@@ -15,11 +20,46 @@ from app.connect.provider_connections.adapters import get_adapter
 from app.connect.provider_connections.models import ProviderConnection
 from app.connect.shared import crypto
 from app.connect.shared.envelope import EventEnvelope
-from app.connect.shared.errors import NotFound
+from app.connect.shared.errors import Invalid, NotFound
 from app.connect.shared.ids import uuid7_str
 from app.connect.shared.telemetry import get_correlation_id
 from app.connect.shared.tenant import TenantContext
-from sqlalchemy.orm import Session as DbSession
+from app.core.config import get_settings
+
+# Distinguishes an OAuth-state token from a real auth access/refresh token
+# signed with the same jwt_secret, so one can never be replayed as the other.
+_STATE_PURPOSE = "provider_oauth_state"
+_STATE_TTL = timedelta(minutes=10)
+
+
+def create_oauth_state(user_id: int, provider: str) -> str:
+    """Sign a short-lived, single-purpose state token for the OAuth redirect
+    round-trip. The callback (a plain browser redirect from Google/Microsoft)
+    carries no Authorization header, so this token — not a bearer token — is
+    what lets /callback recover which user/provider initiated the connect,
+    while also acting as the CSRF-protecting `state` param."""
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "provider": provider,
+        "purpose": _STATE_PURPOSE,
+        "iat": now,
+        "exp": now + _STATE_TTL,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def verify_oauth_state(state: str, *, expected_provider: str) -> int:
+    """Decode+verify a state token, returning the user_id it was issued for."""
+    settings = get_settings()
+    try:
+        payload = jwt.decode(state, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except JWTError as exc:
+        raise Invalid("Invalid or expired OAuth state") from exc
+    if payload.get("purpose") != _STATE_PURPOSE or payload.get("provider") != expected_provider:
+        raise Invalid("Invalid or expired OAuth state")
+    return int(payload["sub"])
 
 
 async def connect_provider(

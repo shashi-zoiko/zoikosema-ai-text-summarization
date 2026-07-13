@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -22,10 +23,34 @@ from app.core.config import get_settings
 
 _AUTHORITY = "https://login.microsoftonline.com"
 _GRAPH = "https://graph.microsoft.com/v1.0"
+# Read-only per Phase 1 scope (CONTEXT.md §2) — used consistently across
+# authorize/exchange/refresh so a scope drift can't leave a token that was
+# granted one set of permissions but requested to refresh with another.
+_SCOPE = "offline_access Calendars.Read User.Read"
 
 
 def _token_url(tenant: str) -> str:
     return f"{_AUTHORITY}/{tenant}/oauth2/v2.0/token"
+
+
+def _authorize_url(tenant: str) -> str:
+    return f"{_AUTHORITY}/{tenant}/oauth2/v2.0/authorize"
+
+
+def build_authorization_url(state: str) -> str:
+    """Build the Microsoft consent-screen redirect URL for the admin-consent flow."""
+    settings = get_settings()
+    if not (settings.microsoft_calendar_client_id and settings.microsoft_calendar_redirect_uri):
+        raise Invalid("Microsoft Calendar OAuth app is not configured")
+    params = {
+        "client_id": settings.microsoft_calendar_client_id,
+        "redirect_uri": settings.microsoft_calendar_redirect_uri,
+        "response_type": "code",
+        "response_mode": "query",
+        "scope": _SCOPE,
+        "state": state,
+    }
+    return f"{_authorize_url(settings.microsoft_calendar_tenant)}?{urlencode(params)}"
 
 
 async def exchange_code(code: str) -> ExchangedTokens:
@@ -40,7 +65,7 @@ async def exchange_code(code: str) -> ExchangedTokens:
             "client_secret": settings.microsoft_calendar_client_secret,
             "redirect_uri": settings.microsoft_calendar_redirect_uri,
             "grant_type": "authorization_code",
-            "scope": "offline_access Calendars.Read User.Read",
+            "scope": _SCOPE,
         })
         if token_resp.status_code != 200:
             raise Invalid(f"Microsoft token exchange failed: {token_resp.text}")
@@ -75,7 +100,7 @@ async def refresh_access_token(refresh_token: str) -> RefreshedAccessToken:
             "client_id": settings.microsoft_calendar_client_id,
             "client_secret": settings.microsoft_calendar_client_secret,
             "grant_type": "refresh_token",
-            "scope": "offline_access Calendars.Read User.Read",
+            "scope": _SCOPE,
         })
     if resp.status_code != 200:
         raise Invalid(f"Microsoft token refresh failed: {resp.text}")

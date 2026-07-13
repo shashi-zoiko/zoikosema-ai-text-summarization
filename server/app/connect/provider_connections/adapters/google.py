@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -19,9 +20,35 @@ from app.connect.provider_connections.adapters.shared import (
 from app.connect.shared.errors import Invalid
 from app.core.config import get_settings
 
+_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 _EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+# Read-only per Phase 1 scope (CONTEXT.md §2) — sync never writes to Google.
+_SCOPE = "openid email https://www.googleapis.com/auth/calendar.readonly"
+
+
+def build_authorization_url(state: str) -> str:
+    """Build the Google consent-screen redirect URL for the admin-consent flow.
+
+    access_type=offline + prompt=consent are required so Google actually
+    returns a refresh_token — without them a returning user (who already
+    granted consent once) gets none, which is exactly the failure
+    exchange_code() already guards against.
+    """
+    settings = get_settings()
+    if not (settings.google_calendar_client_id and settings.google_calendar_redirect_uri):
+        raise Invalid("Google Calendar OAuth app is not configured")
+    params = {
+        "client_id": settings.google_calendar_client_id,
+        "redirect_uri": settings.google_calendar_redirect_uri,
+        "response_type": "code",
+        "scope": _SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    }
+    return f"{_AUTHORIZE_URL}?{urlencode(params)}"
 
 
 async def exchange_code(code: str) -> ExchangedTokens:
