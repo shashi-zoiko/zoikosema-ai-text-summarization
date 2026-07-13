@@ -626,14 +626,6 @@ export default function MeetingIntelligence() {
             )
           ) : (
             <>
-              <Button
-                variant="primary"
-                onClick={regenerate}
-                loading={generating}
-                leftIcon={<RefreshCw className="h-4 w-4" />}
-              >
-                {intel ? 'Regenerate' : 'Generate intelligence'}
-              </Button>
               {payload && status === 'ready' && (
                 <>
                   <Button variant="outline" onClick={() => exportMarkdown(false)} leftIcon={<Copy className="h-4 w-4" />}>
@@ -656,7 +648,7 @@ export default function MeetingIntelligence() {
           )}
         </motion.div>
 
-        {payload && status === 'ready' && !editing && (
+        {!editing && (
           <motion.div variants={fadeUp} className="mt-3 flex flex-wrap items-center gap-2">
             {hasTable && (
               <div className="flex items-center gap-0 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 p-0.5">
@@ -704,11 +696,9 @@ export default function MeetingIntelligence() {
                 <option value="russian">Russian</option>
               </select>
             </div>
-            {!isTranscript && (
-              <Button variant="outline" size="sm" onClick={regenerate} loading={generating} leftIcon={<RefreshCw className="h-3.5 w-3.5" />}>
-                {intel ? 'Regenerate' : 'Generate'}
-              </Button>
-            )}
+            <Button variant="outline" size="sm" onClick={regenerate} loading={generating} leftIcon={<RefreshCw className="h-3.5 w-3.5" />}>
+              {intel ? 'Regenerate' : 'Generate'}
+            </Button>
           </motion.div>
         )}
 
@@ -729,7 +719,7 @@ export default function MeetingIntelligence() {
           <Brain className="mx-auto mb-3 h-10 w-10 text-[var(--c-accent)]" />
           <div className="text-[16px] font-semibold tracking-tight">No intelligence yet</div>
           <div className="mt-1 text-[13px] text-[var(--c-fg-muted)]">
-            Click <span className="font-semibold">Generate intelligence</span> to analyze this meeting's chat log
+            Use the <span className="font-semibold">Generate</span> button above to analyze this meeting's chat log
             and surface decisions, action items, risks, and team sentiment.
           </div>
         </Card>
