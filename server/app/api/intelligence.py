@@ -76,14 +76,16 @@ def _is_host_or_cohost(meeting: Meeting, user: User, db: Session) -> bool:
 
 
 def _is_host_or_platform_admin(meeting: Meeting, user: User) -> bool:
-    """Strict gate for transcript-sourced summaries — host or platform admin
-    ONLY, deliberately excluding co-hosts and other participants (per the
-    product ask: not visible to other viewers). Unlike `_is_host_or_cohost`,
-    this never touches the DB (no MeetingParticipant lookup needed)."""
+    """Strict gate for CONTROLLING transcript-sourced summaries (generating,
+    editing) — host or platform admin ONLY, deliberately excluding co-hosts
+    and other participants (per the product ask: only the host/admin can
+    switch summarizing on or edit the result). Viewing is separate and open
+    to any attendee — see `_has_access`. Unlike `_is_host_or_cohost`, this
+    never touches the DB (no MeetingParticipant lookup needed)."""
     return meeting.host_id == user.id or _is_admin(user)
 
 
-def _intel_to_out(rec: MeetingIntelligence, meeting: Meeting) -> dict:
+def _intel_to_out(rec: MeetingIntelligence, meeting: Meeting, user: User) -> dict:
     return {
         "id": rec.id,
         "meeting_id": rec.meeting_id,
@@ -102,6 +104,7 @@ def _intel_to_out(rec: MeetingIntelligence, meeting: Meeting) -> dict:
         "completed_at": rec.completed_at,
         "meeting_code": meeting.code,
         "meeting_title": meeting.title,
+        "can_edit": _is_host_or_platform_admin(meeting, user),
     }
 
 
@@ -271,14 +274,18 @@ def get_intelligence(
 ):
     """Return the most recent intelligence row for the meeting, or null.
 
-    Access is source-aware: transcript-sourced rows (the post-meeting Groq
-    summary) are host/admin-only — not visible to co-hosts or other
-    participants — while chat-sourced rows keep the original any-participant
-    read access. We fetch the row first since the check depends on it.
+    Access: anyone who hosted or attended the meeting can read its summary,
+    regardless of source — someone who never joined gets a 403. Only
+    generating/editing a transcript-sourced summary stays host/admin-only
+    (see `_is_host_or_platform_admin`, used for the POST/PATCH routes and to
+    compute `can_edit` below).
     """
     meeting = db.scalar(select(Meeting).where(Meeting.code == code))
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if not _has_access(meeting, user, db):
+        raise HTTPException(status_code=403, detail="Not a participant of this meeting")
 
     rec = db.scalar(
         select(MeetingIntelligence)
@@ -287,17 +294,9 @@ def get_intelligence(
         .limit(1)
     )
     if not rec:
-        if not _has_access(meeting, user, db):
-            raise HTTPException(status_code=403, detail="Not a participant of this meeting")
         return None
 
-    if rec.source == INTEL_SOURCE_TRANSCRIPT:
-        if not _is_host_or_platform_admin(meeting, user):
-            raise HTTPException(status_code=403, detail="Only the host or an admin can view this summary")
-    elif not _has_access(meeting, user, db):
-        raise HTTPException(status_code=403, detail="Not a participant of this meeting")
-
-    return _intel_to_out(rec, meeting)
+    return _intel_to_out(rec, meeting, user)
 
 
 @router.post("/{code}/intelligence", response_model=MeetingIntelligenceOut, status_code=201)
@@ -311,10 +310,11 @@ def generate_intelligence(
 
     Two independent paths, chosen by whether `data.transcript` is present:
       - Transcript path (post-meeting spoken transcript → Groq): host or
-        platform admin ONLY — stricter than the chat path below, per the
-        product ask that this summary is not visible to other viewers.
-        Always generates fresh (no cache short-circuit — this only ever
-        fires once, automatically, when the host leaves).
+        platform admin ONLY — only the host/admin can switch summarizing on
+        for a meeting, per the product ask. Once generated, though, any
+        attendee can VIEW the result (see get_intelligence). Always
+        generates fresh (no cache short-circuit — this only ever fires once,
+        automatically, when the host leaves).
       - Chat path (unchanged): `data.chat_log` if supplied, else the latest
         recording's chat_log file. Hosts + co-hosts can generate; plain
         participants can re-fetch but not regenerate, to prevent token-burn
@@ -336,7 +336,7 @@ def generate_intelligence(
             requested_by_id=user.id,
             transcript=data.transcript,
         )
-        return _intel_to_out(intel, meeting)
+        return _intel_to_out(intel, meeting, user)
 
     if not _has_access(meeting, user, db):
         raise HTTPException(status_code=403, detail="Not a participant of this meeting")
@@ -360,7 +360,7 @@ def generate_intelligence(
             .limit(1)
         )
         if cached:
-            return _intel_to_out(cached, meeting)
+            return _intel_to_out(cached, meeting, user)
 
     intel = run_generation(
         db,
@@ -369,7 +369,7 @@ def generate_intelligence(
         participants=data.participants,
         requested_by_id=user.id,
     )
-    return _intel_to_out(intel, meeting)
+    return _intel_to_out(intel, meeting, user)
 
 
 @router.patch("/{code}/intelligence", response_model=MeetingIntelligenceOut)
@@ -416,7 +416,7 @@ def edit_intelligence(
 
     db.commit()
     db.refresh(rec)
-    return _intel_to_out(rec, meeting)
+    return _intel_to_out(rec, meeting, user)
 
 
 @router.get("/{code}/intelligence/history", response_model=list[MeetingIntelligenceOut])
@@ -439,7 +439,7 @@ def list_intelligence_history(
         .order_by(desc(MeetingIntelligence.created_at))
         .limit(25)
     ).all()
-    return [_intel_to_out(r, meeting) for r in rows]
+    return [_intel_to_out(r, meeting, user) for r in rows]
 
 
 # ── Action items (cross-meeting aggregation) ───────────────────────────────

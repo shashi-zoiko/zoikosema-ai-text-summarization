@@ -10,14 +10,20 @@ import { CaptionsControlContext, CaptionsLiveContext } from './useCaptions'
 // malformed/hostile payloads) and cap the length. Done as a codepoint scan to
 // keep the source ASCII-clean. React escapes the text on render too, so this is
 // belt-and-braces against injection.
-function sanitize(text) {
+function sanitize(text, maxLen = CAPTION_CONFIG.maxChars) {
   const s = String(text || '')
   let out = ''
-  for (let i = 0; i < s.length && out.length < CAPTION_CONFIG.maxChars; i++) {
+  for (let i = 0; i < s.length && out.length < maxLen; i++) {
     const code = s.charCodeAt(i)
     out += code < 32 || code === 127 ? ' ' : s[i]
   }
   return out.replace(/^\s+/, '')
+}
+
+// The Web Speech API returns fragments lowercase-first ("hello, how are
+// you") — capitalize so transcript lines read as proper sentences.
+function capitalize(text) {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text
 }
 
 // Flat map: speakerId -> { name, color, text, isFinal, ts }. One live caption
@@ -62,10 +68,10 @@ const FRAGMENT_MERGE_GAP_MS = 2000
  *   - `enabled` — the visible "CC" toggle (toolbar button, C/Shift+C
  *     shortcut, persisted to localStorage). Drives the on-screen caption
  *     bubble overlay (CaptionOverlay gates on this directly).
- *   - `summarizerCapturing` — toggled on/off from the Meet Summarizer panel,
- *     via `capturing`/`setCapturing` on the control context (both
- *     MeetingHeader and MeetSummaryPanel render inside this provider, so
- *     they read/drive it directly — no prop drilling needed). Feeds the
+ *   - `summarizerCapturing` — toggled on/off from the Meet Summarizer
+ *     popover, via `capturing`/`setCapturing` on the control context
+ *     (MeetingHeader renders inside this provider, so its SummarizerButton
+ *     reads/drives it directly — no prop drilling needed). Feeds the
  *     Conversations transcript. Never touches `enabled`, never persisted,
  *     and never makes the bubble overlay appear — that stays keyed to
  *     `enabled` alone.
@@ -138,10 +144,15 @@ export default function CaptionProvider({ children }) {
           // consecutive finals from the SAME speaker back into one line (when
           // they land close together) turns "shredded" fragments back into
           // readable sentences instead of one choppy line per fragment.
+          // Re-sanitize with the LINE cap, not the single-fragment `maxChars`
+          // cap — each fragment already passed that cap on ingest, but the
+          // merged line is many fragments long and re-applying the small
+          // per-fragment cap here would truncate (silently drop) everything
+          // said after the first ~300 characters of a continuous sentence.
           const merge = prev && prev.speakerId === speakerId && now - prev.ts < FRAGMENT_MERGE_GAP_MS
           const next = merge
-            ? [...lines.slice(0, -1), { ...prev, text: sanitize(`${prev.text} ${clean}`), ts: now }]
-            : [...lines, { speakerId, name: name || 'Guest', text: clean, ts: now }]
+            ? [...lines.slice(0, -1), { ...prev, text: sanitize(`${prev.text} ${clean}`, CAPTION_CONFIG.maxLineChars), ts: now }]
+            : [...lines, { speakerId, name: name || 'Guest', text: capitalize(clean), ts: now }]
           return next.length > MAX_TRANSCRIPT_LINES ? next.slice(next.length - MAX_TRANSCRIPT_LINES) : next
         })
       }

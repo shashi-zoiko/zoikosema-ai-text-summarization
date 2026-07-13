@@ -601,9 +601,11 @@ export default function MeetingIntelligence() {
             ) : (
               status === 'ready' && (
                 <>
-                  <Button variant="outline" onClick={startEdit} leftIcon={<Pencil className="h-4 w-4" />}>
-                    Edit
-                  </Button>
+                  {intel?.can_edit && (
+                    <Button variant="outline" onClick={startEdit} leftIcon={<Pencil className="h-4 w-4" />}>
+                      Edit
+                    </Button>
+                  )}
                   <div className="flex items-center gap-1.5">
                     <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
                       .md

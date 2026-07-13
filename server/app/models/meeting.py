@@ -42,6 +42,11 @@ class Meeting(Base):
     # Per-meeting permissions enforced server-side. Host + co-host bypass.
     chat_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     screenshare_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Meet Summarizer room-wide on/off, set by host/co-host (see signaling.py's
+    # "set-summarizer" WS handler). Broadcast to everyone so the header
+    # button's glow and status popover stay in sync across all participants,
+    # not just the one who toggled it — same pattern as `locked` above.
+    summarizer_on: Mapped[bool] = mapped_column(Boolean, default=False)
     # Meeting-wide visual theme id (see client roomThemes.js). Host/co-host set
     # it; broadcast to everyone so the whole room shares one ambient look.
     theme: Mapped[str] = mapped_column(String(24), default="forest")
