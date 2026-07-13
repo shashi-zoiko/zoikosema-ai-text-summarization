@@ -295,8 +295,13 @@ def send_meeting_cancelled_email(
     organizer_name: str,
     meeting_title: str,
     scheduled_at: str | None = None,
+    ics_data: bytes | None = None,
 ) -> bool:
-    """Notify an invitee that a scheduled meeting has been cancelled."""
+    """Notify an invitee that a scheduled meeting has been cancelled.
+
+    ``ics_data`` (a METHOD:CANCEL object matching the original invite's UID)
+    lets a real calendar client auto-remove the event, not just show an email.
+    """
     card = _meeting_detail_card(
         title=meeting_title,
         icon_emoji="🚫",
@@ -310,7 +315,39 @@ def send_meeting_cancelled_email(
         subheading=f"{organizer_name} cancelled this meeting",
         card_html=card,
     )
-    return send_email(to_email, f"Cancelled: {meeting_title}", html)
+    attachments = [("cancellation.ics", ics_data, "text/calendar")] if ics_data else []
+    return send_email(to_email, f"Cancelled: {meeting_title}", html, attachments)
+
+
+def send_meeting_rsvp_email(
+    to_email: str,
+    invitee_label: str,
+    meeting_title: str,
+    accepted: bool,
+    ics_data: bytes | None = None,
+) -> bool:
+    """Notify the organizer that an invitee responded to a meeting invite.
+
+    ``ics_data`` is a METHOD:REPLY object echoing the invitee's PARTSTAT back
+    to the organizer's calendar client (RFC 5546 iTIP RSVP round-trip).
+    """
+    verb = "accepted" if accepted else "declined"
+    card = _meeting_detail_card(
+        title=meeting_title,
+        icon_emoji="✅" if accepted else "❌",
+        meta_label="Response:",
+        meta_value=f"{invitee_label} {verb}",
+    )
+    # No dedicated "rsvp" hero asset is hosted yet — reuse invite/cancelled,
+    # the closest existing art for a positive vs. negative response.
+    html = _meeting_email_html(
+        hero="invite" if accepted else "cancelled",
+        heading=f"Invite {verb}",
+        subheading=f"{invitee_label} {verb} your invite to this meeting",
+        card_html=card,
+    )
+    attachments = [("reply.ics", ics_data, "text/calendar")] if ics_data else []
+    return send_email(to_email, f"{invitee_label} {verb}: {meeting_title}", html, attachments)
 
 
 def send_password_reset_email(to_email: str, user_name: str, otp_code: str, expiry_minutes: int = 10) -> bool:
