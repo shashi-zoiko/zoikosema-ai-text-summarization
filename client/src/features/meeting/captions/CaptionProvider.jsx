@@ -45,6 +45,10 @@ function reducer(state, action) {
 // grow this array unboundedly in memory. Oldest lines drop off the front.
 const MAX_TRANSCRIPT_LINES = 4000
 
+// Consecutive finals from the same speaker within this gap are one
+// continuous thought (a mid-sentence recognizer pause), not a new line.
+const FRAGMENT_MERGE_GAP_MS = 2000
+
 /**
  * Owns the entire caption lifecycle and exposes it through two contexts.
  * Must render inside <LiveKitRoom> (uses LiveKit hooks for the local
@@ -127,7 +131,17 @@ export default function CaptionProvider({ children }) {
       armExpiry(speakerId)
       if (isFinal) {
         setTranscript((lines) => {
-          const next = [...lines, { speakerId, name: name || 'Guest', text: clean, ts: Date.now() }]
+          const now = Date.now()
+          const prev = lines[lines.length - 1]
+          // Chrome's recognizer finalizes continuous speech into many short
+          // fragments, often mid-sentence on a barely-there pause. Stitching
+          // consecutive finals from the SAME speaker back into one line (when
+          // they land close together) turns "shredded" fragments back into
+          // readable sentences instead of one choppy line per fragment.
+          const merge = prev && prev.speakerId === speakerId && now - prev.ts < FRAGMENT_MERGE_GAP_MS
+          const next = merge
+            ? [...lines.slice(0, -1), { ...prev, text: sanitize(`${prev.text} ${clean}`), ts: now }]
+            : [...lines, { speakerId, name: name || 'Guest', text: clean, ts: now }]
           return next.length > MAX_TRANSCRIPT_LINES ? next.slice(next.length - MAX_TRANSCRIPT_LINES) : next
         })
       }
@@ -137,19 +151,26 @@ export default function CaptionProvider({ children }) {
 
   const { publish } = useCaptionTransport({ onCaption: ingest })
 
-  // Local recognition result → throttle interims, broadcast, echo locally.
+  // Local recognition result → echo locally at full engine speed, broadcast
+  // interims throttled (finals always go out immediately either way).
   const handleResult = useCallback(
     ({ text, isFinal }) => {
       // Hard guard: never emit while muted. Catches the trailing final result
       // some browsers fire immediately after the engine is stopped on mute.
       if (!isMicrophoneEnabled) return
-      const now = Date.now()
-      if (!isFinal && now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) return
-      lastInterimRef.current = now
       const clean = sanitize(text)
       if (!clean) return
       const id = localParticipant?.identity || 'me'
+      // Local echo is our own state update, not network traffic — showing it
+      // the instant the engine emits it (rather than capped to the broadcast
+      // throttle) is what makes your own caption bubble feel responsive.
       ingest({ speakerId: id, name: localParticipant?.name || 'You', text: clean, isFinal })
+
+      if (!isFinal) {
+        const now = Date.now()
+        if (now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) return
+        lastInterimRef.current = now
+      }
       publish({ text: clean, isFinal })
     },
     [ingest, publish, localParticipant, isMicrophoneEnabled],
