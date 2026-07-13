@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import {
   AlertTriangle, ArrowLeft, Brain, CheckCircle2, ChevronRight, Copy,
   Download, FileText, GitMerge, Lightbulb, ListChecks, Loader2, Mic, Pencil,
-  Plus, Printer, RefreshCw, Save, ShieldAlert, Sparkles, Target, Trash2, TrendingUp,
+  Plus, Printer, RefreshCw, Save, ShieldAlert, Sparkles, Table2, Target, Trash2, TrendingUp,
   Users2, X, Zap,
 } from 'lucide-react'
 
@@ -13,6 +13,7 @@ import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import Spinner from '../components/ui/Spinner'
+import TableSummaryView from '../components/TableSummaryView'
 import { fadeUp, stagger } from '../lib/motion'
 import { cn } from '../lib/cn'
 
@@ -415,6 +416,9 @@ export default function MeetingIntelligence() {
   const [editSummary, setEditSummary] = useState('')
   const [editTakeaways, setEditTakeaways] = useState([])
 
+  // Toggle between text and table view.
+  const [viewMode, setViewMode] = useState('text')
+
   useEffect(() => {
     let cancelled = false
     let timer = null
@@ -466,6 +470,7 @@ export default function MeetingIntelligence() {
   const payload = intel?.payload || null
   const status = intel?.status
   const isTranscript = intel?.source === 'transcript'
+  const hasTable = payload?.table_data?.enabled && payload?.table_data?.rows?.length > 0
 
   const slug = `${(intel?.meeting_title || code || 'meeting').replace(/[^a-z0-9-_]+/gi, '-').toLowerCase()}-${isTranscript ? 'summary' : 'intelligence'}`
 
@@ -650,6 +655,37 @@ export default function MeetingIntelligence() {
           )}
         </motion.div>
 
+        {payload && hasTable && status === 'ready' && !editing && (
+          <motion.div variants={fadeUp} className="mt-3 flex items-center gap-2">
+            <div className="flex items-center gap-0 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 p-0.5">
+              <button
+                onClick={() => setViewMode('text')}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-[12px] font-medium transition',
+                  viewMode === 'text'
+                    ? 'bg-[var(--c-surface)] text-[var(--c-fg)] shadow-sm'
+                    : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg-dim)]',
+                )}
+              >
+                <FileText className="mr-1.5 inline h-3.5 w-3.5" />
+                Text
+              </button>
+              <button
+                onClick={() => setViewMode('table')}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-[12px] font-medium transition',
+                  viewMode === 'table'
+                    ? 'bg-[var(--c-surface)] text-[var(--c-fg)] shadow-sm'
+                    : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg-dim)]',
+                )}
+              >
+                <Table2 className="mr-1.5 inline h-3.5 w-3.5" />
+                Table
+              </button>
+            </div>
+          </motion.div>
+        )}
+
         {error && (
           <div className="mt-3 rounded-xl border border-[var(--c-danger)] bg-[var(--c-danger-soft)] px-4 py-2 text-[12.5px] text-[var(--c-danger)]">
             {error}
@@ -685,20 +721,27 @@ export default function MeetingIntelligence() {
 
       {intel && status !== 'generating' && payload && (
         isTranscript ? (
-          <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
-            <Card glow className="p-6">
-              <TranscriptSummaryView
-                payload={payload}
-                editing={editing}
-                editTitle={editTitle}
-                setEditTitle={setEditTitle}
-                editSummary={editSummary}
-                setEditSummary={setEditSummary}
-                editTakeaways={editTakeaways}
-                setEditTakeaways={setEditTakeaways}
-              />
-            </Card>
-          </motion.section>
+          viewMode === 'table' ? (
+            <TableSummaryView tableData={payload.table_data} />
+          ) : (
+            <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
+              <Card glow className="p-6">
+                <TranscriptSummaryView
+                  payload={payload}
+                  editing={editing}
+                  editTitle={editTitle}
+                  setEditTitle={setEditTitle}
+                  editSummary={editSummary}
+                  setEditSummary={setEditSummary}
+                  editTakeaways={editTakeaways}
+                  setEditTakeaways={setEditTakeaways}
+                />
+              </Card>
+            </motion.section>
+          )
+        ) : (
+        viewMode === 'table' ? (
+          <TableSummaryView tableData={payload.table_data} />
         ) : (
         <>
           {/* ============ TL;DR ============ */}
@@ -1005,7 +1048,8 @@ export default function MeetingIntelligence() {
           </section>
         </>
         )
-      )}
+      )
+    )}
     </div>
   )
 }

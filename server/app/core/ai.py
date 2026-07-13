@@ -236,7 +236,14 @@ _INTELLIGENCE_SCHEMA = """{
   "contradictions": [
     {"summary": "what conflicts", "between": ["statement A", "statement B"]}
   ],
-  "knowledge_nuggets": ["facts/decisions worth saving to the org wiki"]
+  "knowledge_nuggets": ["facts/decisions worth saving to the org wiki"],
+  "table_data": {
+    "enabled": true,
+    "type": "task_tracker|resource_allocation|risk_matrix|discussion_overview|participant_summary",
+    "type_label": "Human-readable table name, e.g. 'Task Tracker'",
+    "columns": [{"key": "col_name", "label": "Column Header"}],
+    "rows": [{"col_name": "cell value"}]
+  }
 }"""
 
 
@@ -261,6 +268,7 @@ def _empty_intelligence() -> dict:
         "follow_ups": {"emails": [], "slack": [], "tasks": []},
         "contradictions": [],
         "knowledge_nuggets": [],
+        "table_data": {"enabled": true, "type": "discussion_overview", "type_label": "Discussion Overview", "columns": [{"key": "speaker", "label": "Speaker"}, {"key": "topic", "label": "Topic"}, {"key": "key_point", "label": "Key Point"}], "rows": []},
     }
 
 
@@ -314,6 +322,110 @@ def _format_chat_log(chat_log: list[dict], limit: int = 800) -> str:
             continue
         lines.append(f"[{t}] {name}: {body}")
     return "\n".join(lines) if lines else "(no chat activity)"
+
+
+def _auto_table(result: dict):
+    """If the AI skipped table_data, build one from existing fields."""
+    td = result.get("table_data")
+    if td is None:
+        td = {}
+        result["table_data"] = td
+    if td.get("rows"):
+        return
+
+    items = result.get("action_items") or []
+    if items:
+        td.clear()
+        td.update({
+            "enabled": True,
+            "type": "task_tracker",
+            "type_label": "Task Tracker",
+            "columns": [
+                {"key": "task", "label": "Task"},
+                {"key": "assignee", "label": "Assignee"},
+                {"key": "deadline", "label": "Deadline"},
+            ],
+            "rows": [
+                {"task": i.get("task", ""), "assignee": i.get("owner", ""), "deadline": i.get("due", "")}
+                for i in items if i.get("task")
+            ],
+        })
+        return
+
+    risks = result.get("risks") or []
+    if risks:
+        td.clear()
+        td.update({
+            "enabled": True,
+            "type": "risk_matrix",
+            "type_label": "Risk Matrix",
+            "columns": [
+                {"key": "risk", "label": "Project Risk"},
+                {"key": "impact", "label": "Impact"},
+                {"key": "solution", "label": "Solution"},
+            ],
+            "rows": [
+                {"risk": r.get("title", ""), "impact": r.get("severity", ""), "solution": r.get("rationale", "")}
+                for r in risks if r.get("title")
+            ],
+        })
+        return
+
+    decisions = result.get("decisions") or []
+    if decisions:
+        td.clear()
+        td.update({
+            "enabled": True,
+            "type": "task_tracker",
+            "type_label": "Decisions",
+            "columns": [
+                {"key": "title", "label": "Decision"},
+                {"key": "detail", "label": "Detail"},
+                {"key": "status", "label": "Status"},
+            ],
+            "rows": [
+                {"title": d.get("title", ""), "detail": d.get("detail", ""), "status": d.get("type", "")}
+                for d in decisions if d.get("title")
+            ],
+        })
+        return
+
+    speakers = result.get("speakers") or []
+    if speakers:
+        td.clear()
+        td.update({
+            "enabled": True,
+            "type": "participant_summary",
+            "type_label": "Speaker Summary",
+            "columns": [
+                {"key": "name", "label": "Speaker"},
+                {"key": "role", "label": "Role"},
+                {"key": "messages", "label": "Messages"},
+            ],
+            "rows": [
+                {"name": s.get("name", ""), "role": s.get("role_in_meeting", ""), "messages": str(s.get("message_count", ""))}
+                for s in speakers if s.get("name")
+            ],
+        })
+        return
+
+    takeaways = result.get("key_takeaways") or []
+    if takeaways:
+        td.clear()
+        td.update({
+            "enabled": True,
+            "type": "discussion_overview",
+            "type_label": "Discussion Overview",
+            "columns": [
+                {"key": "speaker", "label": "Speaker"},
+                {"key": "key_point", "label": "Key Point"},
+            ],
+            "rows": [
+                {"speaker": t.get("assignee", ""), "key_point": t.get("text", "")}
+                for t in takeaways if t.get("text")
+            ],
+        })
+        return
 
 
 def ai_generate_intelligence(
@@ -377,7 +489,17 @@ def ai_generate_intelligence(
         "  Never invent names that don't appear in the chat log.\n"
         "- Score fields are 0-100 integers; calibrate honestly.\n"
         "- Sentiment must be grounded in actual language — don't sugarcoat.\n"
-        "- tldr should read like a McKinsey one-liner: what was decided, why it matters."
+        "- tldr should read like a McKinsey one-liner: what was decided, why it matters.\n"
+        "- You MUST include table_data in EVERY response. Always set enabled=true.\n"
+        "- Pick the most relevant table type based on the discussion:\n"
+        "  • task_tracker — columns: Task, Assignee, Deadline. Best for project tracking.\n"
+        "  • resource_allocation — columns: Team Member, Hours Allocated, Cost. Best for managers.\n"
+        "  • risk_matrix — columns: Project Risk, Impact, Solution. Best for stakeholders.\n"
+        "  • discussion_overview — columns: Speaker, Topic, Key Point. Fallback for general conversation.\n"
+        "  • participant_summary — columns: Participant, Role, Contribution. Fallback for check-in meetings.\n"
+        "  If none of these fit, design custom columns that match the discussion.\n"
+        "- Always provide at least 2 columns and as many rows as there are "
+        "participants or discussion points. Never return an empty rows array."
     )
 
     user_prompt = (
@@ -429,6 +551,7 @@ def ai_generate_intelligence(
             base = _empty_intelligence()
             for k, v in parsed.items():
                 base[k] = v
+            _auto_table(base)
             result = base
     except Exception as e:
         log.exception("ai_generate_intelligence failed")
@@ -492,7 +615,10 @@ def _get_ai_client():
 def _empty_transcript_summary() -> dict:
     """Default-shaped transcript summary. Returned when there's nothing
     meaningful to summarize so the UI can always render the same structure."""
-    return {"title": "", "summary": "", "key_takeaways": []}
+    return {
+        "title": "", "summary": "", "key_takeaways": [],
+        "table_data": {"enabled": True, "type": "discussion_overview", "type_label": "Discussion Overview", "columns": [{"key": "speaker", "label": "Speaker"}, {"key": "topic", "label": "Topic"}, {"key": "key_point", "label": "Key Point"}], "rows": []},
+    }
 
 
 def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meeting") -> dict:
@@ -539,7 +665,10 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         "Rules:\n"
         "- Output JSON ONLY. No prose before or after. No markdown code fences.\n"
         '- Schema: {"title": string, "summary": string, "key_takeaways": '
-        '[{"assignee": string|null, "text": string}]}\n'
+        '[{"assignee": string|null, "text": string}], '
+        '"table_data": {"enabled": bool, "type": string|null, '
+        '"type_label": string|null, "columns": [{"key": string, "label": string}], '
+        '"rows": [dict]}}\n'
         '- "title" is a short (under ~8 words) headline for what this meeting '
         "was about.\n"
         '- "summary" is 2-4 sentences covering what was discussed and decided.\n'
@@ -553,7 +682,17 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         "contributed substantively. Do not omit any speaker.\n"
         "- Never invent names, tasks, or decisions that don't appear in the "
         "transcript. If nothing substantive was discussed, say so plainly in "
-        '"summary" and return an empty "key_takeaways" array.'
+        '"summary" and return an empty "key_takeaways" array.\n'
+        "- You MUST include table_data in EVERY response. Always set enabled=true.\n"
+        "- Pick the most relevant table type:\n"
+        "  • task_tracker — columns: Task, Assignee, Deadline. Best for project tracking.\n"
+        "  • resource_allocation — columns: Team Member, Hours Allocated, Cost. Best for managers.\n"
+        "  • risk_matrix — columns: Project Risk, Impact, Solution. Best for stakeholders.\n"
+        "  • discussion_overview — columns: Speaker, Topic, Key Point. Fallback for general conversation.\n"
+        "  • participant_summary — columns: Participant, Role, Contribution. Fallback for check-in meetings.\n"
+        "  If none fit, design custom columns that match the discussion.\n"
+        "- Always provide at least 2 columns. Populate rows with every speaker "
+        "or discussion point. Never return an empty rows array."
     )
     user_prompt = (
         f"Meeting title: {meeting_title}\n\n"
@@ -586,6 +725,7 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
             for k in base:
                 if k in parsed:
                     base[k] = parsed[k]
+            _auto_table(base)
             result = base
     except Exception as e:
         log.exception("groq_summarize_transcript failed")
