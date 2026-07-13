@@ -156,6 +156,11 @@ function MeetRoom() {
   const joinPrefs = useMemo(() => {
     try { return JSON.parse(sessionStorage.getItem(`zoiko_meet_prefs_${code}`) || '{}') } catch { return {} }
   }, [code])
+  // Live mute/camera state, synced from the room so <LiveKitRoom>'s `audio`
+  // prop always reflects the user's current choice (not the initial lobby pref).
+  // This prevents LiveKit reconnections from overriding a user who muted mid-call.
+  const [audioOn, setAudioOn] = useState(() => joinPrefs.audio !== false)
+  const [videoOn, setVideoOn] = useState(() => joinPrefs.video !== false)
 
   // Connection bootstrap
   const [token, setToken] = useState(null)
@@ -698,8 +703,8 @@ function MeetRoom() {
       token={token}
       serverUrl={wsUrl}
       connect={e2eeArmed}
-      audio={joinPrefs.audio !== false}
-      video={joinPrefs.video !== false}
+      audio={audioOn}
+      video={videoOn}
       onDisconnected={handleDisconnected}
       onError={(e) => {
         // Recoverable device/permission errors → brief toast, not the fatal
@@ -851,6 +856,8 @@ function MeetRoom() {
         toggleWhiteboard={() => setShowWhiteboard((v) => !v)}
         openInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         openBackgrounds={() => { setSettingsTab('backgrounds'); setSidebar('settings') }}
+        onAudioChange={setAudioOn}
+        onVideoChange={setVideoOn}
         leave={userLeave}
       />
 
@@ -914,6 +921,8 @@ function LivekitDockAdapter({
   toggleWhiteboard,
   openInfo,
   openBackgrounds,
+  onAudioChange,
+  onVideoChange,
   leave,
 }) {
   const { localParticipant } = useLocalParticipant()
@@ -927,6 +936,7 @@ function LivekitDockAdapter({
   const micOn = !!localParticipant?.isMicrophoneEnabled
   const camOn = !!localParticipant?.isCameraEnabled
   const screenOn = !!localParticipant?.isScreenShareEnabled
+
   // Capability check (NOT user-agent sniffing): iPhone Safari has no
   // getDisplayMedia, so screen-share is impossible there. iPadOS and desktop
   // expose it. Used to fail gracefully with a toast instead of silently.
@@ -936,12 +946,30 @@ function LivekitDockAdapter({
     typeof navigator.mediaDevices.getDisplayMedia === 'function'
 
   const toggleMic = useCallback(
-    () => localParticipant?.setMicrophoneEnabled(!micOn).catch(() => {}),
-    [localParticipant, micOn],
+    () => {
+      const next = !micOn
+      localParticipant?.setMicrophoneEnabled(next).catch((err) => {
+        notify('error', {
+          title: 'Microphone unavailable',
+          text: err?.message || 'Could not access the microphone. Check your device and browser permissions.',
+        })
+      })
+      onAudioChange?.(next)
+    },
+    [localParticipant, micOn, onAudioChange, notify],
   )
   const toggleCam = useCallback(
-    () => localParticipant?.setCameraEnabled(!camOn).catch(() => {}),
-    [localParticipant, camOn],
+    () => {
+      const next = !camOn
+      localParticipant?.setCameraEnabled(next).catch((err) => {
+        notify('error', {
+          title: 'Camera unavailable',
+          text: err?.message || 'Could not access the camera. Check your device and browser permissions.',
+        })
+      })
+      onVideoChange?.(next)
+    },
+    [localParticipant, camOn, onVideoChange, notify],
   )
   const startShare = useCallback(async () => {
     if (!localParticipant) return

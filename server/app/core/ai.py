@@ -324,13 +324,14 @@ def ai_generate_intelligence(
 ) -> dict:
     """Produce a structured meeting-intelligence payload.
 
+    Supports both Anthropic Claude (default) and Groq (when AI_PROVIDER=groq).
     Returns a dict shaped like `_empty_intelligence()`, plus metadata keys
     `_model`, `_input_tokens`, `_output_tokens`, `_latency_ms`, `_error`.
 
     Failure modes are surfaced via `_error`; callers should still persist the
     row so the UI can show "generation failed — retry".
     """
-    client = _get_client()
+    client = _get_ai_client()
     started = time.monotonic()
     result: dict = _empty_intelligence()
     meta = {
@@ -342,7 +343,7 @@ def ai_generate_intelligence(
     }
 
     if not client:
-        meta["_error"] = "Anthropic API key not configured."
+        meta["_error"] = "AI API key not configured. Set ANTHROPIC_API_KEY (Claude) or AI_API_KEY (Groq)."
         result.update(meta)
         return result
 
@@ -388,24 +389,43 @@ def ai_generate_intelligence(
         "Return the JSON object now."
     )
 
+    is_groq = settings.ai_provider == "groq"
+
     try:
-        response = client.messages.create(
-            model=settings.ai_model,
-            max_tokens=4096,
-            system=system,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        meta["_model"] = settings.ai_model
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            meta["_input_tokens"] = getattr(usage, "input_tokens", None)
-            meta["_output_tokens"] = getattr(usage, "output_tokens", None)
-        text = response.content[0].text if response.content else ""
+        if is_groq:
+            response = client.chat.completions.create(
+                model=settings.ai_model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=4096,
+                response_format={"type": "json_object"},
+            )
+            meta["_model"] = settings.ai_model
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                meta["_input_tokens"] = getattr(usage, "prompt_tokens", None)
+                meta["_output_tokens"] = getattr(usage, "completion_tokens", None)
+            text = response.choices[0].message.content if response.choices else ""
+        else:
+            response = client.messages.create(
+                model=settings.ai_model,
+                max_tokens=4096,
+                system=system,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            meta["_model"] = settings.ai_model
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                meta["_input_tokens"] = getattr(usage, "input_tokens", None)
+                meta["_output_tokens"] = getattr(usage, "output_tokens", None)
+            text = response.content[0].text if response.content else ""
+
         parsed = _extract_json(text)
         if parsed is None:
             meta["_error"] = "Model did not return parseable JSON."
         else:
-            # Merge so any missing keys fall back to defaults.
             base = _empty_intelligence()
             for k, v in parsed.items():
                 base[k] = v
@@ -455,6 +475,18 @@ def _get_groq_client():
     except ImportError:
         log.warning("groq package not installed — transcript summarizer disabled")
         return None
+
+
+def _get_ai_client():
+    """Return the appropriate AI client based on ai_provider setting.
+    
+    Supports both Anthropic Claude (default) and Groq (when AI_PROVIDER=groq).
+    Returns None if the provider's API key is not configured.
+    """
+    settings = get_settings()
+    if settings.ai_provider == "groq":
+        return _get_groq_client()
+    return _get_client()
 
 
 def _empty_transcript_summary() -> dict:
@@ -511,10 +543,14 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         '- "title" is a short (under ~8 words) headline for what this meeting '
         "was about.\n"
         '- "summary" is 2-4 sentences covering what was discussed and decided.\n'
-        '- "key_takeaways" mixes: work assigned to specific people (set '
-        '"assignee" to their name, exactly as it appears in the transcript), '
-        "important project decisions/points, and any other important fact — "
-        'omit "assignee" (use null) for anything not assigned to a person.\n'
+        '- "key_takeaways" must capture contributions FROM EVERY SPEAKER '
+        "mentioned in the transcript. Every single takeaway MUST include an "
+        '"assignee" — set it to the speaker who raised or owns that point '
+        "(exactly as their name appears in the transcript). Never use null "
+        "for assignee; assign every takeaway to a specific person.\n"
+        "- IMPORTANT: Identify ALL participants mentioned in the conversation "
+        "and ensure each one appears in at least one key takeaway if they "
+        "contributed substantively. Do not omit any speaker.\n"
         "- Never invent names, tasks, or decisions that don't appear in the "
         "transcript. If nothing substantive was discussed, say so plainly in "
         '"summary" and return an empty "key_takeaways" array.'
