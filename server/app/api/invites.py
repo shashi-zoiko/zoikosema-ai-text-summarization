@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.email import send_meeting_invite_email
+from app.core.email import send_meeting_invite_email, send_meeting_rsvp_email
 from app.core.calendar import generate_ics
 from app.core.urls import meeting_url
 from app.models.user import User
@@ -20,6 +20,7 @@ from app.models.organization import (
     INVITE_ACCEPTED,
     INVITE_DECLINED,
     NOTIF_MEETING_INVITE,
+    NOTIF_MEETING_RSVP,
 )
 from app.schemas.organization import MeetingInviteIn, MeetingInviteOut
 
@@ -206,6 +207,57 @@ def my_invites(
     ]
 
 
+# ── RSVP → organizer notification ────────────────────────────────────────
+
+def _notify_organizer_of_rsvp(db: Session, invite: MeetingInvite, meeting: Meeting, accepted: bool) -> None:
+    """Email + in-app notify the organizer with a standards-compliant
+    METHOD:REPLY iTIP object (RFC 5546) echoing the invitee's PARTSTAT.
+
+    Best-effort: ``send_email`` never raises on delivery failure, so a bad
+    mail provider degrades to "no email sent" rather than blocking the
+    caller's status-change commit.
+    """
+    if not meeting.scheduled_at:
+        return
+    organizer = db.get(User, meeting.host_id)
+    if not organizer or not organizer.email:
+        return
+
+    invitee_label = invite.invitee_email
+    if invite.invitee_user_id:
+        invitee = db.get(User, invite.invitee_user_id)
+        if invitee and invitee.name:
+            invitee_label = invitee.name
+
+    reply_ics = generate_ics(
+        title=meeting.title,
+        meeting_code=meeting.code,
+        join_url=meeting_url(meeting.code),
+        scheduled_at=meeting.scheduled_at,
+        organizer_name=organizer.name,
+        organizer_email=organizer.email,
+        attendee_email=invite.invitee_email,
+        method="REPLY",
+        partstat="ACCEPTED" if accepted else "DECLINED",
+    )
+    send_meeting_rsvp_email(
+        to_email=organizer.email,
+        invitee_label=invitee_label,
+        meeting_title=meeting.title,
+        accepted=accepted,
+        ics_data=reply_ics,
+    )
+    db.add(
+        Notification(
+            user_id=organizer.id,
+            type=NOTIF_MEETING_RSVP,
+            title=f"{invitee_label} {'accepted' if accepted else 'declined'} your invite",
+            body=f'"{meeting.title}"',
+            data=None,
+        )
+    )
+
+
 # ── Accept invite ─────────────────────────────────────────────────────────
 
 @router.post("/invites/{invite_id}/accept")
@@ -223,8 +275,10 @@ def accept_invite(
     if not invite:
         raise HTTPException(status_code=404, detail="Invite not found")
     invite.status = INVITE_ACCEPTED
-    db.commit()
     meeting = db.get(Meeting, invite.meeting_id)
+    if meeting:
+        _notify_organizer_of_rsvp(db, invite, meeting, accepted=True)
+    db.commit()
     return {"detail": "Invite accepted", "meeting_code": meeting.code if meeting else None}
 
 
@@ -243,6 +297,9 @@ def decline_invite(
     if not invite:
         raise HTTPException(status_code=404, detail="Invite not found")
     invite.status = INVITE_DECLINED
+    meeting = db.get(Meeting, invite.meeting_id)
+    if meeting:
+        _notify_organizer_of_rsvp(db, invite, meeting, accepted=False)
     db.commit()
     return {"detail": "Invite declined"}
 

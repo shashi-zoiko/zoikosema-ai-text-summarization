@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.connect.media_service import service as media
 from app.websocket import signaling as ws_signaling
+from app.core.calendar import generate_ics
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.deps import get_current_user, get_current_participant
@@ -28,6 +29,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.core.urls import meeting_url
 
 log = logging.getLogger(__name__)
 from app.models.meeting import (
@@ -536,12 +538,30 @@ async def cancel_meeting(
     invites = db.scalars(
         select(MeetingInvite).where(MeetingInvite.meeting_id == meeting.id)
     ).all()
+
+    # One METHOD:CANCEL object per invitee (ATTENDEE line varies), same UID as
+    # the original invite so the receiving calendar client removes the right
+    # event rather than creating a stray cancelled one.
     for invite in invites:
+        cancel_ics = None
+        if meeting.scheduled_at:
+            cancel_ics = generate_ics(
+                title=meeting.title,
+                meeting_code=meeting.code,
+                join_url=meeting_url(meeting.code),
+                scheduled_at=meeting.scheduled_at,
+                organizer_name=user.name,
+                organizer_email=user.email,
+                attendee_email=invite.invitee_email,
+                method="CANCEL",
+                sequence=1,
+            )
         send_meeting_cancelled_email(
             to_email=invite.invitee_email,
             organizer_name=user.name,
             meeting_title=meeting.title,
             scheduled_at=scheduled_str,
+            ics_data=cancel_ics,
         )
         if invite.invitee_user_id:
             db.add(
