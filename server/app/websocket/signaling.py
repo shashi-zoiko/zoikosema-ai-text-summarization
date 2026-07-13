@@ -578,6 +578,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                 "locked": meeting.locked,
                 "chat_enabled": meeting.chat_enabled,
                 "screenshare_enabled": meeting.screenshare_enabled,
+                "summarizer_on": meeting.summarizer_on,
                 "theme": meeting.theme or "forest",
             },
         })
@@ -898,6 +899,20 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     await meet_manager.broadcast(
                         room,
                         {"type": "meeting-locked", "locked": locked},
+                    )
+
+                elif kind == "set-summarizer" and host_or_cohost:
+                    # Host/co-host flips Meet Summarizer on/off for the whole
+                    # room — broadcast (sender included) so every header
+                    # button's glow + status popover stay in sync, and
+                    # persisted so late joiners get the current state via
+                    # `welcome` above.
+                    on = bool(data.get("on", True))
+                    meeting.summarizer_on = on
+                    await _run(db.commit)
+                    await meet_manager.broadcast(
+                        room,
+                        {"type": "summarizer-changed", "on": on},
                     )
 
                 # ponytail: in-meeting "end meeting for all" was removed — a host

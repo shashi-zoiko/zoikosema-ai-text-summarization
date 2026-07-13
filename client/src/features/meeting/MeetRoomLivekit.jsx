@@ -26,7 +26,6 @@ import ParticipantsPanel from './components/ParticipantsPanel.jsx'
 import SettingsDrawer from './components/SettingsDrawer.jsx'
 import MeetingInfoDrawer from './components/MeetingInfoDrawer.jsx'
 import ConversationsPanel from './components/ConversationsPanel.jsx'
-import MeetSummaryPanel from './components/MeetSummaryPanel.jsx'
 import CaptionProvider from './captions/CaptionProvider.jsx'
 import CaptionOverlay from './captions/CaptionOverlay.jsx'
 import { useCaptionControls, useLiveCaptions } from './captions/useCaptions.js'
@@ -229,16 +228,17 @@ function MeetRoom() {
     locked: false,
     chat_enabled: true,
     screenshare_enabled: true,
+    summarizer_on: false,
   })
   const [handRaised, setHandRaised] = useState(false)
   const [recording, setRecording] = useState({ recording: false, recording_id: null })
 
   // Local UI state
-  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | 'conversations' | 'summary' | null
-  // Set once, the first time "Start Summarizing" (inside MeetSummaryPanel,
-  // NOT the header button that just opens the panel) is clicked — the zero
-  // point for both the Conversations and Meet Summarizer panels' timestamps.
-  // Before this is set, neither panel has a session to show yet.
+  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | 'conversations' | null
+  // Set once, the first time "Start Summarizing" (inside the header's
+  // SummarizerButton popover, not just opening it) is clicked — the zero
+  // point for both the Conversations panel and the Meet Summarizer status
+  // card's timestamps. Before this is set, neither has a session to show yet.
   const [summarizerStartedAt, setSummarizerStartedAt] = useState(null)
   // Bumped whenever the header admit-chip / lobby "open" is used, so the People
   // panel scrolls its waiting section into view.
@@ -305,6 +305,7 @@ function MeetRoom() {
           locked: !!data.meeting?.locked,
           chat_enabled: !!data.meeting?.chat_enabled,
           screenshare_enabled: !!data.meeting?.screenshare_enabled,
+          summarizer_on: !!data.meeting?.summarizer_on,
         })
         // Seed the role map: self + every peer already in the room.
         const entries = []
@@ -395,6 +396,10 @@ function MeetRoom() {
         }))
       } else if (t === 'meeting-locked') {
         setMeeting((m) => ({ ...m, locked: !!data.locked }))
+      } else if (t === 'summarizer-changed') {
+        // Room-wide, server-synced — every participant's header button glow
+        // and popover update from this, not just the host who toggled it.
+        setMeeting((m) => ({ ...m, summarizer_on: !!data.on }))
       } else if (t === 'meeting-ended') {
         userLeftRef.current = true
         setToast({ kind: 'info', text: 'Meeting ended by host' })
@@ -542,9 +547,10 @@ function MeetRoom() {
   }, [])
   // Google-Meet: clicking the grid's "+N others" tile opens the People panel.
   const openPeople = useCallback(() => setSidebar('people'), [])
-  // Called by MeetSummaryPanel whenever its in-panel toggle turns capture ON
-  // (that button drives capturing itself via CaptionsControlContext — this
-  // just stamps the session's zero point, first call only, ever).
+  // Called by the header's SummarizerButton popover whenever its toggle turns
+  // capture ON (that button drives capturing itself via
+  // CaptionsControlContext — this just stamps the session's zero point,
+  // first call only, ever).
   const startSummarizing = useCallback(() => {
     setSummarizerStartedAt((t) => t ?? Date.now())
   }, [])
@@ -586,6 +592,10 @@ function MeetRoom() {
       : (getPreset(bgEffectId) || bgUploads.find((u) => u.id === bgEffectId) || NONE_EFFECT)
   const setChatEnabled = useCallback((v) => ctrlSend({ type: 'set-permissions', chat_enabled: v }), [ctrlSend])
   const setScreenEnabled = useCallback((v) => ctrlSend({ type: 'set-permissions', screenshare_enabled: v }), [ctrlSend])
+  // Room-wide Meet Summarizer on/off — broadcast to every participant (see
+  // the 'summarizer-changed' handler above) so the header button's glow and
+  // popover status stay in sync for everyone, not just the toggling host.
+  const setSummarizerOn = useCallback((on) => ctrlSend({ type: 'set-summarizer', on }), [ctrlSend])
   // ponytail: "end meeting for all" removed — a host leaving only disconnects
   // themselves (Google-Meet style); the meeting stays live for everyone else.
 
@@ -743,7 +753,8 @@ function MeetRoom() {
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         onOpenPeople={openPeopleWaiting}
         onOpenConversations={() => setSidebar((s) => (s === 'conversations' ? null : 'conversations'))}
-        onOpenSummary={() => setSidebar((s) => (s === 'summary' ? null : 'summary'))}
+        onSetSummarizer={setSummarizerOn}
+        onStartSummarizing={startSummarizing}
       />
 
       <div className="relative flex min-h-0 flex-1">
@@ -812,9 +823,6 @@ function MeetRoom() {
         )}
         {sidebar === 'conversations' && (
           <ConversationsPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
-        )}
-        {sidebar === 'summary' && (
-          <MeetSummaryPanel onClose={() => setSidebar(null)} onStart={startSummarizing} />
         )}
         {sidebar === 'settings' && (
           <SettingsDrawer

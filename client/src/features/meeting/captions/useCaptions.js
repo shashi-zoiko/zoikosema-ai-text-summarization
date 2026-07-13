@@ -5,9 +5,9 @@ import { createContext, useContext } from 'react'
  *
  * - ControlContext changes occasionally (CC toggled, support/error state
  *   flips, or Meet Summarizer capture toggled on/off). Consumers: the
- *   toolbar CC button (enabled/toggle), MeetingHeader (capturing — drives
- *   the header button's glow effect), and MeetSummaryPanel
- *   (capturing/setCapturing — the in-panel toggle button).
+ *   toolbar CC button (enabled/toggle) and MeetingHeader's SummarizerButton
+ *   (capturing/setCapturing — drives both the header button's glow effect
+ *   and its popover's Start/Pause Summarizing toggle).
  * - LiveContext changes FREQUENTLY (every interim/final caption frame).
  *   Consumers: the CaptionOverlay (bySpeaker) and the Conversations panel
  *   (transcript — the accumulated, finals-only log across the whole call).
