@@ -433,6 +433,7 @@ def ai_generate_intelligence(
     meeting_title: str = "Meeting",
     participants: list[dict] | None = None,
     duration_seconds: int | None = None,
+    language: str = "english",
 ) -> dict:
     """Produce a structured meeting-intelligence payload.
 
@@ -499,7 +500,13 @@ def ai_generate_intelligence(
         "  • participant_summary — columns: Participant, Role, Contribution. Fallback for check-in meetings.\n"
         "  If none of these fit, design custom columns that match the discussion.\n"
         "- Always provide at least 2 columns and as many rows as there are "
-        "participants or discussion points. Never return an empty rows array."
+        "participants or discussion points. Never return an empty rows array.\n"
+        "- Output ALL text fields (tldr, topics, decisions, action_items, risks, "
+        "speakers, sentiment, follow_ups, contradictions, knowledge_nuggets, "
+        "table_data labels and cell values) in the language specified. "
+        "Preserve participant names and proper nouns as-is — only translate "
+        f"the analysis text itself.\n"
+        f"- Language: {language}. ALL output text must be in {language}."
     )
 
     user_prompt = (
@@ -621,7 +628,7 @@ def _empty_transcript_summary() -> dict:
     }
 
 
-def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meeting") -> dict:
+def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meeting", language: str = "english") -> dict:
     """Summarize a spoken-conversation transcript into {title, summary,
     key_takeaways} using Groq.
 
@@ -692,7 +699,11 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         "  • participant_summary — columns: Participant, Role, Contribution. Fallback for check-in meetings.\n"
         "  If none fit, design custom columns that match the discussion.\n"
         "- Always provide at least 2 columns. Populate rows with every speaker "
-        "or discussion point. Never return an empty rows array."
+        "or discussion point. Never return an empty rows array.\n"
+        f"- Language: {language}. ALL output text (title, summary, key_takeaways "
+        "text, table_data labels and cell values) must be in {language}. "
+        "Preserve participant names and proper nouns as-is — only translate "
+        "the analysis content."
     )
     user_prompt = (
         f"Meeting title: {meeting_title}\n\n"

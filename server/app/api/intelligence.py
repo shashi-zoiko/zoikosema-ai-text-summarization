@@ -126,6 +126,7 @@ def run_generation(
     requested_by_id: int | None,
     recording: MeetingRecording | None = None,
     transcript: list[dict] | None = None,
+    language: str = "english",
 ) -> MeetingIntelligence:
     """Core generation pipeline used by both the API endpoint and the
     auto-trigger after recording upload.
@@ -168,13 +169,14 @@ def run_generation(
     db.refresh(intel)
 
     if is_transcript:
-        result = groq_summarize_transcript(transcript=transcript, meeting_title=meeting.title)
+        result = groq_summarize_transcript(transcript=transcript, meeting_title=meeting.title, language=language)
     else:
         result = ai_generate_intelligence(
             chat_log=chat_log,
             meeting_title=meeting.title,
             participants=participants,
             duration_seconds=duration_seconds,
+            language=language,
         )
 
     intel.completed_at = datetime.now(timezone.utc)
@@ -335,6 +337,7 @@ def generate_intelligence(
             participants=None,
             requested_by_id=user.id,
             transcript=data.transcript,
+            language=data.language,
         )
         return _intel_to_out(intel, meeting)
 
@@ -368,6 +371,7 @@ def generate_intelligence(
         chat_log=data.chat_log,
         participants=data.participants,
         requested_by_id=user.id,
+        language=data.language,
     )
     return _intel_to_out(intel, meeting)
 

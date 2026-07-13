@@ -151,6 +151,9 @@ class IntelligenceGenerateIn(BaseModel):
     # stored with source=INTEL_SOURCE_TRANSCRIPT. Host/admin-only — see
     # generate_intelligence().
     transcript: list[dict] | None = None
+    # Target language for the summary output (e.g. "english", "spanish",
+    # "hindi", "french", "german", "chinese", "japanese"). Defaults to english.
+    language: str = "english"
 
 
 class IntelligenceEditIn(BaseModel):

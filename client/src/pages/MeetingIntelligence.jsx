@@ -418,6 +418,7 @@ export default function MeetingIntelligence() {
 
   // Toggle between text and table view.
   const [viewMode, setViewMode] = useState('text')
+  const [language, setLanguage] = useState('english')
 
   useEffect(() => {
     let cancelled = false
@@ -457,7 +458,7 @@ export default function MeetingIntelligence() {
     try {
       const fresh = await api(`/api/meetings/${code}/intelligence`, {
         method: 'POST',
-        body: { force: true },
+        body: { force: true, language },
       })
       setIntel(fresh)
     } catch (e) {
@@ -682,6 +683,30 @@ export default function MeetingIntelligence() {
                 <Table2 className="mr-1.5 inline h-3.5 w-3.5" />
                 Table
               </button>
+            </div>
+          </motion.div>
+        )}
+
+        {payload && status === 'ready' && !editing && (
+          <motion.div variants={fadeUp} className="mt-3 flex items-center gap-2">
+            <div className="flex items-center gap-1.5 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 px-2.5 py-1">
+              <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--c-fg-muted)]">Lang</span>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                className="bg-transparent text-[12.5px] text-[var(--c-fg)] outline-none"
+              >
+                <option value="english">English</option>
+                <option value="spanish">Spanish</option>
+                <option value="french">French</option>
+                <option value="german">German</option>
+                <option value="hindi">Hindi</option>
+                <option value="chinese">Chinese</option>
+                <option value="japanese">Japanese</option>
+                <option value="arabic">Arabic</option>
+                <option value="portuguese">Portuguese</option>
+                <option value="russian">Russian</option>
+              </select>
             </div>
           </motion.div>
         )}
