@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.connect.calendar_service.models import CalendarEvent
 from app.connect.shared.tenant import TenantContext
+from app.core.config import get_settings
 from app.models.meeting import Meeting
 
 DEFAULT_MEETING_DURATION_MINUTES = 60
@@ -104,4 +105,29 @@ def _busy_intervals(
         if end > day_start:
             intervals.append((start, end))
 
+    intervals.extend(_zoikotime_busy_intervals(db, ctx, day_start, day_end))
     return intervals
+
+
+def _zoikotime_busy_intervals(
+    db: DbSession, ctx: TenantContext, day_start: datetime, day_end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    """ZoikoTime workforce-truth availability signal (spec §6.1: shift
+    off-hours, approved leave/OOO, rest windows) — read-only visibility only,
+    per §6.1's own phasing note ("read-only visibility Phase 1; hard
+    enforcement Phase 2+"). Gated behind ZOIKOTIME_INTEGRATION_ENABLED
+    (default off).
+
+    Always returns [] today: no WorkforceSignal data source exists yet in
+    this repo — that's plans/zoikotime-workforce-signal-integration.md's
+    scope, a separate cross-repo plan with its own webhook receiver and
+    table. This function is the intended seam: once that table exists,
+    swapping this body for a real query is a small follow-up, because the
+    merge loop above already treats whatever this returns like any other
+    busy-interval source — no redesign needed then. With the flag off (the
+    only real state until that lands), this is a no-op passthrough with
+    zero behavior change.
+    """
+    if not get_settings().zoikotime_integration_enabled:
+        return []
+    return []  # no data source wired yet — see docstring
