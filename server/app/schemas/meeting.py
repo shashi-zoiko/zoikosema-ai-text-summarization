@@ -188,3 +188,8 @@ class MeetingIntelligenceOut(BaseModel):
     completed_at: datetime | None = None
     meeting_code: str | None = None
     meeting_title: str | None = None
+    # Whether the CALLER (not necessarily the meeting's host) may edit/regenerate
+    # this summary — true for the meeting's host or a platform admin. Any
+    # attendee can view a transcript-sourced summary, but only host/admin can
+    # change it, so the client uses this to decide whether to show Edit.
+    can_edit: bool = False

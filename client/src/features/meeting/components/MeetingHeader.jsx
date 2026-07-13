@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useConnectionState, useLocalParticipant } from '@livekit/components-react'
 import { ConnectionQuality, ConnectionState } from 'livekit-client'
-import { Check, Copy, Info, MessagesSquare, Pencil, Star, UserPlus } from 'lucide-react'
+import {
+  Check, Copy, FileText, Globe, Info, Lock, Mail, MessagesSquare, Pause, Pencil, Sparkles, Star, UserPlus,
+} from 'lucide-react'
 import HostMenu from './HostMenu.jsx'
 import { useRoomStore } from '../state/roomStore.js'
 import { useCaptionControls } from '../captions/useCaptions.js'
@@ -29,15 +31,13 @@ export default function MeetingHeader({
   onScreenEnabled,
   onOpenInfo,
   onOpenPeople,
-  onOpenSummary = () => {},
+  onSetSummarizer = () => {},
+  onStartSummarizing = () => {},
   onOpenConversations = () => {},
 }) {
   const state = useConnectionState()
   const reconnecting = state === ConnectionState.Reconnecting
   const connecting = state === ConnectionState.Connecting
-  // Drives the Meet Summarizer button's listening glow — reads straight off
-  // context since this header renders inside CaptionProvider.
-  const { capturing: summarizing } = useCaptionControls()
 
   return (
     <header
@@ -129,23 +129,161 @@ export default function MeetingHeader({
           <MessagesSquare className="h-4 w-4" />
         </button>
 
-        <button
-          type="button"
-          onClick={onOpenSummary}
-          aria-label="Meet Summarizer"
-          title="Meet Summarizer"
-          className={
-            'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-blue-500 text-white shadow-sm transition hover:brightness-110 ' +
-            (summarizing ? 'zk-summarizer-glow' : '')
-          }
-        >
-          <span className="inline-flex items-start">
-            <Star className="h-2 w-2 fill-current" />
-            <Pencil className="h-4 w-4" />
-          </span>
-        </button>
+        <SummarizerButton
+          isHostOrCohost={isHostOrCohost}
+          summarizerOn={!!meeting?.summarizer_on}
+          onSetSummarizer={onSetSummarizer}
+          onStartSummarizing={onStartSummarizing}
+        />
       </div>
     </header>
+  )
+}
+
+/**
+ * Meet Summarizer header button — a small anchored popover (Google-Meet
+ * "Gemini is taking notes" style), NOT a full-screen panel.
+ *
+ * `summarizerOn` is ROOM-WIDE state (server-synced via the control WS —
+ * `meeting.summarizer_on`, set by MeetRoomLivekit's `onSetSummarizer`), not
+ * local per-client state — so when the host flips it, every participant's
+ * button glows and their popover reflects "on" immediately, not just the
+ * host's own browser tab. Visible to every participant so non-hosts can
+ * discover the feature, but only a host/co-host can actually flip it:
+ *   - host/co-host, off: a short blurb + "Start Summarizing".
+ *   - host/co-host, on: status card (who gets the summary, meeting
+ *     language, how the transcript is used) + working "Pause Summarizing".
+ *   - everyone else, on: the SAME status card, but the toggle renders
+ *     disabled — they can see it's running, not stop it.
+ *   - everyone else, off: a locked "you don't have permission" card.
+ * `setCapturing` (local, off CaptionsControlContext) still separately gates
+ * the HOST's OWN mic recognition — only the toggling host's speech feeds the
+ * transcript this way, same as before; non-hosts merely see the status.
+ * `onStartSummarizing` stamps the Conversations panel's session zero point
+ * the first time capture turns on (idempotent there). Closes on outside
+ * click or Escape, same pattern as HostMenu.
+ */
+function SummarizerButton({ isHostOrCohost, summarizerOn, onSetSummarizer, onStartSummarizing }) {
+  const { setCapturing } = useCaptionControls()
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDocClick = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDocClick)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const toggleCapturing = () => {
+    const next = !summarizerOn
+    onSetSummarizer(next)
+    setCapturing(next)
+    if (next) onStartSummarizing?.()
+    setOpen(false)
+  }
+
+  const statusCard = (
+    <div className="p-4">
+      <div className="text-[14px] font-semibold text-white">Meet Summarizer is on</div>
+      <p className="mt-1 text-[12px] text-[#94A3B8]">Notes will be available after the meeting</p>
+      <div className="mt-3 divide-y divide-[#263244] rounded-lg border border-[#263244] bg-[#0B1220]">
+        <InfoRow icon={<Mail className="h-4 w-4" />} text="The summary will be available to everyone who attended" />
+        <InfoRow icon={<Globe className="h-4 w-4" />} text="Meeting language: English" />
+        <InfoRow icon={<FileText className="h-4 w-4" />} text="The spoken transcript captured is used temporarily to generate the summary" />
+      </div>
+      {isHostOrCohost ? (
+        <button
+          type="button"
+          onClick={toggleCapturing}
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#10B981]/15 px-3.5 py-2 text-[13px] font-semibold text-[#34D399] transition hover:bg-[#10B981]/25"
+        >
+          <Pause className="h-3.5 w-3.5" /> Pause Summarizing
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled
+          title="Only the host or an admin can pause this"
+          className="mt-3 flex w-full cursor-not-allowed items-center justify-center gap-1.5 rounded-full bg-white/5 px-3.5 py-2 text-[13px] font-semibold text-[#64748B]"
+        >
+          <Pause className="h-3.5 w-3.5" /> Pause Summarizing
+        </button>
+      )}
+    </div>
+  )
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Meet Summarizer"
+        title="Meet Summarizer"
+        className={
+          'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-blue-500 text-white shadow-sm transition hover:brightness-110 ' +
+          (summarizerOn ? 'zk-summarizer-glow' : '')
+        }
+      >
+        <span className="inline-flex items-start">
+          <Star className="h-2 w-2 fill-current" />
+          <Pencil className="h-4 w-4" />
+        </span>
+      </button>
+
+      {open && (
+        <div className="zk-glass zk-pop-in absolute right-0 top-[calc(100%+10px)] z-30 w-80 origin-top-right overflow-hidden rounded-xl border border-[#263244] bg-[#1F2937] text-left shadow-2xl">
+          {summarizerOn ? (
+            statusCard
+          ) : isHostOrCohost ? (
+            <div className="p-4 text-center">
+              <span className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-[#1E293B] text-[#94A3B8]">
+                <Sparkles className="h-4 w-4" />
+              </span>
+              <p className="mt-3 text-[12.5px] leading-relaxed text-[#94A3B8]">
+                Capture this meeting's conversation to generate a summary once you leave — viewable afterward by anyone
+                who attended, on this meeting's Intelligence page.
+              </p>
+              <button
+                type="button"
+                onClick={toggleCapturing}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 px-3.5 py-2 text-[13px] font-semibold text-white transition hover:brightness-110"
+              >
+                <Sparkles className="h-3.5 w-3.5" /> Start Summarizing
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2.5 p-4">
+              <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#0B1220] text-[#94A3B8]">
+                <Lock className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-[13px] font-semibold text-white">Meet Summarizer</div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-[#94A3B8]">
+                  You don't have permission to control this for this meeting. Only the host or an admin can turn it on or off.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InfoRow({ icon, text }) {
+  return (
+    <div className="flex items-start gap-3 px-3.5 py-2.5">
+      <span className="mt-0.5 shrink-0 text-[#94A3B8]">{icon}</span>
+      <span className="text-[12px] leading-relaxed text-[#CBD5E1]">{text}</span>
+    </div>
   )
 }
 

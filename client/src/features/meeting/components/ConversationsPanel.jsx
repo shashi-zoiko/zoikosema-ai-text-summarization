@@ -48,11 +48,11 @@ function groupTranscript(transcript, t0) {
  * panel over the call; clicking the backdrop (anywhere outside the panel)
  * closes it, same as pressing Escape.
  *
- * `startedAt` is the Meet Summarizer session's start time (set on its first
- * click, shared with MeetSummaryPanel) — lines said before that are excluded
- * and headings count up from 00:00 from that point, not the meeting's join
- * time. Until the summarizer has been started at all, there's no session to
- * show yet.
+ * `startedAt` is the Meet Summarizer session's start time (set the first
+ * time its popover's "Start Summarizing" is clicked) — lines said before
+ * that are excluded and headings count up from 00:00 from that point, not
+ * the meeting's join time. Until the summarizer has been started at all,
+ * there's no session to show yet.
  */
 export default function ConversationsPanel({ onClose, startedAt }) {
   const { transcript } = useLiveCaptions()
