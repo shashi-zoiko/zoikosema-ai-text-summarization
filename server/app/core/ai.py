@@ -268,7 +268,7 @@ def _empty_intelligence() -> dict:
         "follow_ups": {"emails": [], "slack": [], "tasks": []},
         "contradictions": [],
         "knowledge_nuggets": [],
-        "table_data": {"enabled": true, "type": "discussion_overview", "type_label": "Discussion Overview", "columns": [{"key": "speaker", "label": "Speaker"}, {"key": "topic", "label": "Topic"}, {"key": "key_point", "label": "Key Point"}], "rows": []},
+        "table_data": {"enabled": True, "type": "discussion_overview", "type_label": "Discussion Overview", "columns": [{"key": "speaker", "label": "Speaker"}, {"key": "topic", "label": "Topic"}, {"key": "key_point", "label": "Key Point"}], "rows": []},
     }
 
 
