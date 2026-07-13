@@ -160,11 +160,9 @@ A one-off manual integration script (not committed — lived in a scratch dir) e
 
 ### What Phase 1 (§2's scope list) still needs, in the same agile one-slice-at-a-time style
 
-- `sema/rsvp-reminders-imip` — extend the existing `.ics` generator (`app/core/calendar.py`) and reminder job (`app/core/meeting_reminders.py`) for calendar-sourced events, per §2's original scope. Not started.
-- Admin consent UI/flow for connecting a provider (today it's API-only: `POST /api/connect/provider-connections` expects an already-obtained `authorization_code` — nothing generates the Google/Microsoft consent-screen redirect URL yet).
-- Read-only ZoikoTime availability signal, still gated on open question #1 in §3 (stub behind a feature flag, default off) — not started, not blocking anything built so far.
+Full forward-looking slice breakdown (Phase 1 remainder through Phase 5, branch names, dependencies, plan files) now lives in **[`../plans/sema-roadmap.md`](../plans/sema-roadmap.md)** — that file is the single source of truth for sequencing from slice 5 onward; this section stays as the historical record of slices 1-4 above and is not updated further as new slices ship.
 
-**What is NOT done and should not be started next** (still correctly deferred per §4's doctrine): Work Graph, Policy Engine, Action Review Queue, any L2+ autonomy, Mail Connect, DLP. Nothing built or tested this session needed them, which is itself evidence the phasing call was right.
+**What is NOT done and should not be started next** (still correctly deferred per §4's doctrine): Work Graph, Policy Engine, Action Review Queue, any L2+ autonomy, Mail Connect, DLP. Nothing built or tested this session needed them, which is itself evidence the phasing call was right. (Confirmed again in `sema-roadmap.md`: these land at the start of Phase 2, once native CalendarEvent CRUD gives them a real mutation to govern.)
 
 ### Remaining follow-ups (updated — most of §5/§6/§7's original list is now done)
 
