@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     # tenant; override to a specific tenant GUID to restrict to one org.
     microsoft_calendar_tenant: str = "common"
 
+    # ZoikoTime workforce-truth availability signal (spec §6.1) — read-only
+    # visibility only per Phase 1 phasing, hard enforcement is Phase 2+. Off
+    # by default: no real data source exists yet in this repo (that's
+    # plans/zoikotime-workforce-signal-integration.md's scope, a separate
+    # cross-repo plan/webhook). Same flag name that plan already commits to,
+    # so both sides gate on the identical setting once it lands.
+    zoikotime_integration_enabled: bool = False
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
