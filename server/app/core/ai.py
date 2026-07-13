@@ -505,8 +505,18 @@ def ai_generate_intelligence(
         "speakers, sentiment, follow_ups, contradictions, knowledge_nuggets, "
         "table_data labels and cell values) in the language specified. "
         "Preserve participant names and proper nouns as-is — only translate "
-        f"the analysis text itself.\n"
-        f"- Language: {language}. ALL output text must be in {language}."
+        "the analysis text itself.\n"
+        "- Use the CORRECT script for the target language: for Chinese use "
+        "Simplified Chinese characters (Hanzi), for Japanese use proper mix of "
+        "Kanji, Hiragana and Katakana, for Arabic and Hebrew use their native "
+        "right-to-left script, for Korean use Hangul, for Thai use Thai script, "
+        "for Greek use Greek alphabet, for Russian/Ukrainian use Cyrillic.\n"
+        f"- Language: {language}. ALL output text must be in {language}. "
+        "If the language requested is 'chinese', output in Simplified Chinese. "
+        "If 'japanese', output in Japanese (Kanji + Kana). "
+        "Do NOT fall back to English. If you cannot fluently produce text in "
+        "the requested language, output a clear statement in that language "
+        "saying you cannot comply."
     )
 
     user_prompt = (
@@ -703,7 +713,15 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         f"- Language: {language}. ALL output text (title, summary, key_takeaways "
         "text, table_data labels and cell values) must be in {language}. "
         "Preserve participant names and proper nouns as-is — only translate "
-        "the analysis content."
+        "the analysis content.\n"
+        "- Use the CORRECT script: for Chinese use Simplified Chinese characters "
+        "(Hanzi), for Japanese use Kanji+Hiragana+Katakana, for Korean use Hangul, "
+        "for Arabic/Hebrew use native right-to-left script, for Thai use Thai script, "
+        "for Greek use Greek alphabet, for Cyrillic languages use Cyrillic.\n"
+        "If the language requested is 'chinese', output in Simplified Chinese. "
+        "If 'japanese', output in Japanese (Kanji + Kana). "
+        "Do NOT fall back to English. If you cannot produce text in the requested "
+        "language, output a clear statement in that language saying so."
     )
     user_prompt = (
         f"Meeting title: {meeting_title}\n\n"
