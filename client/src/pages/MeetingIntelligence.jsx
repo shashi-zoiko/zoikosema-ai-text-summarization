@@ -656,45 +656,41 @@ export default function MeetingIntelligence() {
           )}
         </motion.div>
 
-        {payload && hasTable && status === 'ready' && !editing && (
-          <motion.div variants={fadeUp} className="mt-3 flex items-center gap-2">
-            <div className="flex items-center gap-0 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 p-0.5">
-              <button
-                onClick={() => setViewMode('text')}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-[12px] font-medium transition',
-                  viewMode === 'text'
-                    ? 'bg-[var(--c-surface)] text-[var(--c-fg)] shadow-sm'
-                    : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg-dim)]',
-                )}
-              >
-                <FileText className="mr-1.5 inline h-3.5 w-3.5" />
-                Text
-              </button>
-              <button
-                onClick={() => setViewMode('table')}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-[12px] font-medium transition',
-                  viewMode === 'table'
-                    ? 'bg-[var(--c-surface)] text-[var(--c-fg)] shadow-sm'
-                    : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg-dim)]',
-                )}
-              >
-                <Table2 className="mr-1.5 inline h-3.5 w-3.5" />
-                Table
-              </button>
-            </div>
-          </motion.div>
-        )}
-
         {payload && status === 'ready' && !editing && (
-          <motion.div variants={fadeUp} className="mt-3 flex items-center gap-2">
+          <motion.div variants={fadeUp} className="mt-3 flex flex-wrap items-center gap-2">
+            {hasTable && (
+              <div className="flex items-center gap-0 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 p-0.5">
+                <button
+                  onClick={() => setViewMode('text')}
+                  className={cn(
+                    'rounded-md px-3 py-1.5 text-[12px] font-medium transition',
+                    viewMode === 'text'
+                      ? 'bg-[var(--c-surface)] text-[var(--c-fg)] shadow-sm'
+                      : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg-dim)]',
+                  )}
+                >
+                  <FileText className="mr-1.5 inline h-3.5 w-3.5" />
+                  Text
+                </button>
+                <button
+                  onClick={() => setViewMode('table')}
+                  className={cn(
+                    'rounded-md px-3 py-1.5 text-[12px] font-medium transition',
+                    viewMode === 'table'
+                      ? 'bg-[var(--c-surface)] text-[var(--c-fg)] shadow-sm'
+                      : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg-dim)]',
+                  )}
+                >
+                  <Table2 className="mr-1.5 inline h-3.5 w-3.5" />
+                  Table
+                </button>
+              </div>
+            )}
             <div className="flex items-center gap-1.5 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 px-2.5 py-1">
-              <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--c-fg-muted)]">Lang</span>
               <select
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
-                className="bg-transparent text-[12.5px] text-[var(--c-fg)] outline-none"
+                className="bg-transparent text-[12px] text-[var(--c-fg)] outline-none"
               >
                 <option value="english">English</option>
                 <option value="spanish">Spanish</option>
@@ -708,6 +704,11 @@ export default function MeetingIntelligence() {
                 <option value="russian">Russian</option>
               </select>
             </div>
+            {!isTranscript && (
+              <Button variant="outline" size="sm" onClick={regenerate} loading={generating} leftIcon={<RefreshCw className="h-3.5 w-3.5" />}>
+                {intel ? 'Regenerate' : 'Generate'}
+              </Button>
+            )}
           </motion.div>
         )}
 
