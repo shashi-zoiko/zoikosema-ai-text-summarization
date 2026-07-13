@@ -185,6 +185,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("meeting_invites", "reminder_sent", "BOOLEAN DEFAULT FALSE NOT NULL"),
     # Host-cancelled scheduled meetings (drives the "cancelled" status).
     ("meetings", "cancelled_at", "TIMESTAMP WITH TIME ZONE"),
+    # Saved transcript file URL for transcript-based intelligence regeneration.
+    ("meeting_intelligence", "transcript_file_url", "VARCHAR(500)"),
     # Meet Summarizer room-wide on/off (host/co-host controlled, broadcast to
     # everyone — see signaling.py's "set-summarizer" handler).
     ("meetings", "summarizer_on", "BOOLEAN DEFAULT FALSE NOT NULL"),

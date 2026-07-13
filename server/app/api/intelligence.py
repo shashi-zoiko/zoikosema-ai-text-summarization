@@ -129,6 +129,8 @@ def run_generation(
     requested_by_id: int | None,
     recording: MeetingRecording | None = None,
     transcript: list[dict] | None = None,
+    language: str = "english",
+    transcript_file_url: str | None = None,
 ) -> MeetingIntelligence:
     """Core generation pipeline used by both the API endpoint and the
     auto-trigger after recording upload.
@@ -165,19 +167,21 @@ def run_generation(
         requested_by_id=requested_by_id,
         status=INTEL_STATUS_GENERATING,
         source=INTEL_SOURCE_TRANSCRIPT if is_transcript else INTEL_SOURCE_CHAT,
+        transcript_file_url=transcript_file_url,
     )
     db.add(intel)
     db.commit()
     db.refresh(intel)
 
     if is_transcript:
-        result = groq_summarize_transcript(transcript=transcript, meeting_title=meeting.title)
+        result = groq_summarize_transcript(transcript=transcript, meeting_title=meeting.title, language=language)
     else:
         result = ai_generate_intelligence(
             chat_log=chat_log,
             meeting_title=meeting.title,
             participants=participants,
             duration_seconds=duration_seconds,
+            language=language,
         )
 
     intel.completed_at = datetime.now(timezone.utc)
@@ -296,7 +300,58 @@ def get_intelligence(
     if not rec:
         return None
 
+    # If the latest row failed, fall back to the previous ready row so the
+    # user doesn't permanently lose their working intelligence.
+    if rec.status == INTEL_STATUS_FAILED:
+        prev = db.scalar(
+            select(MeetingIntelligence)
+            .where(
+                MeetingIntelligence.meeting_id == meeting.id,
+                MeetingIntelligence.status == INTEL_STATUS_READY,
+            )
+            .order_by(desc(MeetingIntelligence.created_at))
+            .limit(1)
+        )
+        if prev:
+            rec = prev
+
+    if rec.source == INTEL_SOURCE_TRANSCRIPT:
+        if not _is_host_or_platform_admin(meeting, user):
+            raise HTTPException(status_code=403, detail="Only the host or an admin can view this summary")
+    elif not _has_access(meeting, user, db):
+        raise HTTPException(status_code=403, detail="Not a participant of this meeting")
+
     return _intel_to_out(rec, meeting, user)
+
+
+def _save_transcript_file(transcript: list[dict]) -> str | None:
+    """Save transcript data to a JSON file and return its URL path."""
+    if not transcript:
+        return None
+    import uuid
+    fname = f"transcript_{uuid.uuid4().hex}.json"
+    fpath = os.path.join(RECORDINGS_DIR, fname)
+    try:
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(transcript, f, ensure_ascii=False)
+        return f"/api/recordings/files/{fname}"
+    except Exception:
+        return None
+
+
+def _load_transcript_from_url(url: str | None) -> list[dict] | None:
+    """Load transcript data from a saved JSON file URL."""
+    if not url:
+        return None
+    fname = url.rsplit("/", 1)[-1]
+    fpath = os.path.join(RECORDINGS_DIR, fname)
+    if not os.path.exists(fpath):
+        return None
+    try:
+        with open(fpath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 @router.post("/{code}/intelligence", response_model=MeetingIntelligenceOut, status_code=201)
@@ -328,6 +383,7 @@ def generate_intelligence(
     if data.transcript:
         if not _is_host_or_platform_admin(meeting, user):
             raise HTTPException(status_code=403, detail="Only the host or an admin can generate this summary")
+        transcript_url = _save_transcript_file(data.transcript)
         intel = run_generation(
             db,
             meeting,
@@ -335,6 +391,8 @@ def generate_intelligence(
             participants=None,
             requested_by_id=user.id,
             transcript=data.transcript,
+            language=data.language,
+            transcript_file_url=transcript_url,
         )
         return _intel_to_out(intel, meeting, user)
 
@@ -344,6 +402,54 @@ def generate_intelligence(
         raise HTTPException(
             status_code=403, detail="Only hosts and co-hosts can generate intelligence"
         )
+
+    # Check if any transcript-based intelligence has a saved transcript file.
+    # This handles both the case where the latest row is transcript (new
+    # meetings) and where a failed chat row sits on top (the old bug).
+    transcript_with_file = db.scalar(
+        select(MeetingIntelligence)
+        .where(
+            MeetingIntelligence.meeting_id == meeting.id,
+            MeetingIntelligence.source == INTEL_SOURCE_TRANSCRIPT,
+            MeetingIntelligence.transcript_file_url.isnot(None),
+        )
+        .order_by(desc(MeetingIntelligence.created_at))
+        .limit(1)
+    )
+    if transcript_with_file:
+        stored = _load_transcript_from_url(transcript_with_file.transcript_file_url)
+        if stored:
+            intel = run_generation(
+                db,
+                meeting,
+                chat_log=None,
+                participants=None,
+                requested_by_id=user.id,
+                transcript=stored,
+                language=data.language,
+                transcript_file_url=transcript_with_file.transcript_file_url,
+            )
+            return _intel_to_out(intel, meeting, user)
+
+    # If any ready transcript intelligence exists but without a stored file,
+    # and the user is trying to regenerate, return a clear error instead of
+    # silently falling through to the chat path (which would also fail).
+    if data.force:
+        latest_ready_transcript = db.scalar(
+            select(MeetingIntelligence)
+            .where(
+                MeetingIntelligence.meeting_id == meeting.id,
+                MeetingIntelligence.source == INTEL_SOURCE_TRANSCRIPT,
+                MeetingIntelligence.status == INTEL_STATUS_READY,
+            )
+            .order_by(desc(MeetingIntelligence.created_at))
+            .limit(1)
+        )
+        if latest_ready_transcript:
+            raise HTTPException(
+                status_code=400,
+                detail="This summary was generated before the language-regeneration feature was added, so the original transcript wasn't saved to disk. Only new meetings (after this update) will support language switching. If you need to regenerate this specific meeting, please start a new meeting and leave again.",
+            )
 
     # Cached-recent short-circuit unless force=true.
     if not data.force:
@@ -368,6 +474,7 @@ def generate_intelligence(
         chat_log=data.chat_log,
         participants=data.participants,
         requested_by_id=user.id,
+        language=data.language,
     )
     return _intel_to_out(intel, meeting, user)
 

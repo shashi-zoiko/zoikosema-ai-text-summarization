@@ -268,7 +268,7 @@ def _empty_intelligence() -> dict:
         "follow_ups": {"emails": [], "slack": [], "tasks": []},
         "contradictions": [],
         "knowledge_nuggets": [],
-        "table_data": {"enabled": true, "type": "discussion_overview", "type_label": "Discussion Overview", "columns": [{"key": "speaker", "label": "Speaker"}, {"key": "topic", "label": "Topic"}, {"key": "key_point", "label": "Key Point"}], "rows": []},
+        "table_data": {"enabled": True, "type": "discussion_overview", "type_label": "Discussion Overview", "columns": [{"key": "speaker", "label": "Speaker"}, {"key": "topic", "label": "Topic"}, {"key": "key_point", "label": "Key Point"}], "rows": []},
     }
 
 
@@ -433,6 +433,7 @@ def ai_generate_intelligence(
     meeting_title: str = "Meeting",
     participants: list[dict] | None = None,
     duration_seconds: int | None = None,
+    language: str = "english",
 ) -> dict:
     """Produce a structured meeting-intelligence payload.
 
@@ -499,7 +500,23 @@ def ai_generate_intelligence(
         "  • participant_summary — columns: Participant, Role, Contribution. Fallback for check-in meetings.\n"
         "  If none of these fit, design custom columns that match the discussion.\n"
         "- Always provide at least 2 columns and as many rows as there are "
-        "participants or discussion points. Never return an empty rows array."
+        "participants or discussion points. Never return an empty rows array.\n"
+        "- Output ALL text fields (tldr, topics, decisions, action_items, risks, "
+        "speakers, sentiment, follow_ups, contradictions, knowledge_nuggets, "
+        "table_data labels and cell values) in the language specified. "
+        "Preserve participant names and proper nouns as-is — only translate "
+        "the analysis text itself.\n"
+        "- Use the CORRECT script for the target language: for Chinese use "
+        "Simplified Chinese characters (Hanzi), for Japanese use proper mix of "
+        "Kanji, Hiragana and Katakana, for Arabic and Hebrew use their native "
+        "right-to-left script, for Korean use Hangul, for Thai use Thai script, "
+        "for Greek use Greek alphabet, for Russian/Ukrainian use Cyrillic.\n"
+        f"- Language: {language}. ALL output text must be in {language}. "
+        "If the language requested is 'chinese', output in Simplified Chinese. "
+        "If 'japanese', output in Japanese (Kanji + Kana). "
+        "Do NOT fall back to English. If you cannot fluently produce text in "
+        "the requested language, output a clear statement in that language "
+        "saying you cannot comply."
     )
 
     user_prompt = (
@@ -621,7 +638,7 @@ def _empty_transcript_summary() -> dict:
     }
 
 
-def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meeting") -> dict:
+def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meeting", language: str = "english") -> dict:
     """Summarize a spoken-conversation transcript into {title, summary,
     key_takeaways} using Groq.
 
@@ -692,7 +709,19 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         "  • participant_summary — columns: Participant, Role, Contribution. Fallback for check-in meetings.\n"
         "  If none fit, design custom columns that match the discussion.\n"
         "- Always provide at least 2 columns. Populate rows with every speaker "
-        "or discussion point. Never return an empty rows array."
+        "or discussion point. Never return an empty rows array.\n"
+        f"- Language: {language}. ALL output text (title, summary, key_takeaways "
+        "text, table_data labels and cell values) must be in {language}. "
+        "Preserve participant names and proper nouns as-is — only translate "
+        "the analysis content.\n"
+        "- Use the CORRECT script: for Chinese use Simplified Chinese characters "
+        "(Hanzi), for Japanese use Kanji+Hiragana+Katakana, for Korean use Hangul, "
+        "for Arabic/Hebrew use native right-to-left script, for Thai use Thai script, "
+        "for Greek use Greek alphabet, for Cyrillic languages use Cyrillic.\n"
+        "If the language requested is 'chinese', output in Simplified Chinese. "
+        "If 'japanese', output in Japanese (Kanji + Kana). "
+        "Do NOT fall back to English. If you cannot produce text in the requested "
+        "language, output a clear statement in that language saying so."
     )
     user_prompt = (
         f"Meeting title: {meeting_title}\n\n"

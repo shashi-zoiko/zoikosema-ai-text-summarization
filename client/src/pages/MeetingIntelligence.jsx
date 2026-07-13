@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
-  AlertTriangle, ArrowLeft, Brain, CheckCircle2, ChevronRight, Copy,
-  Download, FileText, GitMerge, Lightbulb, ListChecks, Loader2, Mic, Pencil,
+  AlertTriangle, ArrowLeft, Brain, CheckCircle2, ChevronDown, ChevronRight, Copy,
+  Download, FileText, GitMerge, Globe, Lightbulb, ListChecks, Loader2, Mic, Pencil,
   Plus, Printer, RefreshCw, Save, ShieldAlert, Sparkles, Table2, Target, Trash2, TrendingUp,
   Users2, X, Zap,
 } from 'lucide-react'
@@ -418,6 +418,7 @@ export default function MeetingIntelligence() {
 
   // Toggle between text and table view.
   const [viewMode, setViewMode] = useState('text')
+  const [language, setLanguage] = useState('english')
 
   useEffect(() => {
     let cancelled = false
@@ -457,7 +458,7 @@ export default function MeetingIntelligence() {
     try {
       const fresh = await api(`/api/meetings/${code}/intelligence`, {
         method: 'POST',
-        body: { force: true },
+        body: { force: true, language },
       })
       setIntel(fresh)
     } catch (e) {
@@ -471,6 +472,9 @@ export default function MeetingIntelligence() {
   const status = intel?.status
   const isTranscript = intel?.source === 'transcript'
   const hasTable = payload?.table_data?.enabled && payload?.table_data?.rows?.length > 0
+  useEffect(() => {
+    if (viewMode === 'table' && !hasTable) setViewMode('text')
+  }, [viewMode, hasTable])
 
   const slug = `${(intel?.meeting_title || code || 'meeting').replace(/[^a-z0-9-_]+/gi, '-').toLowerCase()}-${isTranscript ? 'summary' : 'intelligence'}`
 
@@ -627,14 +631,6 @@ export default function MeetingIntelligence() {
             )
           ) : (
             <>
-              <Button
-                variant="primary"
-                onClick={regenerate}
-                loading={generating}
-                leftIcon={<RefreshCw className="h-4 w-4" />}
-              >
-                {intel ? 'Regenerate' : 'Generate intelligence'}
-              </Button>
               {payload && status === 'ready' && (
                 <>
                   <Button variant="outline" onClick={() => exportMarkdown(false)} leftIcon={<Copy className="h-4 w-4" />}>
@@ -657,34 +653,149 @@ export default function MeetingIntelligence() {
           )}
         </motion.div>
 
-        {payload && hasTable && status === 'ready' && !editing && (
-          <motion.div variants={fadeUp} className="mt-3 flex items-center gap-2">
-            <div className="flex items-center gap-0 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 p-0.5">
+        {!editing && (
+          <motion.div variants={fadeUp} className="mt-3 flex flex-wrap items-center gap-1.5">
+            <div className="flex items-center gap-0 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 p-0.5 shadow-sm">
               <button
                 onClick={() => setViewMode('text')}
                 className={cn(
-                  'rounded-md px-3 py-1.5 text-[12px] font-medium transition',
+                  'rounded-md px-3 py-1.5 text-[12px] font-medium transition-all duration-150',
                   viewMode === 'text'
                     ? 'bg-[var(--c-surface)] text-[var(--c-fg)] shadow-sm'
-                    : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg-dim)]',
+                    : 'text-[var(--c-fg-muted)] hover:bg-[var(--c-bg-2)]/40 hover:text-[var(--c-fg-dim)]',
                 )}
               >
                 <FileText className="mr-1.5 inline h-3.5 w-3.5" />
                 Text
               </button>
               <button
-                onClick={() => setViewMode('table')}
+                onClick={() => hasTable && setViewMode('table')}
+                disabled={!hasTable}
                 className={cn(
-                  'rounded-md px-3 py-1.5 text-[12px] font-medium transition',
+                  'rounded-md px-3 py-1.5 text-[12px] font-medium transition-all duration-150',
                   viewMode === 'table'
                     ? 'bg-[var(--c-surface)] text-[var(--c-fg)] shadow-sm'
-                    : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg-dim)]',
+                    : 'text-[var(--c-fg-muted)] hover:bg-[var(--c-bg-2)]/40 hover:text-[var(--c-fg-dim)]',
+                  !hasTable && 'cursor-not-allowed opacity-40',
                 )}
               >
                 <Table2 className="mr-1.5 inline h-3.5 w-3.5" />
                 Table
               </button>
             </div>
+            <div className="relative flex items-center rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-3)]/40 shadow-sm">
+              <Globe className="ml-2.5 h-3.5 w-3.5 text-[var(--c-fg-muted)] shrink-0" />
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                className="appearance-none bg-transparent py-1.5 pl-1.5 pr-5 text-[12px] text-[var(--c-fg)] outline-none"
+              >
+                <option value="afrikaans">Afrikaans</option>
+                <option value="albanian">Albanian</option>
+                <option value="amharic">Amharic</option>
+                <option value="arabic">Arabic</option>
+                <option value="armenian">Armenian</option>
+                <option value="assamese">Assamese</option>
+                <option value="azerbaijani">Azerbaijani</option>
+                <option value="bashkir">Bashkir</option>
+                <option value="basque">Basque</option>
+                <option value="belarusian">Belarusian</option>
+                <option value="bengali">Bengali</option>
+                <option value="bosnian">Bosnian</option>
+                <option value="breton">Breton</option>
+                <option value="bulgarian">Bulgarian</option>
+                <option value="burmese">Burmese</option>
+                <option value="cantonese">Cantonese</option>
+                <option value="catalan">Catalan</option>
+                <option value="chinese">Chinese</option>
+                <option value="croatian">Croatian</option>
+                <option value="czech">Czech</option>
+                <option value="danish">Danish</option>
+                <option value="dutch">Dutch</option>
+                <option value="english">English</option>
+                <option value="estonian">Estonian</option>
+                <option value="faroese">Faroese</option>
+                <option value="finnish">Finnish</option>
+                <option value="french">French</option>
+                <option value="galician">Galician</option>
+                <option value="georgian">Georgian</option>
+                <option value="german">German</option>
+                <option value="greek">Greek</option>
+                <option value="gujarati">Gujarati</option>
+                <option value="haitian creole">Haitian Creole</option>
+                <option value="hausa">Hausa</option>
+                <option value="hawaiian">Hawaiian</option>
+                <option value="hebrew">Hebrew</option>
+                <option value="hindi">Hindi</option>
+                <option value="hungarian">Hungarian</option>
+                <option value="icelandic">Icelandic</option>
+                <option value="indonesian">Indonesian</option>
+                <option value="italian">Italian</option>
+                <option value="japanese">Japanese</option>
+                <option value="javanese">Javanese</option>
+                <option value="kannada">Kannada</option>
+                <option value="kazakh">Kazakh</option>
+                <option value="khmer">Khmer</option>
+                <option value="korean">Korean</option>
+                <option value="lao">Lao</option>
+                <option value="latin">Latin</option>
+                <option value="latvian">Latvian</option>
+                <option value="lingala">Lingala</option>
+                <option value="lithuanian">Lithuanian</option>
+                <option value="luxembourgish">Luxembourgish</option>
+                <option value="macedonian">Macedonian</option>
+                <option value="malagasy">Malagasy</option>
+                <option value="malay">Malay</option>
+                <option value="malayalam">Malayalam</option>
+                <option value="maltese">Maltese</option>
+                <option value="maori">Maori</option>
+                <option value="marathi">Marathi</option>
+                <option value="mongolian">Mongolian</option>
+                <option value="nepali">Nepali</option>
+                <option value="norwegian">Norwegian</option>
+                <option value="nynorsk">Nynorsk</option>
+                <option value="occitan">Occitan</option>
+                <option value="pashto">Pashto</option>
+                <option value="persian">Persian</option>
+                <option value="polish">Polish</option>
+                <option value="portuguese">Portuguese</option>
+                <option value="punjabi">Punjabi</option>
+                <option value="romanian">Romanian</option>
+                <option value="russian">Russian</option>
+                <option value="sanskrit">Sanskrit</option>
+                <option value="serbian">Serbian</option>
+                <option value="shona">Shona</option>
+                <option value="sindhi">Sindhi</option>
+                <option value="sinhala">Sinhala</option>
+                <option value="slovak">Slovak</option>
+                <option value="slovenian">Slovenian</option>
+                <option value="somali">Somali</option>
+                <option value="spanish">Spanish</option>
+                <option value="sundanese">Sundanese</option>
+                <option value="swahili">Swahili</option>
+                <option value="swedish">Swedish</option>
+                <option value="tagalog">Tagalog</option>
+                <option value="tajik">Tajik</option>
+                <option value="tamil">Tamil</option>
+                <option value="tatar">Tatar</option>
+                <option value="telugu">Telugu</option>
+                <option value="thai">Thai</option>
+                <option value="tibetan">Tibetan</option>
+                <option value="turkish">Turkish</option>
+                <option value="turkmen">Turkmen</option>
+                <option value="ukrainian">Ukrainian</option>
+                <option value="urdu">Urdu</option>
+                <option value="uzbek">Uzbek</option>
+                <option value="vietnamese">Vietnamese</option>
+                <option value="welsh">Welsh</option>
+                <option value="yiddish">Yiddish</option>
+                <option value="yoruba">Yoruba</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-2 h-3 w-3 text-[var(--c-fg-muted)]" />
+            </div>
+            <Button variant="secondary" size="sm" onClick={regenerate} loading={generating} leftIcon={<RefreshCw className="h-3.5 w-3.5" />}>
+              {intel ? 'Regenerate' : 'Generate'}
+            </Button>
           </motion.div>
         )}
 
@@ -705,7 +816,7 @@ export default function MeetingIntelligence() {
           <Brain className="mx-auto mb-3 h-10 w-10 text-[var(--c-accent)]" />
           <div className="text-[16px] font-semibold tracking-tight">No intelligence yet</div>
           <div className="mt-1 text-[13px] text-[var(--c-fg-muted)]">
-            Click <span className="font-semibold">Generate intelligence</span> to analyze this meeting's chat log
+            Use the <span className="font-semibold">Generate</span> button above to analyze this meeting's data
             and surface decisions, action items, risks, and team sentiment.
           </div>
         </Card>
@@ -723,7 +834,7 @@ export default function MeetingIntelligence() {
 
       {intel && status !== 'generating' && payload && (
         isTranscript ? (
-          viewMode === 'table' ? (
+          viewMode === 'table' && hasTable ? (
             <TableSummaryView tableData={payload.table_data} />
           ) : (
             <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
@@ -742,7 +853,7 @@ export default function MeetingIntelligence() {
             </motion.section>
           )
         ) : (
-        viewMode === 'table' ? (
+        viewMode === 'table' && hasTable ? (
           <TableSummaryView tableData={payload.table_data} />
         ) : (
         <>
