@@ -138,6 +138,15 @@ class Settings(BaseSettings):
     # tenant; override to a specific tenant GUID to restrict to one org.
     microsoft_calendar_tenant: str = "common"
 
+    # Gmail OAuth app (Phase 3 slice 1) — a SEPARATE Google Cloud OAuth app
+    # from google_calendar_*. Gmail restricted scopes (gmail.readonly, later
+    # gmail.send) are their own Google verification/CASA review track
+    # (spec §7.3); reusing the Calendar app's client id would conflate two
+    # independent scope-review processes.
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
+    gmail_redirect_uri: str = ""
+
     # ZoikoTime workforce-truth availability signal (spec §6.1) — read-only
     # visibility only per Phase 1 phasing, hard enforcement is Phase 2+. Off
     # by default: no real data source exists yet in this repo (that's

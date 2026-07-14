@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/provider-connections", tags=["connect.provider_connections"])
 
-_PROVIDERS = Literal["google_calendar", "microsoft_calendar"]
+_PROVIDERS = Literal["google_calendar", "microsoft_calendar", "gmail"]
 
 
 class ConnectProviderIn(BaseModel):
