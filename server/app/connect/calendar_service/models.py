@@ -73,3 +73,27 @@ class NativeCalendarEvent(ConnectBase):
     created_by = Column(BigInteger, nullable=False)
     correlation_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+
+RESOURCE_TYPES = ("room", "equipment")
+
+
+class Resource(ConnectBase):
+    """connect_resources — bookable rooms/equipment (Phase 2 slice 5).
+
+    Reference data, not a governed mutation: ordinary mutable table with a
+    touch trigger (see migrations/connect_v3_008_resources.sql), not the
+    append-only/version-chain pattern NativeCalendarEvent uses. A booking
+    is an entry in NativeCalendarEvent.resources referencing this table's
+    id, not a row here.
+    """
+    __tablename__ = "connect_resources"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(UUID(as_uuid=False), primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    type = Column(String, nullable=False, default="room")
+    created_by = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
