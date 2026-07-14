@@ -10,7 +10,15 @@ import { CaptionsControlContext, CaptionsLiveContext } from './useCaptions'
 // malformed/hostile payloads) and cap the length. Done as a codepoint scan to
 // keep the source ASCII-clean. React escapes the text on render too, so this is
 // belt-and-braces against injection.
-function sanitize(text, maxLen = CAPTION_CONFIG.maxChars) {
+//
+// Default cap is `maxLineChars`, NOT the old single-fragment `maxChars` —
+// Chrome's recognizer doesn't reliably finalize every few words; a single
+// `isFinal` result from one continuous, unbroken sentence can easily run past
+// 300 characters. Truncating at that point (as this used to do by default)
+// silently dropped the tail of the sentence before the fragment even reached
+// the merge-stitching logic in `ingest`, which only guards the MERGED line —
+// too late if the incoming single fragment was already cut short.
+function sanitize(text, maxLen = CAPTION_CONFIG.maxLineChars) {
   const s = String(text || '')
   let out = ''
   for (let i = 0; i < s.length && out.length < maxLen; i++) {
@@ -144,11 +152,9 @@ export default function CaptionProvider({ children }) {
           // consecutive finals from the SAME speaker back into one line (when
           // they land close together) turns "shredded" fragments back into
           // readable sentences instead of one choppy line per fragment.
-          // Re-sanitize with the LINE cap, not the single-fragment `maxChars`
-          // cap — each fragment already passed that cap on ingest, but the
-          // merged line is many fragments long and re-applying the small
-          // per-fragment cap here would truncate (silently drop) everything
-          // said after the first ~300 characters of a continuous sentence.
+          // Re-sanitize the merged result — `prev.text` and `clean` were each
+          // already within `maxLineChars` individually, but concatenated they
+          // could exceed it, so re-apply the cap to the combined line.
           const merge = prev && prev.speakerId === speakerId && now - prev.ts < FRAGMENT_MERGE_GAP_MS
           const next = merge
             ? [...lines.slice(0, -1), { ...prev, text: sanitize(`${prev.text} ${clean}`, CAPTION_CONFIG.maxLineChars), ts: now }]

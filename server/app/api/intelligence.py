@@ -85,7 +85,12 @@ def _is_host_or_platform_admin(meeting: Meeting, user: User) -> bool:
     return meeting.host_id == user.id or _is_admin(user)
 
 
-def _intel_to_out(rec: MeetingIntelligence, meeting: Meeting, user: User) -> dict:
+def _intel_to_out(
+    rec: MeetingIntelligence,
+    meeting: Meeting,
+    user: User,
+    conversation: list[dict] | None = None,
+) -> dict:
     return {
         "id": rec.id,
         "meeting_id": rec.meeting_id,
@@ -105,6 +110,7 @@ def _intel_to_out(rec: MeetingIntelligence, meeting: Meeting, user: User) -> dic
         "meeting_code": meeting.code,
         "meeting_title": meeting.title,
         "can_edit": _is_host_or_platform_admin(meeting, user),
+        "conversation": conversation,
     }
 
 
@@ -315,13 +321,8 @@ def get_intelligence(
         if prev:
             rec = prev
 
-    if rec.source == INTEL_SOURCE_TRANSCRIPT:
-        if not _is_host_or_platform_admin(meeting, user):
-            raise HTTPException(status_code=403, detail="Only the host or an admin can view this summary")
-    elif not _has_access(meeting, user, db):
-        raise HTTPException(status_code=403, detail="Not a participant of this meeting")
-
-    return _intel_to_out(rec, meeting, user)
+    conversation = _load_conversation(rec, meeting, db)
+    return _intel_to_out(rec, meeting, user, conversation=conversation)
 
 
 def _save_transcript_file(transcript: list[dict]) -> str | None:
@@ -352,6 +353,51 @@ def _load_transcript_from_url(url: str | None) -> list[dict] | None:
             return json.load(f)
     except Exception:
         return None
+
+
+def _normalize_conversation(msgs: list[dict] | None) -> list[dict] | None:
+    """Reshape raw chat-log/transcript entries into the fixed {time, name,
+    body} shape the summary page renders, tolerating the same field-name
+    fallbacks `_format_chat_log` already does (timestamp/sender/user/text/
+    content). Returns None (not []) when there's nothing to show, so the
+    client can tell "no conversation on file" apart from "empty list"."""
+    if not msgs:
+        return None
+    out = []
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        body = m.get("body") or m.get("text") or m.get("content") or ""
+        if not body:
+            continue
+        out.append({
+            "time": m.get("time") or m.get("timestamp") or "",
+            "name": m.get("name") or m.get("sender") or m.get("user") or "Unknown",
+            "body": body,
+        })
+    return out or None
+
+
+def _load_conversation(rec: MeetingIntelligence, meeting: Meeting, db: Session) -> list[dict] | None:
+    """Load the raw message-by-message log this intelligence row was
+    generated from (the spoken transcript or the text chat log), so the
+    summary page can show the actual conversation underneath the AI's
+    synthesized analysis — not just its extracted highlights.
+    """
+    if rec.source == INTEL_SOURCE_TRANSCRIPT:
+        return _normalize_conversation(_load_transcript_from_url(rec.transcript_file_url))
+
+    recording = db.get(MeetingRecording, rec.recording_id) if rec.recording_id else None
+    if not recording:
+        recording = db.scalar(
+            select(MeetingRecording)
+            .where(MeetingRecording.meeting_id == meeting.id)
+            .order_by(desc(MeetingRecording.created_at))
+            .limit(1)
+        )
+    if not recording:
+        return None
+    return _normalize_conversation(_load_chat_log_from_recording(recording))
 
 
 @router.post("/{code}/intelligence", response_model=MeetingIntelligenceOut, status_code=201)
@@ -394,7 +440,7 @@ def generate_intelligence(
             language=data.language,
             transcript_file_url=transcript_url,
         )
-        return _intel_to_out(intel, meeting, user)
+        return _intel_to_out(intel, meeting, user, conversation=_load_conversation(intel, meeting, db))
 
     if not _has_access(meeting, user, db):
         raise HTTPException(status_code=403, detail="Not a participant of this meeting")
@@ -429,7 +475,7 @@ def generate_intelligence(
                 language=data.language,
                 transcript_file_url=transcript_with_file.transcript_file_url,
             )
-            return _intel_to_out(intel, meeting, user)
+            return _intel_to_out(intel, meeting, user, conversation=_load_conversation(intel, meeting, db))
 
     # If any ready transcript intelligence exists but without a stored file,
     # and the user is trying to regenerate, return a clear error instead of
@@ -466,7 +512,7 @@ def generate_intelligence(
             .limit(1)
         )
         if cached:
-            return _intel_to_out(cached, meeting, user)
+            return _intel_to_out(cached, meeting, user, conversation=_load_conversation(cached, meeting, db))
 
     intel = run_generation(
         db,
@@ -476,7 +522,7 @@ def generate_intelligence(
         requested_by_id=user.id,
         language=data.language,
     )
-    return _intel_to_out(intel, meeting, user)
+    return _intel_to_out(intel, meeting, user, conversation=_load_conversation(intel, meeting, db))
 
 
 @router.patch("/{code}/intelligence", response_model=MeetingIntelligenceOut)
@@ -523,7 +569,7 @@ def edit_intelligence(
 
     db.commit()
     db.refresh(rec)
-    return _intel_to_out(rec, meeting, user)
+    return _intel_to_out(rec, meeting, user, conversation=_load_conversation(rec, meeting, db))
 
 
 @router.get("/{code}/intelligence/history", response_model=list[MeetingIntelligenceOut])

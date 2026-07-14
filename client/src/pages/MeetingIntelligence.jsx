@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   AlertTriangle, ArrowLeft, Brain, CheckCircle2, ChevronDown, ChevronRight, Copy,
-  Download, FileText, GitMerge, Globe, Lightbulb, ListChecks, Loader2, Mic, Pencil,
+  Download, FileText, GitMerge, Globe, Lightbulb, ListChecks, Loader2, MessagesSquare, Mic, Pencil,
   Plus, Printer, RefreshCw, Save, ShieldAlert, Sparkles, Table2, Target, Trash2, TrendingUp,
   Users2, X, Zap,
 } from 'lucide-react'
@@ -401,6 +401,38 @@ function TranscriptSummaryView({
   )
 }
 
+// The raw message-by-message log this summary was generated from (spoken
+// transcript or text chat), normalized server-side to {time, name, body} —
+// a reference underneath the AI's synthesized analysis so users can see
+// exactly what was said. Fixed-height with its own internal scrollbar so a
+// long meeting's full log never stretches the page itself past a screenful.
+function ConversationLog({ conversation }) {
+  const list = Array.isArray(conversation) ? conversation : []
+  return (
+    <SectionCard title="Conversation" icon={<MessagesSquare />} tone="neutral" count={list.length}>
+      {list.length === 0 ? (
+        <EmptyState
+          icon={<MessagesSquare className="h-4 w-4" />}
+          title="No conversation on file"
+          hint="The original chat log or transcript isn't available for this meeting."
+        />
+      ) : (
+        <div className="h-[420px] overflow-y-auto rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)]/30 p-3.5">
+          <ul className="space-y-2.5">
+            {list.map((m, i) => (
+              <li key={i} className="text-[13px] leading-relaxed">
+                {m.time && <span className="mono mr-2 text-[11px] text-[var(--c-fg-muted)]">{m.time}</span>}
+                <span className="font-semibold text-[var(--c-fg)]">{m.name}:</span>{' '}
+                <span className="text-[var(--c-fg-dim)]">{m.body}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </SectionCard>
+  )
+}
+
 export default function MeetingIntelligence() {
   const { code } = useParams()
   const navigate = useNavigate()
@@ -471,7 +503,7 @@ export default function MeetingIntelligence() {
   const payload = intel?.payload || null
   const status = intel?.status
   const isTranscript = intel?.source === 'transcript'
-  const hasTable = payload?.table_data?.enabled && payload?.table_data?.rows?.length > 0
+  const hasTable = Array.isArray(payload?.tables) && payload.tables.length > 0
   useEffect(() => {
     if (viewMode === 'table' && !hasTable) setViewMode('text')
   }, [viewMode, hasTable])
@@ -835,26 +867,33 @@ export default function MeetingIntelligence() {
       {intel && status !== 'generating' && payload && (
         isTranscript ? (
           viewMode === 'table' && hasTable ? (
-            <TableSummaryView tableData={payload.table_data} />
+            <TableSummaryView tables={payload.tables} />
           ) : (
-            <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
-              <Card glow className="p-6">
-                <TranscriptSummaryView
-                  payload={payload}
-                  editing={editing}
-                  editTitle={editTitle}
-                  setEditTitle={setEditTitle}
-                  editSummary={editSummary}
-                  setEditSummary={setEditSummary}
-                  editTakeaways={editTakeaways}
-                  setEditTakeaways={setEditTakeaways}
-                />
-              </Card>
-            </motion.section>
+            <>
+              <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
+                <Card glow className="p-6">
+                  <TranscriptSummaryView
+                    payload={payload}
+                    editing={editing}
+                    editTitle={editTitle}
+                    setEditTitle={setEditTitle}
+                    editSummary={editSummary}
+                    setEditSummary={setEditSummary}
+                    editTakeaways={editTakeaways}
+                    setEditTakeaways={setEditTakeaways}
+                  />
+                </Card>
+              </motion.section>
+              {!editing && (
+                <section className="mb-8">
+                  <ConversationLog conversation={payload.conversation} />
+                </section>
+              )}
+            </>
           )
         ) : (
         viewMode === 'table' && hasTable ? (
-          <TableSummaryView tableData={payload.table_data} />
+          <TableSummaryView tables={payload.tables} />
         ) : (
         <>
           {/* ============ TL;DR ============ */}
@@ -1158,6 +1197,11 @@ export default function MeetingIntelligence() {
                 </ul>
               )}
             </SectionCard>
+          </section>
+
+          {/* ============ Conversation ============ */}
+          <section className="mb-8">
+            <ConversationLog conversation={payload.conversation} />
           </section>
         </>
         )

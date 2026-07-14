@@ -23,15 +23,11 @@ export const CAPTION_CONFIG = {
   // it only governs what remote participants receive over the data channel.
   interimThrottleMs: 150,
 
-  // Hard cap on a single caption payload (matches the server's existing cap).
-  maxChars: 300,
-
-  // Hard cap on a full MERGED transcript line (many consecutive fragments
-  // stitched together — see CaptionProvider's fragment-merge logic). Must be
-  // far above `maxChars`: capping a merged line at the single-fragment size
-  // would silently truncate long continuous speech after the first ~300
-  // characters, dropping everything said after that in the Conversations
-  // panel even though each individual fragment arrived intact.
+  // Hard cap applied to every caption fragment AND to a full merged transcript
+  // line (many consecutive fragments stitched together — see CaptionProvider's
+  // fragment-merge logic). One shared cap, generous enough that neither a
+  // single long continuous utterance nor a multi-fragment merged sentence gets
+  // silently truncated before it reaches the Conversations panel.
   maxLineChars: 8000,
 
   // Concurrent speakers shown at once. Meet shows ~1–2; older ones fade as new
