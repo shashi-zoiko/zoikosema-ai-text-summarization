@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.connect.action_review import service as action_review
 from app.connect.calendar_service import native_events, resources, service, team_calendar
-from app.connect.calendar_service.availability import suggest_available_slots
+from app.connect.calendar_service.availability import suggest_available_slots, suggest_group_available_slots
 from app.connect.calendar_service.models import CONFIDENTIALITY_CLASSES, RESOURCE_TYPES
 from app.connect.shared.errors import DomainError
 from app.connect.shared.tenant import TenantContext, resolve_tenant
@@ -94,6 +94,34 @@ def get_availability(
     slots = suggest_available_slots(
         db, ctx, on_date=on_date, duration_minutes=duration_minutes,
         day_start_hour=day_start_hour, day_end_hour=day_end_hour,
+    )
+    return [FreeSlotOut(start_at=s.start_at, end_at=s.end_at) for s in slots]
+
+
+class GroupAvailabilityIn(BaseModel):
+    on_date: date_
+    duration_minutes: int = 30
+    attendee_user_ids: list[int] = []
+    resource_ids: list[str] = []
+    day_start_hour: int = 9
+    day_end_hour: int = 18
+
+
+@router.post("/group-availability", response_model=list[FreeSlotOut])
+def get_group_availability(
+    data: GroupAvailabilityIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Scheduling Engine constraint solver (Phase 2 slice 6) — a slot is
+    returned only if the caller, every listed attendee, and every listed
+    resource are all free for the whole duration. POST (not GET) because
+    attendee/resource lists don't fit cleanly in query params."""
+    attendee_ids = list({ctx.user_id, *data.attendee_user_ids})  # caller is always implicitly included
+    slots = suggest_group_available_slots(
+        db, ctx, on_date=data.on_date, duration_minutes=data.duration_minutes,
+        attendee_user_ids=attendee_ids, resource_ids=data.resource_ids,
+        day_start_hour=data.day_start_hour, day_end_hour=data.day_end_hour,
     )
     return [FreeSlotOut(start_at=s.start_at, end_at=s.end_at) for s in slots]
 

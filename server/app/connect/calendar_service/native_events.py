@@ -40,6 +40,7 @@ from app.connect.calendar_service.models import (
     NativeCalendarEvent,
 )
 from app.connect.calendar_service.recurrence import expand_rrule
+from app.connect.calendar_service import zoikotime_signal
 from app.connect.events import types as etypes
 from app.connect.events.bus import publish
 from app.connect.events.outbox import enqueue
@@ -124,6 +125,20 @@ def _validate_fields(*, title: str, start_at: datetime, end_at: datetime, confid
         raise Invalid(f"Unknown confidentiality_class: {confidentiality_class}")
 
 
+def _check_zoikotime_constraint(db: DbSession, ctx: TenantContext, *, start_at: datetime, end_at: datetime) -> None:
+    """Spec §6.1 hard-enforcement phase (Phase 2 slice 6) — raises Conflict
+    if [start_at, end_at] violates a ZoikoTime workforce constraint AND
+    hard enforcement is on (see zoikotime_signal.py; a no-op otherwise).
+    For a recurring series this only checks the FIRST occurrence — checking
+    every future occurrence of a series with no real bound (COUNT/UNTIL
+    optional) against a signal source that returns no data yet would be
+    speculative complexity with nothing to verify it against; revisit once
+    the ZoikoTime integration is real and this matters in practice."""
+    violation = zoikotime_signal.check_hard_constraint(db, ctx, start_at=start_at, end_at=end_at)
+    if violation:
+        raise Conflict(violation)
+
+
 def _validate_rrule(rrule_str: str, start_at: datetime, timezone_name: str) -> None:
     """Fail fast on a malformed RRULE / unknown IANA zone at create time,
     rather than at the first occurrence-expansion call — the same
@@ -151,6 +166,7 @@ async def create_event(
     _validate_fields(title=title, start_at=start_at, end_at=end_at, confidentiality_class=confidentiality_class)
     if rrule:
         _validate_rrule(rrule, start_at, timezone_name)
+    _check_zoikotime_constraint(db, ctx, start_at=start_at, end_at=end_at)
 
     resolved = policy_engine.resolve_effective_autonomy(db, ctx, category="calendar")
     payload = {
@@ -282,6 +298,7 @@ async def update_event(
     )
     if merged["rrule"]:
         _validate_rrule(merged["rrule"], merged["start_at"], merged["timezone_name"])
+    _check_zoikotime_constraint(db, ctx, start_at=merged["start_at"], end_at=merged["end_at"])
 
     event = _insert_version(
         db, ctx, version_chain_id=version_chain_id, version_number=version_number + 1,
