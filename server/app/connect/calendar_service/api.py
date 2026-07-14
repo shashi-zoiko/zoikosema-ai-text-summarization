@@ -114,6 +114,7 @@ class NativeEventIn(BaseModel):
     attendees: list[dict[str, Any]] = []
     resources: list[dict[str, Any]] = []
     confidentiality_class: _CONFIDENTIALITY = "standard"
+    rrule: str | None = None
 
 
 class NativeEventUpdateIn(BaseModel):
@@ -126,12 +127,14 @@ class NativeEventUpdateIn(BaseModel):
     attendees: list[dict[str, Any]] | None = None
     resources: list[dict[str, Any]] | None = None
     confidentiality_class: _CONFIDENTIALITY | None = None
+    rrule: str | None = None
 
 
 class NativeEventOut(BaseModel):
     id: str
     version_chain_id: str
     version_number: int
+    recurrence_id: datetime | None = None
     title: str
     description: str | None
     location: str | None
@@ -147,9 +150,31 @@ class NativeEventOut(BaseModel):
     created_at: datetime | None
 
 
+class OccurrenceOut(BaseModel):
+    """A concrete occurrence of a (possibly recurring) event — see
+    native_events.list_occurrences(). Distinct from NativeEventOut: an
+    occurrence that's never been individually excepted has no row `id` of
+    its own (it's synthesized from the series master), so `id` here is the
+    master's row id, not a per-occurrence identity."""
+    id: str
+    version_chain_id: str
+    recurrence_id: datetime | None
+    title: str
+    description: str | None
+    location: str | None
+    start_at: datetime
+    end_at: datetime
+    timezone: str
+    attendees: list[dict[str, Any]]
+    resources: list[dict[str, Any]]
+    confidentiality_class: str
+    status: str
+
+
 def _native_to_out(e) -> NativeEventOut:
     return NativeEventOut(
         id=e.id, version_chain_id=e.version_chain_id, version_number=e.version_number,
+        recurrence_id=e.recurrence_id,
         title=e.title, description=e.description, location=e.location,
         start_at=e.start_at, end_at=e.end_at, timezone=e.timezone, rrule=e.rrule,
         attendees=e.attendees, resources=e.resources, confidentiality_class=e.confidentiality_class,
@@ -170,6 +195,7 @@ async def create_native_event(
             db, ctx, title=data.title, start_at=data.start_at, end_at=data.end_at,
             timezone_name=data.timezone_name, description=data.description, location=data.location,
             attendees=data.attendees, resources=data.resources, confidentiality_class=data.confidentiality_class,
+            rrule=data.rrule,
         )
     except DomainError as e:
         raise _to_http(e) from e
@@ -210,8 +236,68 @@ async def update_native_event(
             db, ctx, version_chain_id=version_chain_id,
             title=data.title, start_at=data.start_at, end_at=data.end_at, timezone_name=data.timezone_name,
             description=data.description, location=data.location, attendees=data.attendees,
+            resources=data.resources, confidentiality_class=data.confidentiality_class, rrule=data.rrule,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+    return NativeEventOut(**out)
+
+
+@router.get("/native-events/{version_chain_id}/occurrences", response_model=list[OccurrenceOut])
+def list_native_event_occurrences(
+    version_chain_id: str,
+    range_start: datetime = Query(...),
+    range_end: datetime = Query(...),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Concrete occurrences within [range_start, range_end] — the single
+    event itself if non-recurring, or every expanded instance (with any
+    per-instance exception applied) if it has an rrule."""
+    try:
+        occs = native_events.list_occurrences(
+            db, ctx, version_chain_id=version_chain_id, range_start=range_start, range_end=range_end,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+    return [OccurrenceOut(**o) for o in occs]
+
+
+@router.patch("/native-events/{version_chain_id}/occurrences/{recurrence_id}", response_model=NativeEventOut)
+async def update_native_event_occurrence(
+    version_chain_id: str,
+    recurrence_id: datetime,
+    data: NativeEventUpdateIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Edits (or, on first touch, creates) a single occurrence's exception
+    — spec §19.1 "attendee exceptions." `recurrence_id` is the occurrence's
+    original scheduled start instant, as returned by the occurrences list.
+    `rrule` on the body is ignored: one occurrence is never itself a
+    series."""
+    try:
+        out = await native_events.update_event(
+            db, ctx, version_chain_id=version_chain_id, recurrence_id=recurrence_id,
+            title=data.title, start_at=data.start_at, end_at=data.end_at, timezone_name=data.timezone_name,
+            description=data.description, location=data.location, attendees=data.attendees,
             resources=data.resources, confidentiality_class=data.confidentiality_class,
         )
+    except DomainError as e:
+        raise _to_http(e) from e
+    return NativeEventOut(**out)
+
+
+@router.delete("/native-events/{version_chain_id}/occurrences/{recurrence_id}", response_model=NativeEventOut)
+async def delete_native_event_occurrence(
+    version_chain_id: str,
+    recurrence_id: datetime,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Cancels a single occurrence without affecting the rest of the series."""
+    try:
+        out = await native_events.delete_event(db, ctx, version_chain_id=version_chain_id, recurrence_id=recurrence_id)
     except DomainError as e:
         raise _to_http(e) from e
     return NativeEventOut(**out)

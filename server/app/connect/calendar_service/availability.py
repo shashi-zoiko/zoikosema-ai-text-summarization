@@ -5,8 +5,13 @@ the meeting. This function only reads; it never writes a row, logs an
 audit event, or emits anything, because nothing is being mutated or
 governed here — there is no agent action yet, only a computed suggestion.
 
-Busy time comes from two sources that don't share a model:
+Busy time comes from three sources that don't share a model:
   - connect_calendar_events (synced from Google/Outlook) has real start/end.
+  - connect_native_calendar_events (Sema-authoritative, Phase 2 slice 3) —
+    recurring series are expanded via native_events.list_occurrences(),
+    the same function calendar display uses, so "is this instant busy" and
+    "what does the calendar show" can never disagree about what a series
+    actually produced (one expansion engine, not two).
   - legacy `meetings` (Zoiko Meet calls) only stores `scheduled_at`, no
     duration — a live call's actual length isn't known ahead of time. We
     approximate each scheduled, non-cancelled meeting as occupying
@@ -21,6 +26,7 @@ from datetime import date as date_, datetime, time, timedelta, timezone
 
 from sqlalchemy.orm import Session as DbSession
 
+from app.connect.calendar_service import native_events
 from app.connect.calendar_service.models import CalendarEvent
 from app.connect.shared.tenant import TenantContext
 from app.core.config import get_settings
@@ -105,7 +111,30 @@ def _busy_intervals(
         if end > day_start:
             intervals.append((start, end))
 
+    intervals.extend(_native_event_busy_intervals(db, ctx, day_start, day_end))
     intervals.extend(_zoikotime_busy_intervals(db, ctx, day_start, day_end))
+    return intervals
+
+
+def _native_event_busy_intervals(
+    db: DbSession, ctx: TenantContext, day_start: datetime, day_end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    """Sema-authoritative native events (Phase 2 slice 3/4). Recurring
+    series are expanded through native_events.list_occurrences() — the same
+    function calendar display calls — rather than re-deriving occurrence
+    instants here, so this can never drift from what the calendar actually
+    shows for that series."""
+    intervals: list[tuple[datetime, datetime]] = []
+    for event in native_events.list_events(db, ctx):
+        if event.status == "cancelled":
+            continue
+        if event.rrule:
+            for occ in native_events.list_occurrences(
+                db, ctx, version_chain_id=event.version_chain_id, range_start=day_start, range_end=day_end,
+            ):
+                intervals.append((datetime.fromisoformat(occ["start_at"]), datetime.fromisoformat(occ["end_at"])))
+        elif event.start_at < day_end and event.end_at > day_start:
+            intervals.append((event.start_at, event.end_at))
     return intervals
 
 

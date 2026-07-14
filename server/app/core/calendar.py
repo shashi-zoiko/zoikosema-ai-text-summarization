@@ -17,6 +17,7 @@ def generate_ics(
     method: str = "REQUEST",
     sequence: int = 0,
     partstat: str | None = None,
+    rrule: str | None = None,
 ) -> bytes:
     """Generate a .ics (iTIP) calendar object for a meeting.
 
@@ -72,6 +73,11 @@ def generate_ics(
         f"ORGANIZER;CN={_escape(organizer_name)}:mailto:{organizer_email}",
         f"STATUS:{status}",
     ]
+    if rrule:
+        # Bare value, no leading "RRULE:" in the stored/passed string — this
+        # mirrors how native_events.py stores it (a plain "FREQ=...;..."
+        # value, same convention dateutil.rrule.rrulestr accepts directly).
+        lines.append(f"RRULE:{rrule}")
 
     # A reminder alarm only makes sense on the original invite — a cancel or
     # an attendee's reply shouldn't schedule a new one on the receiving side.

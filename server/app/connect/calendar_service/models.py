@@ -61,6 +61,11 @@ class NativeCalendarEvent(ConnectBase):
     end_at = Column(DateTime(timezone=True), nullable=False)
     timezone = Column(String, nullable=False, default="UTC")
     rrule = Column(String, nullable=True)
+    # NULL = this row is the series master (or a non-recurring event).
+    # NOT NULL = an exception overriding the one occurrence that would
+    # otherwise start at this instant — see native_events.py's version-chain
+    # reuse for exceptions (migration connect_v3_007).
+    recurrence_id = Column(DateTime(timezone=True), nullable=True)
     attendees = Column(JSONB, nullable=False, default=list)
     resources = Column(JSONB, nullable=False, default=list)
     confidentiality_class = Column(String, nullable=False, default="standard")

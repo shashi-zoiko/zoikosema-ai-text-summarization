@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session as DbSession
 
@@ -38,6 +39,7 @@ from app.connect.calendar_service.models import (
     NATIVE_EVENT_STATUSES,
     NativeCalendarEvent,
 )
+from app.connect.calendar_service.recurrence import expand_rrule
 from app.connect.events import types as etypes
 from app.connect.events.bus import publish
 from app.connect.events.outbox import enqueue
@@ -60,20 +62,29 @@ CALENDAR_EVENT_CREATE_ACTION = "calendar.event.create.v1"
 _STAGE_AT_LEVEL = 2
 
 
-def _latest_version(db: DbSession, tenant_id: str, version_chain_id: str) -> NativeCalendarEvent | None:
+def _latest_version(
+    db: DbSession, tenant_id: str, version_chain_id: str, *, recurrence_id: datetime | None = None,
+) -> NativeCalendarEvent | None:
     return (
         db.query(NativeCalendarEvent)
         .filter(
             NativeCalendarEvent.tenant_id == tenant_id,
             NativeCalendarEvent.version_chain_id == version_chain_id,
+            # SQLAlchemy compiles `Column == None` to `IS NULL`, so this
+            # correctly matches the series master (recurrence_id IS NULL)
+            # when the caller passes None, and one specific instance's
+            # exception chain otherwise — same filter, no branching needed.
+            NativeCalendarEvent.recurrence_id == recurrence_id,
         )
         .order_by(NativeCalendarEvent.version_number.desc())
         .first()
     )
 
 
-def get_current_event(db: DbSession, ctx: TenantContext, version_chain_id: str) -> NativeCalendarEvent:
-    event = _latest_version(db, ctx.tenant_id, version_chain_id)
+def get_current_event(
+    db: DbSession, ctx: TenantContext, version_chain_id: str, *, recurrence_id: datetime | None = None,
+) -> NativeCalendarEvent:
+    event = _latest_version(db, ctx.tenant_id, version_chain_id, recurrence_id=recurrence_id)
     if event is None:
         raise NotFound("Calendar event not found")
     return event
@@ -113,22 +124,40 @@ def _validate_fields(*, title: str, start_at: datetime, end_at: datetime, confid
         raise Invalid(f"Unknown confidentiality_class: {confidentiality_class}")
 
 
+def _validate_rrule(rrule_str: str, start_at: datetime, timezone_name: str) -> None:
+    """Fail fast on a malformed RRULE / unknown IANA zone at create time,
+    rather than at the first occurrence-expansion call — the same
+    dateutil/zoneinfo errors either way, just surfaced where the mistake
+    was actually made."""
+    try:
+        tz = ZoneInfo(timezone_name)
+    except Exception as e:  # noqa: BLE001 — zoneinfo raises its own exception types
+        raise Invalid(f"Unknown timezone: {timezone_name}") from e
+    try:
+        expand_rrule(rrule_str, start_at.astimezone(tz), start_at.astimezone(tz), start_at.astimezone(tz))
+    except Exception as e:  # noqa: BLE001 — dateutil raises plain ValueError for bad RRULE syntax
+        raise Invalid(f"Invalid RRULE: {e}") from e
+
+
 async def create_event(
     db: DbSession, ctx: TenantContext, *,
     title: str, start_at: datetime, end_at: datetime,
     timezone_name: str = "UTC", description: str | None = None, location: str | None = None,
     attendees: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None,
-    confidentiality_class: str = "standard",
+    confidentiality_class: str = "standard", rrule: str | None = None,
 ) -> dict[str, Any]:
     attendees = attendees or []
     resources = resources or []
     _validate_fields(title=title, start_at=start_at, end_at=end_at, confidentiality_class=confidentiality_class)
+    if rrule:
+        _validate_rrule(rrule, start_at, timezone_name)
 
     resolved = policy_engine.resolve_effective_autonomy(db, ctx, category="calendar")
     payload = {
         "title": title, "start_at": start_at.isoformat(), "end_at": end_at.isoformat(),
         "timezone_name": timezone_name, "description": description, "location": location,
         "attendees": attendees, "resources": resources, "confidentiality_class": confidentiality_class,
+        "rrule": rrule,
     }
     if resolved.level >= _STAGE_AT_LEVEL:
         staged = await action_review.stage_action(
@@ -173,36 +202,90 @@ async def create_event_from_approved_proposal(db: DbSession, ctx: TenantContext,
     return _to_dict(event)
 
 
+def _fields_of(event: NativeCalendarEvent) -> dict[str, Any]:
+    """The mergeable/carry-forward field set every version-producing
+    function needs — extracted once so update/delete/restore/exception-seed
+    don't each re-list the same fields (they did, before this).
+
+    Includes `rrule` so updating/deleting a series master doesn't silently
+    drop its recurrence rule — but `_resolve_occurrence_base` explicitly
+    clears it when seeding an exception, since one occurrence is never
+    itself a series."""
+    return dict(
+        title=event.title, start_at=event.start_at, end_at=event.end_at,
+        timezone_name=event.timezone, description=event.description, location=event.location,
+        attendees=list(event.attendees or []), resources=list(event.resources or []),
+        confidentiality_class=event.confidentiality_class, rrule=event.rrule,
+    )
+
+
+def _resolve_occurrence_base(
+    db: DbSession, ctx: TenantContext, version_chain_id: str, recurrence_id: datetime,
+) -> tuple[dict[str, Any], int]:
+    """Fields + current version_number for one occurrence of a recurring
+    series — either an existing exception's latest version, or (the first
+    time this occurrence is touched) the master series' fields with
+    start/end shifted to this specific instant. Reused by update_event and
+    delete_event so "edit one instance" and "delete one instance" don't
+    each reimplement this seeding step."""
+    existing = _latest_version(db, ctx.tenant_id, version_chain_id, recurrence_id=recurrence_id)
+    if existing is not None:
+        return _fields_of(existing), existing.version_number
+
+    master = get_current_event(db, ctx, version_chain_id)
+    if not master.rrule:
+        raise Invalid("Event has no recurrence rule — there is no such occurrence to modify")
+    fields = _fields_of(master)
+    duration = master.end_at - master.start_at
+    fields["start_at"] = recurrence_id
+    fields["end_at"] = recurrence_id + duration
+    fields["rrule"] = None  # one occurrence is never itself a recurring series
+    return fields, 0
+
+
 async def update_event(
-    db: DbSession, ctx: TenantContext, *, version_chain_id: str,
+    db: DbSession, ctx: TenantContext, *, version_chain_id: str, recurrence_id: datetime | None = None,
     title: str | None = None, start_at: datetime | None = None, end_at: datetime | None = None,
     timezone_name: str | None = None, description: str | None = None, location: str | None = None,
     attendees: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None,
-    confidentiality_class: str | None = None,
+    confidentiality_class: str | None = None, rrule: str | None = None,
 ) -> dict[str, Any]:
-    current = get_current_event(db, ctx, version_chain_id)
-    if current.status != "confirmed":
-        raise Conflict("Cannot update a cancelled event — restore it first")
+    """recurrence_id=None updates the series master (or a non-recurring
+    event) as a whole — `rrule` here changes the series' recurrence rule.
+    A non-None recurrence_id edits (or creates, on first touch) just that
+    one occurrence's exception — spec §19.1 "attendee exceptions": the rest
+    of the series is untouched, and `rrule` is ignored (an exception is
+    never itself a series, see _resolve_occurrence_base)."""
+    if recurrence_id is None:
+        current = get_current_event(db, ctx, version_chain_id)
+        if current.status != "confirmed":
+            raise Conflict("Cannot update a cancelled event — restore it first")
+        base, version_number = _fields_of(current), current.version_number
+    else:
+        base, version_number = _resolve_occurrence_base(db, ctx, version_chain_id, recurrence_id)
 
     merged = dict(
-        title=title if title is not None else current.title,
-        start_at=start_at if start_at is not None else current.start_at,
-        end_at=end_at if end_at is not None else current.end_at,
-        timezone_name=timezone_name if timezone_name is not None else current.timezone,
-        description=description if description is not None else current.description,
-        location=location if location is not None else current.location,
-        attendees=attendees if attendees is not None else list(current.attendees or []),
-        resources=resources if resources is not None else list(current.resources or []),
-        confidentiality_class=confidentiality_class if confidentiality_class is not None else current.confidentiality_class,
+        title=title if title is not None else base["title"],
+        start_at=start_at if start_at is not None else base["start_at"],
+        end_at=end_at if end_at is not None else base["end_at"],
+        timezone_name=timezone_name if timezone_name is not None else base["timezone_name"],
+        description=description if description is not None else base["description"],
+        location=location if location is not None else base["location"],
+        attendees=attendees if attendees is not None else base["attendees"],
+        resources=resources if resources is not None else base["resources"],
+        confidentiality_class=confidentiality_class if confidentiality_class is not None else base["confidentiality_class"],
+        rrule=(rrule if rrule is not None else base["rrule"]) if recurrence_id is None else None,
     )
     _validate_fields(
         title=merged["title"], start_at=merged["start_at"], end_at=merged["end_at"],
         confidentiality_class=merged["confidentiality_class"],
     )
+    if merged["rrule"]:
+        _validate_rrule(merged["rrule"], merged["start_at"], merged["timezone_name"])
 
     event = _insert_version(
-        db, ctx, version_chain_id=version_chain_id, version_number=current.version_number + 1,
-        status="confirmed", **merged,
+        db, ctx, version_chain_id=version_chain_id, version_number=version_number + 1,
+        status="confirmed", recurrence_id=recurrence_id, **merged,
     )
     env = _emit_mutated(db, ctx, event, action="updated")
     db.commit()
@@ -211,18 +294,23 @@ async def update_event(
     return _to_dict(event)
 
 
-async def delete_event(db: DbSession, ctx: TenantContext, *, version_chain_id: str) -> dict[str, Any]:
-    current = get_current_event(db, ctx, version_chain_id)
-    if current.status == "cancelled":
-        return _to_dict(current)
+async def delete_event(
+    db: DbSession, ctx: TenantContext, *, version_chain_id: str, recurrence_id: datetime | None = None,
+) -> dict[str, Any]:
+    """recurrence_id=None cancels the whole series (or a non-recurring
+    event). A non-None recurrence_id cancels just that one occurrence —
+    the rest of a recurring series is unaffected."""
+    if recurrence_id is None:
+        current = get_current_event(db, ctx, version_chain_id)
+        if current.status == "cancelled":
+            return _to_dict(current)
+        base, version_number = _fields_of(current), current.version_number
+    else:
+        base, version_number = _resolve_occurrence_base(db, ctx, version_chain_id, recurrence_id)
 
     event = _insert_version(
-        db, ctx, version_chain_id=version_chain_id, version_number=current.version_number + 1,
-        status="cancelled",
-        title=current.title, start_at=current.start_at, end_at=current.end_at,
-        timezone_name=current.timezone, description=current.description, location=current.location,
-        attendees=list(current.attendees or []), resources=list(current.resources or []),
-        confidentiality_class=current.confidentiality_class,
+        db, ctx, version_chain_id=version_chain_id, version_number=version_number + 1,
+        status="cancelled", recurrence_id=recurrence_id, **base,
     )
     env = _emit_mutated(db, ctx, event, action="deleted")
     db.commit()
@@ -237,13 +325,16 @@ async def restore_previous_version(db: DbSession, ctx: TenantContext, *, version
     §12.3 nothing is ever un-done in place — copying the previous version's
     fields forward and re-emitting a REQUEST-style iTIP update to attendees,
     since from their perspective this is "the event is back / changed again,"
-    not silently reverted."""
+    not silently reverted. Series-level only (recurrence_id=None) — restoring
+    a single excepted instance can reuse the same version_chain once that
+    scenario has a real caller."""
     current = get_current_event(db, ctx, version_chain_id)
     previous = (
         db.query(NativeCalendarEvent)
         .filter(
             NativeCalendarEvent.tenant_id == ctx.tenant_id,
             NativeCalendarEvent.version_chain_id == version_chain_id,
+            NativeCalendarEvent.recurrence_id.is_(None),
             NativeCalendarEvent.version_number == current.version_number - 1,
         )
         .first()
@@ -253,17 +344,51 @@ async def restore_previous_version(db: DbSession, ctx: TenantContext, *, version
 
     event = _insert_version(
         db, ctx, version_chain_id=version_chain_id, version_number=current.version_number + 1,
-        status="confirmed",
-        title=previous.title, start_at=previous.start_at, end_at=previous.end_at,
-        timezone_name=previous.timezone, description=previous.description, location=previous.location,
-        attendees=list(previous.attendees or []), resources=list(previous.resources or []),
-        confidentiality_class=previous.confidentiality_class,
+        status="confirmed", recurrence_id=None, **_fields_of(previous),
     )
     env = _emit_mutated(db, ctx, event, action="restored")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
     _notify_attendees(db, event, method="REQUEST")
     return _to_dict(event)
+
+
+def list_occurrences(
+    db: DbSession, ctx: TenantContext, *, version_chain_id: str, range_start: datetime, range_end: datetime,
+) -> list[dict[str, Any]]:
+    """Concrete occurrences of a (possibly recurring) event within a window,
+    with any per-instance exceptions layered on top — a cancelled exception
+    is omitted, a modified one is returned in its overridden form, and every
+    other occurrence is synthesized from the series master. Non-recurring
+    events simply yield their own single occurrence if it falls in range."""
+    master = get_current_event(db, ctx, version_chain_id)
+    if not master.rrule:
+        if master.status == "cancelled" or master.end_at < range_start or master.start_at > range_end:
+            return []
+        return [_to_dict(master)]
+
+    tz = ZoneInfo(master.timezone)
+    duration = master.end_at - master.start_at
+    occurrence_starts = expand_rrule(
+        master.rrule, master.start_at.astimezone(tz),
+        range_start.astimezone(tz), range_end.astimezone(tz),
+    )
+
+    out: list[dict[str, Any]] = []
+    for occ_start_local in occurrence_starts:
+        occ_start_utc = occ_start_local.astimezone(timezone.utc)
+        exception = _latest_version(db, ctx.tenant_id, version_chain_id, recurrence_id=occ_start_utc)
+        if exception is not None:
+            if exception.status == "cancelled":
+                continue
+            out.append(_to_dict(exception))
+        else:
+            occurrence = _to_dict(master)
+            occurrence["start_at"] = occ_start_utc.isoformat()
+            occurrence["end_at"] = (occ_start_utc + duration).isoformat()
+            occurrence["recurrence_id"] = occ_start_utc.isoformat()
+            out.append(occurrence)
+    return out
 
 
 # ── internals ────────────────────────────────────────────────────────────
@@ -283,6 +408,7 @@ def _insert_version(
     title: str, start_at: datetime, end_at: datetime, timezone_name: str,
     description: str | None, location: str | None,
     attendees: list[dict[str, Any]], resources: list[dict[str, Any]], confidentiality_class: str,
+    rrule: str | None = None, recurrence_id: datetime | None = None,
 ) -> NativeCalendarEvent:
     if status not in NATIVE_EVENT_STATUSES:
         raise Invalid(f"Unknown status: {status}")
@@ -297,6 +423,8 @@ def _insert_version(
         start_at=start_at if start_at.tzinfo else start_at.replace(tzinfo=timezone.utc),
         end_at=end_at if end_at.tzinfo else end_at.replace(tzinfo=timezone.utc),
         timezone=timezone_name,
+        rrule=rrule,
+        recurrence_id=recurrence_id,
         attendees=attendees,
         resources=resources,
         confidentiality_class=confidentiality_class,
@@ -341,7 +469,16 @@ def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str)
     and core/email.py's existing meeting-email helpers rather than forking a
     second ICS/email path (per this slice's own reuse rule). UID is the
     version_chain_id, stable across the whole event's history, same
-    precedent as Phase 1 slice 5's meeting_code-derived UID."""
+    precedent as Phase 1 slice 5's meeting_code-derived UID.
+
+    Known, deliberate gap: an edited/cancelled single occurrence (recurrence_id
+    set) sends a plain REQUEST/CANCEL for that instance's own start/end,
+    without a RECURRENCE-ID property pointing back at the series — full
+    RFC 5545 would want one so a receiving client ties it to the right
+    occurrence automatically. Not required by this slice's own correctness
+    bar (the DB-level exception is what's tested), and most calendar
+    clients still render a same-UID invite sensibly without it — add
+    RECURRENCE-ID if a real client integration needs it."""
     emails = [a.get("email") for a in (event.attendees or []) if a.get("email")]
     if not emails:
         return
@@ -361,7 +498,7 @@ def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str)
             scheduled_at=event.start_at, duration_minutes=duration_minutes,
             organizer_name=organizer_name, organizer_email=organizer_email,
             attendee_email=email, description=event.description,
-            method=method, sequence=max(0, event.version_number - 1),
+            method=method, sequence=max(0, event.version_number - 1), rrule=event.rrule,
         )
         if method == "CANCEL":
             send_meeting_cancelled_email(
@@ -381,6 +518,7 @@ def _to_dict(event: NativeCalendarEvent) -> dict[str, Any]:
         "id": event.id,
         "version_chain_id": event.version_chain_id,
         "version_number": event.version_number,
+        "recurrence_id": event.recurrence_id.isoformat() if event.recurrence_id else None,
         "title": event.title,
         "description": event.description,
         "location": event.location,
