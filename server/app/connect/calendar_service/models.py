@@ -97,3 +97,34 @@ class Resource(ConnectBase):
     created_by = Column(BigInteger, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+
+TASK_STATUSES = ("open", "done", "dismissed")
+TASK_PRIORITIES = ("low", "med", "high")
+
+
+class Task(ConnectBase):
+    """connect_tasks — spec §3.1 Task node ("may be human or agent-created"),
+    Phase 2 slice 8. source_event_id is a plain pointer (a
+    NativeCalendarEvent.version_chain_id), not a Work Graph edge — Work
+    Graph doesn't exist until Phase 3 slice 1; this column is exactly what
+    backfills a real derived_from edge then.
+
+    Ordinary mutable table (ai_workflows.py explains why full task version-
+    history/rollback per spec §5.2's Task row isn't built in this slice).
+    """
+    __tablename__ = "connect_tasks"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(UUID(as_uuid=False), primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="open")
+    priority = Column(String, nullable=False, default="med")
+    assignee_email = Column(String, nullable=True)
+    source_event_id = Column(UUID(as_uuid=False), nullable=True)
+    generated_by_agent = Column(Boolean, nullable=False, default=False)
+    created_by = Column(BigInteger, nullable=False)
+    correlation_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
