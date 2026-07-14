@@ -37,3 +37,22 @@ class RawEvent:
     all_day: bool
     status: str
     attendees: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class RawMessage:
+    """Mail's equivalent of RawEvent (Phase 3 slice 1) — provider adapters
+    (gmail.py, outlook_mail.py) map their own wire format onto this; mail_service
+    only ever sees this shape. Headers/metadata/snippet only, no body — full
+    body fetch is Phase 3 slice 4's job, deliberately separate (that's the
+    slice that has to exist before any HTML is ever rendered)."""
+    provider_message_id: str
+    thread_id: str
+    subject: str | None
+    snippet: str | None
+    from_email: str
+    to_emails: list[str]
+    sender_domain: str
+    received_at: datetime
+    history_id: str | None
+    label_ids: list[str]

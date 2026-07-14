@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from app.connect.provider_connections.adapters import google, outlook
+from app.connect.provider_connections.adapters import gmail, google, outlook
 from app.connect.shared.errors import Invalid
 
 _ADAPTERS: dict[str, ModuleType] = {
     "google_calendar": google,
     "microsoft_calendar": outlook,
+    "gmail": gmail,
 }
 
 
