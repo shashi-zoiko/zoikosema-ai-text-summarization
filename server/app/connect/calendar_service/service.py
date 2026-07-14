@@ -18,9 +18,9 @@ from app.connect.calendar_service.models import CalendarEvent
 from app.connect.events import types as etypes
 from app.connect.events.bus import publish
 from app.connect.events.outbox import enqueue
+from app.connect.provider_connections import service as provider_connections_service
 from app.connect.provider_connections.adapters import get_adapter
 from app.connect.provider_connections.models import ProviderConnection
-from app.connect.shared import crypto
 from app.connect.shared.envelope import EventEnvelope
 from app.connect.shared.errors import NotFound
 from app.connect.shared.ids import uuid7_str
@@ -47,7 +47,7 @@ async def sync_calendar(db: DbSession, ctx: TenantContext, *, provider: str) -> 
     if connection is None:
         raise NotFound("No active provider connection for this provider")
 
-    access_token = await _ensure_valid_access_token(db, connection, adapter)
+    access_token = await provider_connections_service.ensure_valid_access_token(db, connection, adapter)
 
     now = datetime.now(timezone.utc)
     time_min = now - DEFAULT_SYNC_WINDOW_PAST
@@ -130,17 +130,3 @@ def list_calendar_events(
     if time_max is not None:
         q = q.filter(CalendarEvent.start_at <= time_max)
     return q.order_by(CalendarEvent.start_at.asc()).all()
-
-
-async def _ensure_valid_access_token(db: DbSession, connection: ProviderConnection, adapter) -> str:
-    now = datetime.now(timezone.utc)
-    expires_at = connection.access_token_expires_at
-    if connection.encrypted_access_token and expires_at and expires_at > now + timedelta(minutes=2):
-        return crypto.decrypt(connection.encrypted_access_token)
-
-    refresh_token = crypto.decrypt(connection.encrypted_refresh_token)
-    refreshed = await adapter.refresh_access_token(refresh_token)
-    connection.encrypted_access_token = crypto.encrypt(refreshed.access_token)
-    connection.access_token_expires_at = refreshed.access_token_expires_at
-    db.flush()
-    return refreshed.access_token

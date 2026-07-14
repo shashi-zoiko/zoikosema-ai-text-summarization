@@ -25,6 +25,10 @@ class ProviderConnection(ConnectBase):
     encrypted_access_token = Column(String, nullable=True)
     access_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(String, nullable=False, default="active")
+    # Gmail history.list checkpoint (Phase 3 slice 2) — NULL means "no
+    # checkpoint yet, do a full pull" (first sync, or after a 410
+    # history-expired reset). Unused by calendar providers.
+    mail_history_id = Column(String, nullable=True)
     correlation_id = Column(String, nullable=True)
     created_by = Column(BigInteger, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))

@@ -158,6 +158,26 @@ async def disconnect_provider(db: DbSession, ctx: TenantContext, *, provider: st
     await publish(env, topic=f"provider_connection:{connection.id}")
 
 
+async def ensure_valid_access_token(db: DbSession, connection: ProviderConnection, adapter) -> str:
+    """Refresh-on-demand: reuse the stored access token if it still has more
+    than 2 minutes of life, otherwise refresh it via the adapter and persist
+    the new token/expiry. Shared by every sync path (calendar_service,
+    mail_service) since token freshness is a provider_connections concern,
+    not a per-domain one — each caller's own service.py used to duplicate
+    this until Phase 3 slice 2 pulled it up to its natural owner."""
+    now = datetime.now(timezone.utc)
+    expires_at = connection.access_token_expires_at
+    if connection.encrypted_access_token and expires_at and expires_at > now + timedelta(minutes=2):
+        return crypto.decrypt(connection.encrypted_access_token)
+
+    refresh_token = crypto.decrypt(connection.encrypted_refresh_token)
+    refreshed = await adapter.refresh_access_token(refresh_token)
+    connection.encrypted_access_token = crypto.encrypt(refreshed.access_token)
+    connection.access_token_expires_at = refreshed.access_token_expires_at
+    db.flush()
+    return refreshed.access_token
+
+
 def _load_tenant_scoped(db: DbSession, ctx: TenantContext, provider: str) -> ProviderConnection:
     connection = (
         db.query(ProviderConnection)

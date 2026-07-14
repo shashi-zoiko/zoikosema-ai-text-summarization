@@ -124,14 +124,86 @@ def _extract_email(header_value: str) -> str:
     return header_value.strip()
 
 
+class HistoryExpired(Exception):
+    """Raised when Gmail's history.list rejects a stored history_id as too
+    old (its own analogue of Calendar's syncToken 410-Gone, spec §7.1) — the
+    caller's recovery is to clear the checkpoint and fall back to a full
+    pull via list_messages(), same recovery shape spec'd for Calendar."""
+
+
+async def _fetch_message(client: httpx.AsyncClient, access_token: str, message_id: str) -> RawMessage:
+    detail_resp = await client.get(
+        f"{_GMAIL_API}/messages/{message_id}",
+        params={"format": "metadata", "metadataHeaders": ["Subject", "From", "To"]},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    if detail_resp.status_code != 200:
+        raise Invalid(f"Gmail get message failed: {detail_resp.text}")
+    detail = detail_resp.json()
+    headers = detail.get("payload", {}).get("headers", [])
+    from_email = _extract_email(_header(headers, "From") or "")
+    to_emails = [_extract_email(e) for e in (_header(headers, "To") or "").split(",") if e.strip()]
+    return RawMessage(
+        provider_message_id=detail["id"],
+        thread_id=detail.get("threadId", detail["id"]),
+        subject=_header(headers, "Subject"),
+        snippet=detail.get("snippet"),
+        from_email=from_email,
+        to_emails=to_emails,
+        sender_domain=from_email.rsplit("@", 1)[-1] if "@" in from_email else "",
+        received_at=datetime.fromtimestamp(int(detail["internalDate"]) / 1000, tz=timezone.utc),
+        history_id=detail.get("historyId"),
+        label_ids=detail.get("labelIds", []),
+    )
+
+
+async def list_messages_delta(
+    access_token: str, *, start_history_id: str,
+) -> tuple[list[RawMessage], str | None]:
+    """Incremental sync via Gmail's history.list — the mechanism that needs
+    a full pull's historyId checkpoint to work at all (unlike Calendar's
+    optional syncToken), so it lives in the same slice as list_messages
+    rather than a deferred follow-up. Returns (new_or_changed_messages,
+    next_history_id). Raises HistoryExpired on a 404 (Gmail's signal that
+    start_history_id is too old to resume from — its 410-Gone analogue)."""
+    added_ids: set[str] = set()
+    next_history_id = start_history_id
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        page_token: str | None = None
+        while True:
+            params: dict[str, str] = {"startHistoryId": start_history_id, "historyTypes": "messageAdded"}
+            if page_token:
+                params["pageToken"] = page_token
+            resp = await client.get(
+                f"{_GMAIL_API}/history", params=params, headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code == 404:
+                raise HistoryExpired("Gmail history_id is too old; fall back to a full pull")
+            if resp.status_code != 200:
+                raise Invalid(f"Gmail history.list failed: {resp.text}")
+            data = resp.json()
+
+            for entry in data.get("history", []):
+                for added in entry.get("messagesAdded", []):
+                    added_ids.add(added["message"]["id"])
+
+            if "historyId" in data:
+                next_history_id = data["historyId"]
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+
+        messages = [await _fetch_message(client, access_token, mid) for mid in added_ids]
+    return messages, next_history_id
+
+
 async def list_messages(
     access_token: str, *, time_min: datetime | None = None, max_results: int = 100,
 ) -> list[RawMessage]:
     """Full pull over messages.list + messages.get(format=metadata) — plain
-    time-window listing only. history.list-based incremental sync is Phase 3
-    slice 2's job, layered on top of this same adapter rather than a second
-    one; this function's signature (time_min, no history_id yet) matches
-    exactly what slice 1 needs to prove the connection works end-to-end."""
+    time-window listing only. Used for the first sync of a connection, or
+    to recover after list_messages_delta raises HistoryExpired."""
     messages: list[RawMessage] = []
     query = f"after:{int(time_min.timestamp())}" if time_min else None
 
