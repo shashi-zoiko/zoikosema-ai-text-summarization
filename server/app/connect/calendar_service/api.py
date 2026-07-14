@@ -9,9 +9,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
 from app.connect.action_review import service as action_review
-from app.connect.calendar_service import native_events, service
+from app.connect.calendar_service import native_events, resources, service, team_calendar
 from app.connect.calendar_service.availability import suggest_available_slots
-from app.connect.calendar_service.models import CONFIDENTIALITY_CLASSES
+from app.connect.calendar_service.models import CONFIDENTIALITY_CLASSES, RESOURCE_TYPES
 from app.connect.shared.errors import DomainError
 from app.connect.shared.tenant import TenantContext, resolve_tenant
 from app.core.database import get_db
@@ -169,6 +169,10 @@ class OccurrenceOut(BaseModel):
     resources: list[dict[str, Any]]
     confidentiality_class: str
     status: str
+    # Only populated by GET /team-calendar — whose event this is. A single
+    # event's own occurrences (GET .../occurrences) don't need it, the
+    # caller already knows whose calendar they queried.
+    owner_id: int | None = None
 
 
 def _native_to_out(e) -> NativeEventOut:
@@ -347,3 +351,104 @@ async def approve_native_event_proposal(
     except DomainError as e:
         raise _to_http(e) from e
     return NativeEventOut(**event)
+
+
+# ── Resources (rooms/equipment) — Phase 2 slice 5 ───────────────────────────
+
+_RESOURCE_TYPE = Literal["room", "equipment"]
+assert set(_RESOURCE_TYPE.__args__) == set(RESOURCE_TYPES)
+
+
+class ResourceIn(BaseModel):
+    name: str
+    type: _RESOURCE_TYPE = "room"
+
+
+class ResourceOut(BaseModel):
+    id: str
+    name: str
+    type: str
+    created_by: int
+    created_at: datetime | None
+
+
+class ResourceConflictOut(BaseModel):
+    event_title: str | None
+    start_at: datetime
+    end_at: datetime
+
+
+def _resource_to_out(r) -> ResourceOut:
+    return ResourceOut(id=r.id, name=r.name, type=r.type, created_by=r.created_by, created_at=r.created_at)
+
+
+@router.post("/resources", response_model=ResourceOut, status_code=201)
+def create_resource(
+    data: ResourceIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        resource = resources.create_resource(db, ctx, name=data.name, type=data.type)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return _resource_to_out(resource)
+
+
+@router.get("/resources", response_model=list[ResourceOut])
+def list_resources(
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    return [_resource_to_out(r) for r in resources.list_resources(db, ctx)]
+
+
+@router.get("/resources/{resource_id}", response_model=ResourceOut)
+def get_resource(
+    resource_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        resource = resources.get_resource(db, ctx, resource_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return _resource_to_out(resource)
+
+
+@router.get("/resources/{resource_id}/conflicts", response_model=list[ResourceConflictOut])
+def get_resource_conflicts(
+    resource_id: str,
+    start_at: datetime = Query(...),
+    end_at: datetime = Query(...),
+    exclude_version_chain_id: str | None = Query(default=None),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Advisory — does not block booking. A caller can check before
+    submitting, and/or read this same data back from create/update's own
+    response if it included the resource in its booking."""
+    try:
+        conflicts = resources.check_resource_conflicts(
+            db, ctx, resource_id=resource_id, start_at=start_at, end_at=end_at,
+            exclude_version_chain_id=exclude_version_chain_id,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+    return [ResourceConflictOut(**c) for c in conflicts]
+
+
+# ── Team calendar — Phase 2 slice 5 ─────────────────────────────────────────
+
+@router.get("/team-calendar", response_model=list[OccurrenceOut])
+def get_team_calendar(
+    range_start: datetime = Query(...),
+    range_end: datetime = Query(...),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """A saved query over the caller's team's events, not a materialized
+    calendar — see team_calendar.py. Confidential events owned by someone
+    else than the caller are redacted to a bare busy block."""
+    occurrences = team_calendar.list_team_calendar(db, ctx, range_start=range_start, range_end=range_end)
+    return [OccurrenceOut(**o) for o in occurrences]

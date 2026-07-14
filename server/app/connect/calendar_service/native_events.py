@@ -369,9 +369,14 @@ def list_occurrences(
 
     tz = ZoneInfo(master.timezone)
     duration = master.end_at - master.start_at
+    # expand_rrule/between() matches on occurrence START only — an
+    # occurrence that started before range_start but still overlaps it
+    # (start + duration > range_start) would otherwise be silently missed.
+    # Querying from (range_start - duration) and letting the exact overlap
+    # check happen below is correct regardless of how long this event runs.
     occurrence_starts = expand_rrule(
         master.rrule, master.start_at.astimezone(tz),
-        range_start.astimezone(tz), range_end.astimezone(tz),
+        (range_start - duration).astimezone(tz), range_end.astimezone(tz),
     )
 
     out: list[dict[str, Any]] = []
@@ -381,11 +386,18 @@ def list_occurrences(
         if exception is not None:
             if exception.status == "cancelled":
                 continue
+            # An exception may have moved/resized this occurrence — filter
+            # on ITS OWN start/end, not the master's duration.
+            if not (exception.start_at < range_end and exception.end_at > range_start):
+                continue
             out.append(_to_dict(exception))
         else:
+            occ_end_utc = occ_start_utc + duration
+            if not (occ_start_utc < range_end and occ_end_utc > range_start):
+                continue
             occurrence = _to_dict(master)
             occurrence["start_at"] = occ_start_utc.isoformat()
-            occurrence["end_at"] = (occ_start_utc + duration).isoformat()
+            occurrence["end_at"] = occ_end_utc.isoformat()
             occurrence["recurrence_id"] = occ_start_utc.isoformat()
             out.append(occurrence)
     return out
