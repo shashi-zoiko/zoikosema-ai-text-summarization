@@ -146,6 +146,17 @@ class Settings(BaseSettings):
     # so both sides gate on the identical setting once it lands.
     zoikotime_integration_enabled: bool = False
 
+    # Upgrades the ZoikoTime signal from "visible" to "enforced" (spec §6.1:
+    # "Constraint phases: read-only visibility Phase 1; hard enforcement
+    # Phase 2+"). A plain global flag, not a Policy Engine category, is the
+    # right size for this today: Policy Engine only models a per-category
+    # autonomy ceiling, and there's no real WorkforceSignal data yet for a
+    # tenant-versioned policy dimension to be worth the schema change — a
+    # bare on/off knob is all this flag currently needs to do. Revisit if/
+    # when real enforcement needs to vary per tenant. Meaningless unless
+    # zoikotime_integration_enabled is also True.
+    zoikotime_hard_enforcement_enabled: bool = False
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

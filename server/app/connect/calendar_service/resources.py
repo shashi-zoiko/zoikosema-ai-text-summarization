@@ -45,19 +45,17 @@ def get_resource(db: DbSession, ctx: TenantContext, resource_id: str) -> Resourc
     return resource
 
 
-def check_resource_conflicts(
-    db: DbSession, ctx: TenantContext, *, resource_id: str, start_at: datetime, end_at: datetime,
+def _bookings_of_resource(
+    db: DbSession, ctx: TenantContext, *, resource_id: str, range_start: datetime, range_end: datetime,
     exclude_version_chain_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Other bookings of this resource (any user in the tenant — a resource
-    is shared, not scoped to one person) overlapping [start_at, end_at].
-    Advisory, not enforced: spec's own policy model (spend caps, human
-    review for resource costs) is where a real accept/reject decision
-    belongs once it exists; this slice only surfaces the overlap so a
-    caller can flag it, per "double-booking... rejected OR flagged.\""""
-    get_resource(db, ctx, resource_id)  # 404s if the resource doesn't exist in this tenant
-
-    conflicts: list[dict[str, Any]] = []
+    """Every booking of this resource (any tenant member — a resource is
+    shared, not scoped to one person) overlapping [range_start, range_end],
+    as {event_title, start_at, end_at} dicts (ISO strings). Shared by
+    check_resource_conflicts (a specific candidate window) and
+    resource_busy_intervals (a whole day, for the group scheduler's merge
+    algorithm) so there's one query for "what has this resource got
+    booked," not two."""
     candidates = (
         db.query(NativeCalendarEvent)
         .filter(
@@ -73,10 +71,9 @@ def check_resource_conflicts(
         if row.version_chain_id not in latest_per_chain:
             latest_per_chain[row.version_chain_id] = row
 
+    bookings: list[dict[str, Any]] = []
     for event in latest_per_chain.values():
         if event.version_chain_id == exclude_version_chain_id:
-            continue
-        if event.status == "cancelled":
             continue
         if not any(r.get("resource_id") == resource_id for r in (event.resources or [])):
             continue
@@ -88,17 +85,43 @@ def check_resource_conflicts(
             # so no per-owner context juggling is needed here.
             occurrences = native_events.list_occurrences(
                 db, ctx, version_chain_id=event.version_chain_id,
-                range_start=start_at, range_end=end_at,
+                range_start=range_start, range_end=range_end,
             )
             for occ in occurrences:
                 occ_start = datetime.fromisoformat(occ["start_at"])
                 occ_end = datetime.fromisoformat(occ["end_at"])
-                if occ_start < end_at and occ_end > start_at:
-                    conflicts.append({"event_title": occ["title"], "start_at": occ["start_at"], "end_at": occ["end_at"]})
-        elif event.start_at < end_at and event.end_at > start_at:
-            conflicts.append({
+                if occ_start < range_end and occ_end > range_start:
+                    bookings.append({"event_title": occ["title"], "start_at": occ["start_at"], "end_at": occ["end_at"]})
+        elif event.start_at < range_end and event.end_at > range_start:
+            bookings.append({
                 "event_title": event.title,
                 "start_at": event.start_at.isoformat(), "end_at": event.end_at.isoformat(),
             })
 
-    return conflicts
+    return bookings
+
+
+def check_resource_conflicts(
+    db: DbSession, ctx: TenantContext, *, resource_id: str, start_at: datetime, end_at: datetime,
+    exclude_version_chain_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Advisory, not enforced: spec's own policy model (spend caps, human
+    review for resource costs) is where a real accept/reject decision
+    belongs once it exists; this slice only surfaces the overlap so a
+    caller can flag it, per "double-booking... rejected OR flagged.\""""
+    get_resource(db, ctx, resource_id)  # 404s if the resource doesn't exist in this tenant
+    return _bookings_of_resource(
+        db, ctx, resource_id=resource_id, range_start=start_at, range_end=end_at,
+        exclude_version_chain_id=exclude_version_chain_id,
+    )
+
+
+def resource_busy_intervals(
+    db: DbSession, ctx: TenantContext, resource_id: str, day_start: datetime, day_end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    """Same booking data as check_resource_conflicts, shaped as plain
+    (start, end) tuples for availability.py's merge algorithm — used by
+    suggest_group_available_slots (Phase 2 slice 6) to treat a resource
+    like any other busy-interval subject."""
+    bookings = _bookings_of_resource(db, ctx, resource_id=resource_id, range_start=day_start, range_end=day_end)
+    return [(datetime.fromisoformat(b["start_at"]), datetime.fromisoformat(b["end_at"])) for b in bookings]

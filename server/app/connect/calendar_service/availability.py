@@ -27,9 +27,10 @@ from datetime import date as date_, datetime, time, timedelta, timezone
 from sqlalchemy.orm import Session as DbSession
 
 from app.connect.calendar_service import native_events
+from app.connect.calendar_service import resources as resources_module
+from app.connect.calendar_service import zoikotime_signal
 from app.connect.calendar_service.models import CalendarEvent
 from app.connect.shared.tenant import TenantContext
-from app.core.config import get_settings
 from app.models.meeting import Meeting
 
 DEFAULT_MEETING_DURATION_MINUTES = 60
@@ -49,14 +50,51 @@ def suggest_available_slots(
     day_end = datetime.combine(on_date, time(hour=day_end_hour), tzinfo=timezone.utc)
     if day_start >= day_end:
         return []
+    return slots_from_busy(day_start, day_end, duration_minutes, _busy_intervals(db, ctx, day_start, day_end))
 
+
+def suggest_group_available_slots(
+    db: DbSession, ctx: TenantContext, *,
+    on_date: date_, duration_minutes: int,
+    attendee_user_ids: list[int], resource_ids: list[str] | None = None,
+    day_start_hour: int = 9, day_end_hour: int = 18,
+) -> list[FreeSlot]:
+    """Multi-attendee, multi-resource generalization of suggest_available_slots
+    — spec §6.1/§11's Scheduling Engine constraint solver, Phase 2 slice 6.
+    A slot is returned only if every attendee AND every resource is free for
+    the whole duration; each subject's own busy intervals still come from
+    the exact same per-source computation suggest_available_slots uses
+    (_busy_intervals for people, resources.resource_busy_intervals for
+    resources) — this is the merge generalized across subjects, not a
+    parallel algorithm."""
+    day_start = datetime.combine(on_date, time(hour=day_start_hour), tzinfo=timezone.utc)
+    day_end = datetime.combine(on_date, time(hour=day_end_hour), tzinfo=timezone.utc)
+    if day_start >= day_end:
+        return []
+
+    busy: list[tuple[datetime, datetime]] = []
+    for user_id in attendee_user_ids:
+        member_ctx = TenantContext(user_id=user_id, tenant_id=ctx.tenant_id, role=ctx.role)
+        busy.extend(_busy_intervals(db, member_ctx, day_start, day_end))
+    for resource_id in resource_ids or []:
+        busy.extend(resources_module.resource_busy_intervals(db, ctx, resource_id, day_start, day_end))
+
+    return slots_from_busy(day_start, day_end, duration_minutes, busy)
+
+
+def slots_from_busy(
+    day_start: datetime, day_end: datetime, duration_minutes: int,
+    busy_intervals: list[tuple[datetime, datetime]],
+) -> list[FreeSlot]:
+    """The merge/gap-finding algorithm itself — pure, no DB access, shared
+    by both the single-subject and multi-subject suggesters so there is
+    exactly one place this logic can have a bug, not two copies that could
+    drift (see CONTEXT.md §8 for the clamp-to-window bug this same
+    algorithm already had once)."""
     # Clamp every interval to the window: an unclamped interval that starts
     # after day_end (or ends before day_start) would otherwise let the loop
     # below emit a slot whose end/start falls outside [day_start, day_end].
-    busy = [
-        (max(s, day_start), min(e, day_end))
-        for s, e in _busy_intervals(db, ctx, day_start, day_end)
-    ]
+    busy = [(max(s, day_start), min(e, day_end)) for s, e in busy_intervals]
     busy = [(s, e) for s, e in busy if s < e]
     busy.sort(key=lambda iv: iv[0])
 
@@ -112,7 +150,7 @@ def _busy_intervals(
             intervals.append((start, end))
 
     intervals.extend(_native_event_busy_intervals(db, ctx, day_start, day_end))
-    intervals.extend(_zoikotime_busy_intervals(db, ctx, day_start, day_end))
+    intervals.extend(zoikotime_signal.zoikotime_busy_intervals(db, ctx, day_start, day_end))
     return intervals
 
 
@@ -136,27 +174,3 @@ def _native_event_busy_intervals(
         elif event.start_at < day_end and event.end_at > day_start:
             intervals.append((event.start_at, event.end_at))
     return intervals
-
-
-def _zoikotime_busy_intervals(
-    db: DbSession, ctx: TenantContext, day_start: datetime, day_end: datetime,
-) -> list[tuple[datetime, datetime]]:
-    """ZoikoTime workforce-truth availability signal (spec §6.1: shift
-    off-hours, approved leave/OOO, rest windows) — read-only visibility only,
-    per §6.1's own phasing note ("read-only visibility Phase 1; hard
-    enforcement Phase 2+"). Gated behind ZOIKOTIME_INTEGRATION_ENABLED
-    (default off).
-
-    Always returns [] today: no WorkforceSignal data source exists yet in
-    this repo — that's plans/zoikotime-workforce-signal-integration.md's
-    scope, a separate cross-repo plan with its own webhook receiver and
-    table. This function is the intended seam: once that table exists,
-    swapping this body for a real query is a small follow-up, because the
-    merge loop above already treats whatever this returns like any other
-    busy-interval source — no redesign needed then. With the flag off (the
-    only real state until that lands), this is a no-op passthrough with
-    zero behavior change.
-    """
-    if not get_settings().zoikotime_integration_enabled:
-        return []
-    return []  # no data source wired yet — see docstring
