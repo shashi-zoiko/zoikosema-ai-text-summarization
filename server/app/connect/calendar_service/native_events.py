@@ -53,6 +53,7 @@ from app.connect.shared.tenant import TenantContext
 from app.core.calendar import generate_ics
 from app.core.config import get_settings
 from app.core.email import send_meeting_cancelled_email, send_meeting_invite_email
+from app.models.organization import OrganizationMember
 from app.models.user import User
 
 CALENDAR_EVENT_CREATE_ACTION = "calendar.event.create.v1"
@@ -493,12 +494,54 @@ def _emit_mutated(db: DbSession, ctx: TenantContext, event: NativeCalendarEvent,
     return env
 
 
+# Spec §9.2: "Confidential external calendar invites must use placeholder
+# titles externally... disclose that protocol metadata such as time,
+# organiser, and attendee routing can leave Sema." Deliberately does NOT
+# say or imply "encrypted"/"end-to-end" — spec §9.1/§9.2's hard rule this
+# whole feature exists to honor is that connected/external calendar data is
+# policy-excluded, never a cryptographic guarantee (see CONTEXT.md's own
+# Confidential Mode distinction, applied here to calendar for the first
+# time). Any change to this copy should be re-checked against that rule.
+CONFIDENTIAL_PLACEHOLDER_TITLE = "Confidential Event"
+CONFIDENTIAL_PLACEHOLDER_DESCRIPTION = (
+    "The organiser has marked this event confidential. Its title and details "
+    "are withheld from this invite; the meeting time and your attendance are "
+    "still visible to your calendar provider."
+)
+
+
+def _is_external_attendee(db: DbSession, event: NativeCalendarEvent, email: str) -> bool:
+    """An attendee "leaves Sema" (spec §9.2) unless they're a registered
+    User who's a member of the event's own organisation. A personal
+    (no-org) tenant has no teammates by definition, so every attendee there
+    is external."""
+    if not event.tenant_id.startswith("org:"):
+        return True
+    org_id = int(event.tenant_id.removeprefix("org:"))
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        return True
+    return db.query(OrganizationMember).filter(
+        OrganizationMember.organization_id == org_id, OrganizationMember.user_id == user.id,
+    ).first() is None
+
+
 def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str) -> None:
     """Best-effort iTIP notification — reuses core/calendar.py's generate_ics
     and core/email.py's existing meeting-email helpers rather than forking a
     second ICS/email path (per this slice's own reuse rule). UID is the
     version_chain_id, stable across the whole event's history, same
     precedent as Phase 1 slice 5's meeting_code-derived UID.
+
+    A confidential event's title/description are placeheld (see
+    CONFIDENTIAL_PLACEHOLDER_TITLE) for external attendees only — an
+    internal (same-org) attendee, and every field this repo stores
+    internally (the DB row itself, the Action Review Queue payload before
+    approval), always keeps the real title. This is the one real
+    per-outbound-recipient redaction this codebase does; team_calendar.py's
+    own "Busy" redaction is a different surface (internal teammates
+    viewing a calendar UI) with different placeholder text for that reason
+    — not the same function, deliberately.
 
     Known, deliberate gap: an edited/cancelled single occurrence (recurrence_id
     set) sends a plain REQUEST/CANCEL for that instance's own start/end,
@@ -520,23 +563,28 @@ def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str)
     join_url = f"{get_settings().frontend_url.rstrip('/')}/calendar/{event.version_chain_id}"
     duration_minutes = max(1, int((event.end_at - event.start_at).total_seconds() // 60))
     scheduled_str = event.start_at.strftime("%b %d, %Y at %I:%M %p") + f" ({event.timezone})"
+    is_confidential = event.confidentiality_class == "confidential"
 
     for email in emails:
+        placehold = is_confidential and _is_external_attendee(db, event, email)
+        title = CONFIDENTIAL_PLACEHOLDER_TITLE if placehold else event.title
+        description = CONFIDENTIAL_PLACEHOLDER_DESCRIPTION if placehold else event.description
+
         ics_data = generate_ics(
-            title=event.title, meeting_code=event.version_chain_id, join_url=join_url,
+            title=title, meeting_code=event.version_chain_id, join_url=join_url,
             scheduled_at=event.start_at, duration_minutes=duration_minutes,
             organizer_name=organizer_name, organizer_email=organizer_email,
-            attendee_email=email, description=event.description,
+            attendee_email=email, description=description,
             method=method, sequence=max(0, event.version_number - 1), rrule=event.rrule,
         )
         if method == "CANCEL":
             send_meeting_cancelled_email(
-                to_email=email, organizer_name=organizer_name, meeting_title=event.title,
+                to_email=email, organizer_name=organizer_name, meeting_title=title,
                 scheduled_at=scheduled_str, ics_data=ics_data,
             )
         else:
             send_meeting_invite_email(
-                to_email=email, inviter_name=organizer_name, meeting_title=event.title,
+                to_email=email, inviter_name=organizer_name, meeting_title=title,
                 meeting_code=event.version_chain_id, join_url=join_url,
                 scheduled_at=scheduled_str, ics_data=ics_data,
             )
