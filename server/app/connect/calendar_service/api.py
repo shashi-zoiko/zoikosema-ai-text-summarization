@@ -9,9 +9,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
 from app.connect.action_review import service as action_review
-from app.connect.calendar_service import native_events, resources, service, team_calendar
+from app.connect.calendar_service import ai_workflows, native_events, resources, service, tasks as tasks_service, team_calendar
 from app.connect.calendar_service.availability import suggest_available_slots, suggest_group_available_slots
-from app.connect.calendar_service.models import CONFIDENTIALITY_CLASSES, RESOURCE_TYPES
+from app.connect.calendar_service.models import CONFIDENTIALITY_CLASSES, RESOURCE_TYPES, TASK_PRIORITIES, TASK_STATUSES
 from app.connect.shared.errors import DomainError
 from app.connect.shared.tenant import TenantContext, resolve_tenant
 from app.core.database import get_db
@@ -480,3 +480,159 @@ def get_team_calendar(
     else than the caller are redacted to a bare busy block."""
     occurrences = team_calendar.list_team_calendar(db, ctx, range_start=range_start, range_end=range_end)
     return [OccurrenceOut(**o) for o in occurrences]
+
+
+# ── AI agenda / brief / follow-up tasks — Phase 2 slice 8 ───────────────────
+
+class AgendaRequestIn(BaseModel):
+    context_notes: str | None = None
+
+
+@router.post("/native-events/{version_chain_id}/ai/agenda")
+async def post_generate_agenda(
+    version_chain_id: str,
+    data: AgendaRequestIn = AgendaRequestIn(),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """{"staged": false, "agenda_items": [...], ...} at L1, or
+    {"staged": true, "review_item": {...}} at L2+."""
+    try:
+        return await ai_workflows.generate_agenda(
+            db, ctx, version_chain_id=version_chain_id, context_notes=data.context_notes,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+@router.get("/native-events/{version_chain_id}/ai/brief")
+def get_meeting_brief(
+    version_chain_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Returns {"summary", "key_points", "suggested_talking_points",
+    "agent_generated", "_model", "_error"} — no strict response_model,
+    same reasoning as create_native_event's own staged-or-not shape:
+    metadata keys (_model/_error) come straight from core/ai.py's
+    generation contract and aren't worth a parallel Pydantic model to
+    re-describe."""
+    try:
+        return ai_workflows.generate_meeting_brief(db, ctx, version_chain_id=version_chain_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+class FollowupTasksRequestIn(BaseModel):
+    context_notes: str
+
+
+@router.post("/native-events/{version_chain_id}/ai/followup-tasks")
+async def post_generate_followup_tasks(
+    version_chain_id: str,
+    data: FollowupTasksRequestIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """{"staged": false, "tasks": [...], ...} at L1, or
+    {"staged": true, "review_item": {...}} at L2+."""
+    try:
+        return await ai_workflows.generate_followup_tasks(
+            db, ctx, version_chain_id=version_chain_id, context_notes=data.context_notes,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+@router.post("/tasks/proposals/{item_id}/approve")
+async def approve_tasks_proposal(
+    item_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Combines the generic Action Review Queue approval with the calendar-
+    specific executor, same pattern as the native-event equivalent above."""
+    try:
+        await action_review.approve(db, ctx, item_id)
+        created = await ai_workflows.create_tasks_from_approved_proposal(db, ctx, item_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return created
+
+
+# ── Tasks — Phase 2 slice 8 ──────────────────────────────────────────────────
+
+_TASK_STATUS = Literal["open", "done", "dismissed"]
+_TASK_PRIORITY = Literal["low", "med", "high"]
+assert set(_TASK_STATUS.__args__) == set(TASK_STATUSES)
+assert set(_TASK_PRIORITY.__args__) == set(TASK_PRIORITIES)
+
+
+class TaskIn(BaseModel):
+    title: str
+    priority: _TASK_PRIORITY = "med"
+    assignee_email: str | None = None
+    source_event_id: str | None = None
+
+
+class TaskStatusIn(BaseModel):
+    status: _TASK_STATUS
+
+
+class TaskOut(BaseModel):
+    id: str
+    title: str
+    status: str
+    priority: str
+    assignee_email: str | None
+    source_event_id: str | None
+    generated_by_agent: bool
+    created_by: int
+    created_at: datetime | None
+
+
+def _task_to_out(t) -> TaskOut:
+    return TaskOut(
+        id=t.id, title=t.title, status=t.status, priority=t.priority, assignee_email=t.assignee_email,
+        source_event_id=t.source_event_id, generated_by_agent=t.generated_by_agent,
+        created_by=t.created_by, created_at=t.created_at,
+    )
+
+
+@router.post("/tasks", response_model=TaskOut, status_code=201)
+def create_task(
+    data: TaskIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        task = tasks_service.create_task(
+            db, ctx, title=data.title, priority=data.priority,
+            assignee_email=data.assignee_email, source_event_id=data.source_event_id,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+    return _task_to_out(task)
+
+
+@router.get("/tasks", response_model=list[TaskOut])
+def list_tasks(
+    status: _TASK_STATUS | None = Query(default=None),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    return [_task_to_out(t) for t in tasks_service.list_tasks(db, ctx, status=status)]
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskOut)
+def update_task(
+    task_id: str,
+    data: TaskStatusIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        task = tasks_service.update_task_status(db, ctx, task_id, status=data.status)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return _task_to_out(task)
