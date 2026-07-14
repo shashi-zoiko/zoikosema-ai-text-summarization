@@ -28,6 +28,7 @@ const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx')
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
 const AccountSettings = lazy(() => import('./pages/AccountSettings.jsx'))
 const CalendarIntegrations = lazy(() => import('./pages/CalendarIntegrations.jsx'))
+const ReviewQueue = lazy(() => import('./pages/ReviewQueue.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
 const Billing = lazy(() => import('./pages/Billing.jsx'))
 const HelpSupport = lazy(() => import('./pages/HelpSupport.jsx'))
@@ -201,6 +202,7 @@ export default function App() {
           <Route path="/org/:slug" element={<OrgSettings />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/calendar" element={<CalendarIntegrations />} />
+          <Route path="/review-queue" element={<ReviewQueue />} />
           <Route path="/security" element={<AccountSettings section="security" />} />
           <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
           <Route path="/billing" element={<Billing />} />
