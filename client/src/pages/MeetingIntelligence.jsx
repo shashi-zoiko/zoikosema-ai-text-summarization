@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   AlertTriangle, ArrowLeft, Brain, CheckCircle2, ChevronDown, ChevronRight, Copy,
-  Download, FileText, GitMerge, Globe, Lightbulb, ListChecks, Loader2, Mic, Pencil,
-  Plus, Printer, RefreshCw, Save, ShieldAlert, Sparkles, Table2, Target, Trash2, TrendingUp,
+  Download, FileText, GitMerge, Globe, Layers, Lightbulb, ListChecks, Loader2, MessagesSquare, Mic, Pencil,
+  Plus, RefreshCw, Save, ShieldAlert, Sparkles, Table2, Target, Trash2, TrendingUp,
   Users2, X, Zap,
 } from 'lucide-react'
 
@@ -83,148 +83,234 @@ function ScoreRing({ value = 0, label, icon }) {
   )
 }
 
+// Export scope shared by the .md/.doc download dropdowns: which part of the
+// page to include in the file. 'summary' = the AI-written text analysis
+// (matches what these functions always exported before the dropdown
+// existed), 'tables' = just the 3 fixed AI tables, 'both' = both.
+const escHtml = (s) => (s ?? '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+function tablesToMarkdown(tables) {
+  const list = Array.isArray(tables) ? tables : []
+  const cell = (v) => String(v ?? '—').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
+  const lines = []
+  for (const t of list) {
+    const cols = t?.columns || []
+    if (!cols.length) continue
+    lines.push(`## ${t.type_label || 'Table'}`)
+    lines.push(`| ${cols.map((c) => c.label).join(' | ')} |`)
+    lines.push(`| ${cols.map(() => '---').join(' | ')} |`)
+    const rows = t?.rows || []
+    if (rows.length) {
+      for (const row of rows) lines.push(`| ${cols.map((c) => cell(row[c.key])).join(' | ')} |`)
+    } else {
+      lines.push('')
+      lines.push('_No data found in this meeting._')
+    }
+    lines.push('')
+  }
+  return lines
+}
+
+function tablesToHtml(tables) {
+  const list = Array.isArray(tables) ? tables : []
+  const parts = []
+  for (const t of list) {
+    const cols = t?.columns || []
+    if (!cols.length) continue
+    parts.push(`<h2>${escHtml(t.type_label || 'Table')}</h2>`)
+    const rows = t?.rows || []
+    if (!rows.length) {
+      parts.push('<p><em>No data found in this meeting.</em></p>')
+      continue
+    }
+    parts.push('<table><thead><tr>')
+    for (const c of cols) parts.push(`<th>${escHtml(c.label)}</th>`)
+    parts.push('</tr></thead><tbody>')
+    for (const row of rows) {
+      parts.push('<tr>')
+      for (const c of cols) parts.push(`<td>${escHtml(row[c.key] ?? '—')}</td>`)
+      parts.push('</tr>')
+    }
+    parts.push('</tbody></table>')
+  }
+  return parts
+}
+
 // Render the structured payload as a portable markdown document. Used by the
 // "Copy as markdown" and "Download .md" buttons so users can paste straight
-// into Slack, Notion, or commit it into a wiki.
-function intelToMarkdown(meetingTitle, code, payload) {
+// into Slack, Notion, or commit it into a wiki. `scope` picks which part of
+// the page to include — see the comment above `escHtml`.
+function intelToMarkdown(meetingTitle, code, payload, scope = 'summary') {
   if (!payload) return ''
   const lines = []
   lines.push(`# ${meetingTitle || 'Meeting'} — Intelligence`)
   lines.push(`_${code}_`)
   lines.push('')
-  if (payload.tldr) {
-    lines.push('## TL;DR')
-    lines.push(payload.tldr)
-    lines.push('')
-  }
-  const s = payload.score || {}
-  if (s.overall != null) {
-    lines.push('## Score')
-    lines.push(`- Overall: ${s.overall ?? 0}/100`)
-    lines.push(`- Productivity: ${s.productivity ?? 0}/100`)
-    lines.push(`- Clarity: ${s.clarity ?? 0}/100`)
-    lines.push(`- Decision speed: ${s.decision_speed ?? 0}/100`)
-    lines.push(`- Participation: ${s.participation ?? 0}/100`)
-    lines.push('')
-  }
-  if (payload.action_items?.length) {
-    lines.push('## Action items')
-    for (const a of payload.action_items) {
-      const meta = [a.owner, a.due, a.priority].filter(Boolean).join(' · ')
-      lines.push(`- [ ] ${a.task}${meta ? `  _(${meta})_` : ''}`)
+
+  if (scope !== 'tables') {
+    if (payload.tldr) {
+      lines.push('## TL;DR')
+      lines.push(payload.tldr)
+      lines.push('')
     }
-    lines.push('')
-  }
-  if (payload.decisions?.length) {
-    lines.push('## Decisions')
-    for (const d of payload.decisions) {
-      lines.push(`- **${d.title}**${d.type ? ` _(${d.type})_` : ''}${d.detail ? ` — ${d.detail}` : ''}`)
+    const s = payload.score || {}
+    if (s.overall != null) {
+      lines.push('## Score')
+      lines.push(`- Overall: ${s.overall ?? 0}/100`)
+      lines.push(`- Productivity: ${s.productivity ?? 0}/100`)
+      lines.push(`- Clarity: ${s.clarity ?? 0}/100`)
+      lines.push(`- Decision speed: ${s.decision_speed ?? 0}/100`)
+      lines.push(`- Participation: ${s.participation ?? 0}/100`)
+      lines.push('')
     }
-    lines.push('')
-  }
-  if (payload.risks?.length) {
-    lines.push('## Risks')
-    for (const r of payload.risks) {
-      lines.push(`- ${r.severity ? `**[${r.severity}]** ` : ''}${r.title}${r.rationale ? ` — ${r.rationale}` : ''}`)
+    if (payload.action_items?.length) {
+      lines.push('## Action items')
+      for (const a of payload.action_items) {
+        const meta = [a.owner, a.due, a.priority].filter(Boolean).join(' · ')
+        lines.push(`- [ ] ${a.task}${meta ? `  _(${meta})_` : ''}`)
+      }
+      lines.push('')
     }
-    lines.push('')
-  }
-  if (payload.topics?.length) {
-    lines.push('## Topics')
-    payload.topics.forEach((t, i) => {
-      lines.push(`${i + 1}. **${t.title}**${t.started_at ? ` (${t.started_at}${t.ended_at ? `→${t.ended_at}` : ''})` : ''}`)
-      if (t.summary) lines.push(`   ${t.summary}`)
-    })
-    lines.push('')
-  }
-  if (payload.contradictions?.length) {
-    lines.push('## Contradictions')
-    for (const c of payload.contradictions) {
-      lines.push(`- ${c.summary}`)
-      if (Array.isArray(c.between)) c.between.forEach((b) => lines.push(`  - ${b}`))
+    if (payload.decisions?.length) {
+      lines.push('## Decisions')
+      for (const d of payload.decisions) {
+        lines.push(`- **${d.title}**${d.type ? ` _(${d.type})_` : ''}${d.detail ? ` — ${d.detail}` : ''}`)
+      }
+      lines.push('')
     }
-    lines.push('')
+    if (payload.risks?.length) {
+      lines.push('## Risks')
+      for (const r of payload.risks) {
+        lines.push(`- ${r.severity ? `**[${r.severity}]** ` : ''}${r.title}${r.rationale ? ` — ${r.rationale}` : ''}`)
+      }
+      lines.push('')
+    }
+    if (payload.topics?.length) {
+      lines.push('## Topics')
+      payload.topics.forEach((t, i) => {
+        lines.push(`${i + 1}. **${t.title}**${t.started_at ? ` (${t.started_at}${t.ended_at ? `→${t.ended_at}` : ''})` : ''}`)
+        if (t.summary) lines.push(`   ${t.summary}`)
+      })
+      lines.push('')
+    }
+    if (payload.contradictions?.length) {
+      lines.push('## Contradictions')
+      for (const c of payload.contradictions) {
+        lines.push(`- ${c.summary}`)
+        if (Array.isArray(c.between)) c.between.forEach((b) => lines.push(`  - ${b}`))
+      }
+      lines.push('')
+    }
+    if (payload.knowledge_nuggets?.length) {
+      lines.push('## Knowledge nuggets')
+      for (const n of payload.knowledge_nuggets) lines.push(`- ${n}`)
+      lines.push('')
+    }
   }
-  if (payload.knowledge_nuggets?.length) {
-    lines.push('## Knowledge nuggets')
-    for (const n of payload.knowledge_nuggets) lines.push(`- ${n}`)
-    lines.push('')
+
+  if (scope !== 'summary') {
+    lines.push(...tablesToMarkdown(payload.tables))
   }
+
   return lines.join('\n')
 }
 
 // Same idea as intelToMarkdown, but for the simpler transcript-sourced
 // payload shape ({title, summary, key_takeaways}) — the post-meeting Groq
 // summary, not the chat-based rich analysis above.
-function transcriptToMarkdown(meetingTitle, code, payload) {
+function transcriptToMarkdown(meetingTitle, code, payload, scope = 'summary') {
   if (!payload) return ''
   const lines = []
   lines.push(`# ${payload.title || meetingTitle || 'Meeting'} — Summary`)
   lines.push(`_${code}_`)
   lines.push('')
-  if (payload.summary) {
-    lines.push(payload.summary)
-    lines.push('')
-  }
-  if (payload.key_takeaways?.length) {
-    lines.push('## Key Takeaways')
-    for (const t of payload.key_takeaways) {
-      lines.push(`- ${t.assignee ? `**${t.assignee}:** ` : ''}${t.text}`)
+
+  if (scope !== 'tables') {
+    if (payload.summary) {
+      lines.push(payload.summary)
+      lines.push('')
     }
-    lines.push('')
+    if (payload.key_takeaways?.length) {
+      lines.push('## Key Takeaways')
+      for (const t of payload.key_takeaways) {
+        lines.push(`- ${t.assignee ? `**${t.assignee}:** ` : ''}${t.text}`)
+      }
+      lines.push('')
+    }
   }
+
+  if (scope !== 'summary') {
+    lines.push(...tablesToMarkdown(payload.tables))
+  }
+
   return lines.join('\n')
 }
 
-function intelToHtmlDoc(meetingTitle, code, payload) {
+function intelToHtmlDoc(meetingTitle, code, payload, scope = 'summary') {
   if (!payload) return ''
-  const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  const esc = escHtml
   const parts = [`<h1>${esc(meetingTitle || 'Meeting')} — Intelligence</h1><p><em>${esc(code)}</em></p>`]
-  if (payload.tldr) parts.push(`<h2>TL;DR</h2><p>${esc(payload.tldr)}</p>`)
-  if (payload.action_items?.length) {
-    parts.push('<h2>Action Items</h2><ul>')
-    for (const a of payload.action_items) parts.push(`<li>${esc(a.task)}${a.owner ? ` <em>(${esc(a.owner)})</em>` : ''}</li>`)
-    parts.push('</ul>')
+
+  if (scope !== 'tables') {
+    if (payload.tldr) parts.push(`<h2>TL;DR</h2><p>${esc(payload.tldr)}</p>`)
+    if (payload.action_items?.length) {
+      parts.push('<h2>Action Items</h2><ul>')
+      for (const a of payload.action_items) parts.push(`<li>${esc(a.task)}${a.owner ? ` <em>(${esc(a.owner)})</em>` : ''}</li>`)
+      parts.push('</ul>')
+    }
+    if (payload.decisions?.length) {
+      parts.push('<h2>Decisions</h2><ul>')
+      for (const d of payload.decisions) parts.push(`<li><strong>${esc(d.title)}</strong>${d.detail ? ` — ${esc(d.detail)}` : ''}</li>`)
+      parts.push('</ul>')
+    }
+    if (payload.risks?.length) {
+      parts.push('<h2>Risks</h2><ul>')
+      for (const r of payload.risks) parts.push(`<li>${r.severity ? `<strong>[${esc(r.severity)}]</strong> ` : ''}${esc(r.title)}${r.rationale ? ` — ${esc(r.rationale)}` : ''}</li>`)
+      parts.push('</ul>')
+    }
+    if (payload.topics?.length) {
+      parts.push('<h2>Topics</h2><ol>')
+      for (const t of payload.topics) parts.push(`<li><strong>${esc(t.title)}</strong>${t.summary ? `<br/>${esc(t.summary)}` : ''}</li>`)
+      parts.push('</ol>')
+    }
+    const s = payload.score || {}
+    if (s.overall != null) {
+      parts.push(`<h2>Score</h2><p>Overall: ${s.overall}/100 | Productivity: ${s.productivity}/100 | Clarity: ${s.clarity}/100 | Decision speed: ${s.decision_speed}/100 | Participation: ${s.participation}/100</p>`)
+    }
+    if (payload.knowledge_nuggets?.length) {
+      parts.push('<h2>Knowledge Nuggets</h2><ul>')
+      for (const n of payload.knowledge_nuggets) parts.push(`<li>${esc(n)}</li>`)
+      parts.push('</ul>')
+    }
   }
-  if (payload.decisions?.length) {
-    parts.push('<h2>Decisions</h2><ul>')
-    for (const d of payload.decisions) parts.push(`<li><strong>${esc(d.title)}</strong>${d.detail ? ` — ${esc(d.detail)}` : ''}</li>`)
-    parts.push('</ul>')
+
+  if (scope !== 'summary') {
+    parts.push(...tablesToHtml(payload.tables))
   }
-  if (payload.risks?.length) {
-    parts.push('<h2>Risks</h2><ul>')
-    for (const r of payload.risks) parts.push(`<li>${r.severity ? `<strong>[${esc(r.severity)}]</strong> ` : ''}${esc(r.title)}${r.rationale ? ` — ${esc(r.rationale)}` : ''}</li>`)
-    parts.push('</ul>')
-  }
-  if (payload.topics?.length) {
-    parts.push('<h2>Topics</h2><ol>')
-    for (const t of payload.topics) parts.push(`<li><strong>${esc(t.title)}</strong>${t.summary ? `<br/>${esc(t.summary)}` : ''}</li>`)
-    parts.push('</ol>')
-  }
-  const s = payload.score || {}
-  if (s.overall != null) {
-    parts.push(`<h2>Score</h2><p>Overall: ${s.overall}/100 | Productivity: ${s.productivity}/100 | Clarity: ${s.clarity}/100 | Decision speed: ${s.decision_speed}/100 | Participation: ${s.participation}/100</p>`)
-  }
-  if (payload.knowledge_nuggets?.length) {
-    parts.push('<h2>Knowledge Nuggets</h2><ul>')
-    for (const n of payload.knowledge_nuggets) parts.push(`<li>${esc(n)}</li>`)
-    parts.push('</ul>')
-  }
+
   return htmlWrap(parts.join('\n'))
 }
 
-function transcriptToHtmlDoc(meetingTitle, code, payload) {
+function transcriptToHtmlDoc(meetingTitle, code, payload, scope = 'summary') {
   if (!payload) return ''
-  const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  const esc = escHtml
   const parts = [`<h1>${esc(payload.title || meetingTitle || 'Meeting')} — Summary</h1><p><em>${esc(code)}</em></p>`]
-  if (payload.summary) parts.push(`<p>${esc(payload.summary)}</p>`)
-  if (payload.key_takeaways?.length) {
-    parts.push('<h2>Key Takeaways</h2><ul>')
-    for (const t of payload.key_takeaways) {
-      parts.push(`<li>${t.assignee ? `<strong>${esc(t.assignee)}:</strong> ` : ''}${esc(t.text)}</li>`)
+
+  if (scope !== 'tables') {
+    if (payload.summary) parts.push(`<p>${esc(payload.summary)}</p>`)
+    if (payload.key_takeaways?.length) {
+      parts.push('<h2>Key Takeaways</h2><ul>')
+      for (const t of payload.key_takeaways) {
+        parts.push(`<li>${t.assignee ? `<strong>${esc(t.assignee)}:</strong> ` : ''}${esc(t.text)}</li>`)
+      }
+      parts.push('</ul>')
     }
-    parts.push('</ul>')
   }
+
+  if (scope !== 'summary') {
+    parts.push(...tablesToHtml(payload.tables))
+  }
+
   return htmlWrap(parts.join('\n'))
 }
 
@@ -240,6 +326,9 @@ p,li{font-size:14px}
 ul,ol{padding-left:24px}
 em{color:#666}
 strong{color:#000}
+table{border-collapse:collapse;width:100%;margin-top:8px}
+th,td{border:1px solid #ccc;padding:6px 10px;font-size:13px;text-align:left}
+th{background:#f3f3f3}
 </style>
 </head>
 <body>${body}</body></html>`
@@ -401,6 +490,115 @@ function TranscriptSummaryView({
   )
 }
 
+// The raw message-by-message log this summary was generated from (spoken
+// transcript or text chat), normalized server-side to {time, name, body} —
+// a reference underneath the AI's synthesized analysis so users can see
+// exactly what was said. Fixed-height with its own internal scrollbar so a
+// long meeting's full log never stretches the page itself past a screenful.
+function ConversationLog({ conversation }) {
+  const list = Array.isArray(conversation) ? conversation : []
+  return (
+    <SectionCard title="Conversation" icon={<MessagesSquare />} tone="neutral" count={list.length}>
+      {list.length === 0 ? (
+        <EmptyState
+          icon={<MessagesSquare className="h-4 w-4" />}
+          title="No conversation on file"
+          hint="The original chat log or transcript isn't available for this meeting."
+        />
+      ) : (
+        <div className="h-[420px] overflow-y-auto rounded-xl border border-[var(--c-line)] bg-[var(--c-bg-2)]/30 p-3.5">
+          <ul className="space-y-2.5">
+            {list.map((m, i) => (
+              <li key={i} className="text-[13px] leading-relaxed">
+                {m.time && <span className="mono mr-2 text-[11px] text-[var(--c-fg-muted)]">{m.time}</span>}
+                <span className="font-semibold text-[var(--c-fg)]">{m.name}:</span>{' '}
+                <span className="text-[var(--c-fg-dim)]">{m.body}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </SectionCard>
+  )
+}
+
+const EXPORT_SCOPES = [
+  { value: 'summary', label: 'Summary page', icon: <FileText className="h-4 w-4" /> },
+  { value: 'tables', label: 'Table info page', icon: <Table2 className="h-4 w-4" /> },
+  { value: 'both', label: 'Both pages', icon: <Layers className="h-4 w-4" /> },
+]
+
+// Download button with an attached dropdown (label + chevron) offering the 3
+// export scopes above — used for both the .md and .doc buttons so each file
+// format independently lets the user pick summary-only, tables-only, or both.
+// Same polished menu treatment as the account dropdown in Layout.jsx (glassy
+// backdrop-blur surface, inset rounded rows, scale/fade entrance) rather than
+// a plain flat list, for visual consistency with the rest of the app.
+function ExportMenuButton({ label, onSelect }) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const choose = (scope) => {
+    setOpen(false)
+    onSelect(scope)
+  }
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <Button
+        variant="outline"
+        onClick={() => setOpen((v) => !v)}
+        leftIcon={<Download className="h-4 w-4" />}
+        rightIcon={<ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-200', open && 'rotate-180')} />}
+      >
+        {label}
+      </Button>
+      <AnimatePresence>
+        {open && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <motion.div
+              role="menu"
+              initial={{ opacity: 0, y: -6, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -4, scale: 0.98 }}
+              transition={{ duration: 0.14 }}
+              className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-full w-max origin-top-right overflow-hidden rounded-xl border border-[var(--c-line-strong)] bg-[color-mix(in_srgb,var(--c-surface)_96%,transparent)] p-1 shadow-[0_16px_40px_-16px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+            >
+              {EXPORT_SCOPES.map((s) => (
+                <button
+                  key={s.value}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => choose(s.value)}
+                  className="flex w-full items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-left text-[11.5px] font-medium text-[var(--c-fg-dim)] transition hover:bg-[var(--c-bg-3)] hover:text-[var(--c-fg)] [&_svg]:h-3.5 [&_svg]:w-3.5 [&_svg]:shrink-0"
+                >
+                  {s.icon}
+                  {s.label}
+                </button>
+              ))}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 export default function MeetingIntelligence() {
   const { code } = useParams()
   const navigate = useNavigate()
@@ -471,43 +669,34 @@ export default function MeetingIntelligence() {
   const payload = intel?.payload || null
   const status = intel?.status
   const isTranscript = intel?.source === 'transcript'
-  const hasTable = payload?.table_data?.enabled && payload?.table_data?.rows?.length > 0
+  const hasTable = Array.isArray(payload?.tables) && payload.tables.length > 0
   useEffect(() => {
     if (viewMode === 'table' && !hasTable) setViewMode('text')
   }, [viewMode, hasTable])
 
   const slug = `${(intel?.meeting_title || code || 'meeting').replace(/[^a-z0-9-_]+/gi, '-').toLowerCase()}-${isTranscript ? 'summary' : 'intelligence'}`
 
-  const exportMarkdown = (download) => {
+  // scope: 'summary' | 'tables' | 'both' — which part of the page to export,
+  // chosen from the .md/.doc dropdown (see ExportMenuButton).
+  const scopeSuffix = (scope) => (scope === 'tables' ? '-tables' : scope === 'both' ? '-full' : '')
+
+  const exportMarkdown = (download, scope = 'summary') => {
     const md = isTranscript
-      ? transcriptToMarkdown(intel?.meeting_title, code, payload)
-      : intelToMarkdown(intel?.meeting_title, code, payload)
+      ? transcriptToMarkdown(intel?.meeting_title, code, payload, scope)
+      : intelToMarkdown(intel?.meeting_title, code, payload, scope)
     if (!md) return
     if (download) {
-      downloadBlob(md, `${slug}.md`, 'text/markdown;charset=utf-8')
+      downloadBlob(md, `${slug}${scopeSuffix(scope)}.md`, 'text/markdown;charset=utf-8')
     } else {
       navigator.clipboard?.writeText(md)
     }
   }
 
-  const exportDoc = () => {
+  const exportDoc = (scope = 'summary') => {
     const html = isTranscript
-      ? transcriptToHtmlDoc(intel?.meeting_title, code, payload)
-      : intelToHtmlDoc(intel?.meeting_title, code, payload)
-    if (html) downloadBlob(html, `${slug}.doc`, 'application/msword')
-  }
-
-  const exportPdf = () => {
-    const html = isTranscript
-      ? transcriptToHtmlDoc(intel?.meeting_title, code, payload)
-      : intelToHtmlDoc(intel?.meeting_title, code, payload)
-    if (!html) return
-    const w = window.open('', '_blank')
-    if (!w) return
-    w.document.write(html)
-    w.document.close()
-    w.focus()
-    w.print()
+      ? transcriptToHtmlDoc(intel?.meeting_title, code, payload, scope)
+      : intelToHtmlDoc(intel?.meeting_title, code, payload, scope)
+    if (html) downloadBlob(html, `${slug}${scopeSuffix(scope)}.doc`, 'application/msword')
   }
 
   const startEdit = () => {
@@ -616,15 +805,8 @@ export default function MeetingIntelligence() {
                     </Button>
                   )}
                   <div className="flex items-center gap-1.5">
-                    <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
-                      .md
-                    </Button>
-                    <Button variant="outline" onClick={exportDoc} leftIcon={<Download className="h-4 w-4" />}>
-                      .doc
-                    </Button>
-                    <Button variant="outline" onClick={exportPdf} leftIcon={<Printer className="h-4 w-4" />}>
-                      PDF
-                    </Button>
+                    <ExportMenuButton label="md" onSelect={(scope) => exportMarkdown(true, scope)} />
+                    <ExportMenuButton label="doc" onSelect={(scope) => exportDoc(scope)} />
                   </div>
                 </>
               )
@@ -637,15 +819,8 @@ export default function MeetingIntelligence() {
                     Copy as markdown
                   </Button>
                   <div className="flex items-center gap-1.5">
-                    <Button variant="outline" onClick={() => exportMarkdown(true)} leftIcon={<Download className="h-4 w-4" />}>
-                      .md
-                    </Button>
-                    <Button variant="outline" onClick={exportDoc} leftIcon={<Download className="h-4 w-4" />}>
-                      .doc
-                    </Button>
-                    <Button variant="outline" onClick={exportPdf} leftIcon={<Printer className="h-4 w-4" />}>
-                      PDF
-                    </Button>
+                    <ExportMenuButton label="md" onSelect={(scope) => exportMarkdown(true, scope)} />
+                    <ExportMenuButton label="doc" onSelect={(scope) => exportDoc(scope)} />
                   </div>
                 </>
               )}
@@ -835,26 +1010,33 @@ export default function MeetingIntelligence() {
       {intel && status !== 'generating' && payload && (
         isTranscript ? (
           viewMode === 'table' && hasTable ? (
-            <TableSummaryView tableData={payload.table_data} />
+            <TableSummaryView tables={payload.tables} />
           ) : (
-            <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
-              <Card glow className="p-6">
-                <TranscriptSummaryView
-                  payload={payload}
-                  editing={editing}
-                  editTitle={editTitle}
-                  setEditTitle={setEditTitle}
-                  editSummary={editSummary}
-                  setEditSummary={setEditSummary}
-                  editTakeaways={editTakeaways}
-                  setEditTakeaways={setEditTakeaways}
-                />
-              </Card>
-            </motion.section>
+            <>
+              <motion.section variants={fadeUp} initial="initial" animate="animate" className="mb-6">
+                <Card glow className="p-6">
+                  <TranscriptSummaryView
+                    payload={payload}
+                    editing={editing}
+                    editTitle={editTitle}
+                    setEditTitle={setEditTitle}
+                    editSummary={editSummary}
+                    setEditSummary={setEditSummary}
+                    editTakeaways={editTakeaways}
+                    setEditTakeaways={setEditTakeaways}
+                  />
+                </Card>
+              </motion.section>
+              {!editing && (
+                <section className="mb-8">
+                  <ConversationLog conversation={payload.conversation} />
+                </section>
+              )}
+            </>
           )
         ) : (
         viewMode === 'table' && hasTable ? (
-          <TableSummaryView tableData={payload.table_data} />
+          <TableSummaryView tables={payload.tables} />
         ) : (
         <>
           {/* ============ TL;DR ============ */}
@@ -1158,6 +1340,11 @@ export default function MeetingIntelligence() {
                 </ul>
               )}
             </SectionCard>
+          </section>
+
+          {/* ============ Conversation ============ */}
+          <section className="mb-8">
+            <ConversationLog conversation={payload.conversation} />
           </section>
         </>
         )
