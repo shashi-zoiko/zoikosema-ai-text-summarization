@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 from datetime import date as date_, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
-from app.connect.calendar_service import service
+from app.connect.action_review import service as action_review
+from app.connect.calendar_service import native_events, service
 from app.connect.calendar_service.availability import suggest_available_slots
+from app.connect.calendar_service.models import CONFIDENTIALITY_CLASSES
 from app.connect.shared.errors import DomainError
 from app.connect.shared.tenant import TenantContext, resolve_tenant
 from app.core.database import get_db
@@ -94,3 +96,168 @@ def get_availability(
         day_start_hour=day_start_hour, day_end_hour=day_end_hour,
     )
     return [FreeSlotOut(start_at=s.start_at, end_at=s.end_at) for s in slots]
+
+
+# ── Native (Sema-authoritative) events — Phase 2 slice 3 ────────────────────
+
+_CONFIDENTIALITY = Literal["standard", "confidential"]
+assert set(_CONFIDENTIALITY.__args__) == set(CONFIDENTIALITY_CLASSES)
+
+
+class NativeEventIn(BaseModel):
+    title: str
+    start_at: datetime
+    end_at: datetime
+    timezone_name: str = "UTC"
+    description: str | None = None
+    location: str | None = None
+    attendees: list[dict[str, Any]] = []
+    resources: list[dict[str, Any]] = []
+    confidentiality_class: _CONFIDENTIALITY = "standard"
+
+
+class NativeEventUpdateIn(BaseModel):
+    title: str | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    timezone_name: str | None = None
+    description: str | None = None
+    location: str | None = None
+    attendees: list[dict[str, Any]] | None = None
+    resources: list[dict[str, Any]] | None = None
+    confidentiality_class: _CONFIDENTIALITY | None = None
+
+
+class NativeEventOut(BaseModel):
+    id: str
+    version_chain_id: str
+    version_number: int
+    title: str
+    description: str | None
+    location: str | None
+    start_at: datetime | None
+    end_at: datetime | None
+    timezone: str
+    rrule: str | None
+    attendees: list[dict[str, Any]]
+    resources: list[dict[str, Any]]
+    confidentiality_class: str
+    status: str
+    created_by: int
+    created_at: datetime | None
+
+
+def _native_to_out(e) -> NativeEventOut:
+    return NativeEventOut(
+        id=e.id, version_chain_id=e.version_chain_id, version_number=e.version_number,
+        title=e.title, description=e.description, location=e.location,
+        start_at=e.start_at, end_at=e.end_at, timezone=e.timezone, rrule=e.rrule,
+        attendees=e.attendees, resources=e.resources, confidentiality_class=e.confidentiality_class,
+        status=e.status, created_by=e.created_by, created_at=e.created_at,
+    )
+
+
+@router.post("/native-events", status_code=201)
+async def create_native_event(
+    data: NativeEventIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Returns {"staged": true, "review_item": {...}} at L2+ ceilings, or
+    {"staged": false, "event": {...}} when created directly."""
+    try:
+        return await native_events.create_event(
+            db, ctx, title=data.title, start_at=data.start_at, end_at=data.end_at,
+            timezone_name=data.timezone_name, description=data.description, location=data.location,
+            attendees=data.attendees, resources=data.resources, confidentiality_class=data.confidentiality_class,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+@router.get("/native-events", response_model=list[NativeEventOut])
+def list_native_events(
+    time_min: datetime | None = Query(default=None),
+    time_max: datetime | None = Query(default=None),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    return [_native_to_out(e) for e in native_events.list_events(db, ctx, time_min=time_min, time_max=time_max)]
+
+
+@router.get("/native-events/{version_chain_id}", response_model=NativeEventOut)
+def get_native_event(
+    version_chain_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        event = native_events.get_current_event(db, ctx, version_chain_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return _native_to_out(event)
+
+
+@router.patch("/native-events/{version_chain_id}", response_model=NativeEventOut)
+async def update_native_event(
+    version_chain_id: str,
+    data: NativeEventUpdateIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        out = await native_events.update_event(
+            db, ctx, version_chain_id=version_chain_id,
+            title=data.title, start_at=data.start_at, end_at=data.end_at, timezone_name=data.timezone_name,
+            description=data.description, location=data.location, attendees=data.attendees,
+            resources=data.resources, confidentiality_class=data.confidentiality_class,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+    return NativeEventOut(**out)
+
+
+@router.delete("/native-events/{version_chain_id}", response_model=NativeEventOut)
+async def delete_native_event(
+    version_chain_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        out = await native_events.delete_event(db, ctx, version_chain_id=version_chain_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return NativeEventOut(**out)
+
+
+@router.post("/native-events/{version_chain_id}/restore", response_model=NativeEventOut)
+async def restore_native_event(
+    version_chain_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        out = await native_events.restore_previous_version(db, ctx, version_chain_id=version_chain_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return NativeEventOut(**out)
+
+
+@router.post("/native-events/proposals/{item_id}/approve", response_model=NativeEventOut)
+async def approve_native_event_proposal(
+    item_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    """Combines the generic Action Review Queue approval with the calendar-
+    specific executor: action_review.approve() only marks the queue item
+    approved (it doesn't know what a calendar event is), so this endpoint —
+    calendar_service's own, per its "the producing feature builds the
+    executor" responsibility — does both steps in one call, satisfying
+    spec's "approving the queue item performs the actual creation.\""""
+    try:
+        await action_review.approve(db, ctx, item_id)
+        event = await native_events.create_event_from_approved_proposal(db, ctx, item_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return NativeEventOut(**event)
