@@ -25,6 +25,7 @@ server/zoiko.db-journal
 # =========================
 .env
 .env.*
+!.env.example
 *.local
 
 # =========================
