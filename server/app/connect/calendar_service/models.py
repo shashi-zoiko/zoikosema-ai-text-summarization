@@ -1,13 +1,19 @@
-"""connect_calendar_events model.
+"""connect_calendar_events / connect_native_calendar_events models.
 
-DDL is the source of truth (see migrations/connect_v3_003_calendar_events.sql);
-this is a thin SQLAlchemy mapping that only INSERT/UPDATE rows. Plain synced
-data, not a Work Graph node — see architecture/SEMA_CALENDAR_MAIL_CONTEXT.md §4.
+DDL is the source of truth (see migrations/connect_v3_003_calendar_events.sql
+and connect_v3_006_native_calendar_events.sql); these are thin SQLAlchemy
+mappings that only INSERT/UPDATE rows.
+
+CalendarEvent (connect_calendar_events) is plain synced data from Google/
+Outlook, not a Work Graph node — see CONTEXT.md §4. NativeCalendarEvent
+(connect_native_calendar_events) is Sema-authoritative (spec §8.1) and
+append-only: every create/update/delete/restore is a new version row, never
+an UPDATE — see native_events.py for the version-chain logic.
 """
 from __future__ import annotations
 
-from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, String, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, Integer, String, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.connect.shared.base import ConnectBase
 
@@ -34,3 +40,31 @@ class CalendarEvent(ConnectBase):
     created_by = Column(BigInteger, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+
+NATIVE_EVENT_STATUSES = ("confirmed", "cancelled")
+CONFIDENTIALITY_CLASSES = ("standard", "confidential")
+
+
+class NativeCalendarEvent(ConnectBase):
+    __tablename__ = "connect_native_calendar_events"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(UUID(as_uuid=False), primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    version_chain_id = Column(UUID(as_uuid=False), nullable=False)
+    version_number = Column(Integer, nullable=False)
+    title = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    start_at = Column(DateTime(timezone=True), nullable=False)
+    end_at = Column(DateTime(timezone=True), nullable=False)
+    timezone = Column(String, nullable=False, default="UTC")
+    rrule = Column(String, nullable=True)
+    attendees = Column(JSONB, nullable=False, default=list)
+    resources = Column(JSONB, nullable=False, default=list)
+    confidentiality_class = Column(String, nullable=False, default="standard")
+    status = Column(String, nullable=False, default="confirmed")
+    created_by = Column(BigInteger, nullable=False)
+    correlation_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))

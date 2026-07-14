@@ -37,6 +37,11 @@ PROVIDER_CONNECTION_DISCONNECTED = "provider_connection.disconnected.v1"
 
 # Calendar plane (Sema Calendar & Mail, spec §12.2)
 CALENDAR_SYNC_COMPLETED = "calendar.sync.completed.v1"
+# Native (Sema-authoritative) calendar events — Phase 2 slice 3. Fires on
+# every create/update/delete/restore of a connect_native_calendar_events
+# version row; already named in CONTEXT.md §1's reuse table, added here now
+# that native events actually exist.
+CALENDAR_EVENT_MUTATED = "calendar.event.mutated.v1"
 
 # Policy Engine plane (Sema Calendar & Mail, spec §12.2 — Phase 2 slice 1).
 # `policy.evaluated` is audit-logged on every resolution but deliberately
