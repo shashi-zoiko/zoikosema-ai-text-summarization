@@ -1,15 +1,25 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { useLocalParticipant } from '@livekit/components-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocalParticipant, useRemoteParticipants, useRoomContext } from '@livekit/components-react'
+import { RoomEvent } from 'livekit-client'
 import { CAPTION_CONFIG } from './config'
-import { speakerColor } from './speakerColor'
-import useSpeechRecognition, { speechRecognitionSupported } from './useSpeechRecognition'
+import { createCaptionStore } from './captionStore'
+import { resolveIdentity } from './captionIdentity'
+import { getCaptionSource } from './sources'
+import useCaptionPresence from './captionPresence'
 import useCaptionTransport from './captionTransport'
+import { clog } from './captionDebug'
 import { CaptionsControlContext, CaptionsLiveContext } from './useCaptions'
 
+// Constrained devices (phones/tablets) only RENDER captions by default; they
+// don't run the recogniser unless explicitly enabled, to save battery/CPU and
+// avoid iOS Safari's flaky Web Speech engine. Desktop always captures.
+const IS_MOBILE =
+  typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+const MOBILE_CAPTURE_OK = !IS_MOBILE || CAPTION_CONFIG.mobileCaptureEnabled
+
 // Sanitise a caption: replace control characters with spaces (defence against
-// malformed/hostile payloads) and cap the length. Done as a codepoint scan to
-// keep the source ASCII-clean. React escapes the text on render too, so this is
-// belt-and-braces against injection.
+// malformed/hostile payloads) and cap the length. React escapes on render too,
+// so this is belt-and-braces against injection.
 function sanitize(text) {
   const s = String(text || '')
   let out = ''
@@ -20,125 +30,114 @@ function sanitize(text) {
   return out.replace(/^\s+/, '')
 }
 
-// Flat map: speakerId -> { name, color, text, isFinal, ts }. One live caption
-// per speaker (we never accumulate a transcript — old text is replaced).
-function reducer(state, action) {
-  switch (action.type) {
-    case 'upsert': {
-      const { speakerId, name, color, text, isFinal, ts } = action
-      return { ...state, [speakerId]: { name, color, text, isFinal, ts } }
-    }
-    case 'expire': {
-      if (!state[action.speakerId]) return state
-      const next = { ...state }
-      delete next[action.speakerId]
-      return next
-    }
-    default:
-      return state
-  }
-}
-
 /**
- * Owns the entire caption lifecycle and exposes it through two contexts.
- * Must render inside <LiveKitRoom> (uses LiveKit hooks for the local
- * participant and the data channel).
+ * Owns the caption lifecycle and exposes it through two contexts. Must render
+ * inside <LiveKitRoom> (uses LiveKit hooks + the data channel).
  *
- * Flow: local mic → SpeechRecognition → throttle/sanitize → broadcast over the
- * LiveKit data channel + echo locally → per-speaker state with a silence timer.
+ * Pipeline (each stage isolated, see the caption folder):
+ *   CaptionSource → speaking gate → sanitize → transport (E2EE) →
+ *   per-speaker buffer (captionStore) → renderer.
+ *
+ * Capture is DECOUPLED from the local CC toggle: as long as captions are wanted
+ * anywhere in the room (presence) and the mic is live, this client transcribes
+ * its OWN mic and broadcasts — so whoever turns CC on sees every speaker. The
+ * local toggle only controls whether captions are RENDERED here.
  */
 export default function CaptionProvider({ children }) {
-  // `isMicrophoneEnabled` is reactive — it flips the instant the participant
-  // mutes/unmutes in the meeting. We gate capture on it so a muted mic never
-  // produces captions (the Web Speech engine taps the system mic on its own,
-  // independent of LiveKit, so without this it would keep transcribing — and
-  // broadcasting — while muted).
+  const room = useRoomContext()
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant()
-  const supported = speechRecognitionSupported
+  const remotes = useRemoteParticipants()
 
+  const { useSource, supported } = getCaptionSource()
+
+  // Local CC on/off (render toggle), persisted per-device.
   const [enabled, setEnabled] = useState(() => {
-    try {
-      return localStorage.getItem(CAPTION_CONFIG.storageKey) === '1'
-    } catch {
-      return false
-    }
+    try { return localStorage.getItem(CAPTION_CONFIG.storageKey) === '1' } catch { return false }
   })
   const [micError, setMicError] = useState(false)
-  const [bySpeaker, dispatch] = useReducer(reducer, {})
 
-  const timersRef = useRef({}) // speakerId -> silence timeout
-  const lastInterimRef = useRef(0)
+  // One buffer store for the whole meeting. Frame-rate updates live here, NOT in
+  // React state, so only the overlay (via useSyncExternalStore) re-renders.
+  const storeRef = useRef(null)
+  if (!storeRef.current) {
+    storeRef.current = createCaptionStore({ config: CAPTION_CONFIG, onEvent: clog })
+  }
+  const store = storeRef.current
 
-  // (Re)arm a speaker's silence expiry so stale captions fade after a pause.
-  const armExpiry = useCallback((speakerId) => {
-    clearTimeout(timersRef.current[speakerId])
-    timersRef.current[speakerId] = setTimeout(() => {
-      dispatch({ type: 'expire', speakerId })
-      delete timersRef.current[speakerId]
-    }, CAPTION_CONFIG.silenceTimeoutMs)
-  }, [])
+  // Stable list of remote identities (only changes on join/leave).
+  const remoteIdKey = useMemo(
+    () => remotes.map((p) => p.identity).sort().join(','),
+    [remotes],
+  )
+  const remoteIdentities = useMemo(
+    () => (remoteIdKey ? remoteIdKey.split(',') : []),
+    [remoteIdKey],
+  )
 
-  // Single ingest path for both local echo and remote captions.
+  const roomWantsCaptions = useCaptionPresence({ enabled, remoteIdentities })
+
+  // Single ingest path for local echo AND remote captions: sanitize, drop STT
+  // noise (fragments with no letter in any script), then hand to the buffer.
   const ingest = useCallback(
-    ({ speakerId, name, text, isFinal }) => {
-      const clean = sanitize(text)
-      if (!clean || !speakerId) return
-      // Drop meaningless STT artifacts — fragments with no letter in any script
-      // (e.g. "1.00", ".", "- -"). Real speech always has letters; these are
-      // recogniser noise that otherwise flashes on screen as a stray caption.
+    (frame) => {
+      const clean = sanitize(frame.text)
+      if (!clean || !frame.speakerId) return
       if (!/\p{L}/u.test(clean)) return
-      dispatch({
-        type: 'upsert',
-        speakerId,
-        name: name || 'Guest',
-        color: speakerColor(speakerId),
-        text: clean,
-        isFinal,
-        ts: Date.now(),
-      })
-      armExpiry(speakerId)
+      store.ingest({ ...frame, text: clean })
     },
-    [armExpiry],
+    [store],
   )
 
   const { publish } = useCaptionTransport({ onCaption: ingest })
 
-  // Local recognition result → throttle interims, broadcast, echo locally.
-  const handleResult = useCallback(
-    ({ text, isFinal }) => {
-      // Hard guard: never emit while muted. Catches the trailing final result
-      // some browsers fire immediately after the engine is stopped on mute.
-      if (!isMicrophoneEnabled) return
+  // Local recognition result → throttle interims, echo locally, broadcast.
+  const lastInterimRef = useRef(0)
+  const onLocalResult = useCallback(
+    ({ text, isFinal, confidence, seq, utteranceId }) => {
+      if (!isMicrophoneEnabled) return // hard guard: never emit while muted
       const now = Date.now()
       if (!isFinal && now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) return
       lastInterimRef.current = now
-      const clean = sanitize(text)
-      if (!clean) return
-      const id = localParticipant?.identity || 'me'
-      ingest({ speakerId: id, name: localParticipant?.name || 'You', text: clean, isFinal })
-      publish({ text: clean, isFinal })
+      const identity = resolveIdentity(localParticipant)
+      ingest({ speakerId: identity.speakerId, identity, text, isFinal, confidence, seq, utteranceId, lang: CAPTION_CONFIG.lang })
+      publish({ text, isFinal, seq, utteranceId, confidence })
     },
     [ingest, publish, localParticipant, isMicrophoneEnabled],
   )
 
-  // Capture runs only while CC is on, the API is supported, the mic wasn't
-  // denied, AND the participant's meeting mic is live. Muting in the meeting
-  // stops recognition immediately — no captions are generated or broadcast
-  // while muted.
-  useSpeechRecognition(enabled && supported && !micError && isMicrophoneEnabled, {
-    lang: CAPTION_CONFIG.lang,
-    onResult: handleResult,
-    onError: () => setMicError(true),
-  })
+  // Capture runs while captions are wanted in the room, the engine is supported,
+  // the mic wasn't denied, this device is allowed to capture, and the mic is
+  // live. Note: NOT gated on the local `enabled` — that's a render choice.
+  const captureActive =
+    supported && !micError && isMicrophoneEnabled && roomWantsCaptions && MOBILE_CAPTURE_OK
+  useSource({ active: captureActive, onResult: onLocalResult, onError: () => setMicError(true) })
+
+  // ── LiveKit participant-event sync ──────────────────────────────────────────
+  // Keep the buffer in lockstep with room membership/identity so captions never
+  // linger on a departed speaker or show a stale name after a rename.
+  useEffect(() => {
+    if (!room) return undefined
+    const onLeft = (p) => { store.remove(p.identity, 'disconnect') }
+    const onIdentity = (_prevOrMeta, p) => {
+      const participant = p || _prevOrMeta
+      if (participant?.identity) store.refreshIdentity(participant.identity, resolveIdentity(participant))
+    }
+    room.on(RoomEvent.ParticipantDisconnected, onLeft)
+    room.on(RoomEvent.ParticipantNameChanged, onIdentity)
+    room.on(RoomEvent.ParticipantMetadataChanged, onIdentity)
+    return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onLeft)
+      room.off(RoomEvent.ParticipantNameChanged, onIdentity)
+      room.off(RoomEvent.ParticipantMetadataChanged, onIdentity)
+    }
+  }, [room, store])
 
   const toggle = useCallback(() => {
     if (!supported) return
     setMicError(false)
     setEnabled((v) => {
       const next = !v
-      try {
-        localStorage.setItem(CAPTION_CONFIG.storageKey, next ? '1' : '0')
-      } catch { /* storage blocked — in-memory state still works */ }
+      try { localStorage.setItem(CAPTION_CONFIG.storageKey, next ? '1' : '0') } catch { /* storage blocked */ }
       return next
     })
   }, [supported])
@@ -158,19 +157,17 @@ export default function CaptionProvider({ children }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [toggle])
 
-  // Clear all silence timers on unmount.
-  useEffect(() => () => {
-    Object.values(timersRef.current).forEach(clearTimeout)
-    timersRef.current = {}
-  }, [])
+  // Tear the buffer down on unmount (leaving the meeting).
+  useEffect(() => () => store.purgeAll(), [store])
 
   // Control value: stable except on rare toggles → consumers barely re-render.
   const control = useMemo(
     () => ({ enabled, supported, micError, toggle }),
     [enabled, supported, micError, toggle],
   )
-  // Live value: changes per frame, consumed only by the overlay.
-  const live = useMemo(() => ({ bySpeaker }), [bySpeaker])
+  // Live value: the store handle (stable). The overlay subscribes to it directly
+  // via useSyncExternalStore, so caption frames never re-render this provider.
+  const live = useMemo(() => ({ store }), [store])
 
   return (
     <CaptionsControlContext.Provider value={control}>

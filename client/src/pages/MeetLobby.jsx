@@ -202,8 +202,11 @@ export default function MeetLobby() {
   const acquireSeqRef = useRef(0)
 
   const videoConstraints = useCallback(() => ({
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
+    // Prefer Full HD; `ideal` (never `exact`) means a 720p-only webcam simply
+    // delivers 720p instead of throwing OverconstrainedError. Mirrors the in-call
+    // capture policy so the lobby preview matches what the meeting will publish.
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
     frameRate: { ideal: 30 },
     ...(videoDeviceId ? { deviceId: { exact: videoDeviceId } } : {}),
   }), [videoDeviceId])
@@ -221,7 +224,7 @@ export default function MeetLobby() {
       setPermDetail('Your camera is in use by another application. Close it (Zoom, Teams, etc.) and click Retry.')
     } else if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
       setPermState(PERM.unavailable)
-      setPermDetail('The selected camera does not support 720p. Pick a different camera below and click Retry.')
+      setPermDetail('The selected camera could not be started. Pick a different camera below and click Retry.')
     } else {
       setPermState(PERM.denied)
       setPermDetail(e?.message || 'Could not access camera or microphone.')

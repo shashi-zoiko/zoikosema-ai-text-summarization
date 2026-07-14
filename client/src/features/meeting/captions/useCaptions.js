@@ -1,15 +1,13 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useSyncExternalStore } from 'react'
 
 /**
  * Two separate contexts — deliberately split for performance.
  *
  * - ControlContext changes RARELY (only when CC is toggled or support/error
  *   state flips). Consumers: the toolbar button.
- * - LiveContext changes FREQUENTLY (every interim/final caption frame).
- *   Consumer: the CaptionOverlay only.
- *
- * Because the caption state lives here and not in the meeting room component,
- * the participant grid never re-renders when captions update.
+ * - LiveContext holds the caption BUFFER STORE handle (a stable reference). The
+ *   overlay subscribes to it via useSyncExternalStore, so frame-rate caption
+ *   updates re-render ONLY the overlay — never the provider or the grid.
  */
 export const CaptionsControlContext = createContext({
   enabled: false,
@@ -18,14 +16,27 @@ export const CaptionsControlContext = createContext({
   toggle: () => {},
 })
 
-export const CaptionsLiveContext = createContext({ bySpeaker: {} })
+export const CaptionsLiveContext = createContext({ store: null })
 
 /** Toolbar / control-plane consumers (toggle, on/off, support state). */
 export function useCaptionControls() {
   return useContext(CaptionsControlContext)
 }
 
-/** Live transcript consumer (the overlay). */
+const EMPTY = {}
+const noopSubscribe = () => () => {}
+
+/**
+ * Live transcript consumer (the overlay). Subscribes directly to the buffer
+ * store; returns the current `bySpeaker` map. Re-renders only when the buffer
+ * changes, and only this consumer.
+ */
 export function useLiveCaptions() {
-  return useContext(CaptionsLiveContext)
+  const { store } = useContext(CaptionsLiveContext)
+  const bySpeaker = useSyncExternalStore(
+    store ? store.subscribe : noopSubscribe,
+    store ? store.getSnapshot : () => EMPTY,
+    () => EMPTY,
+  )
+  return { bySpeaker }
 }

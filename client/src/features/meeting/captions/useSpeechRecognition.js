@@ -45,13 +45,21 @@ export default function useSpeechRecognition(active, { lang, onResult, onError }
     rec.onresult = (e) => {
       let interim = ''
       let final = ''
+      let conf = 0
+      let confN = 0
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
-        if (r.isFinal) final += r[0].transcript
-        else interim += r[0].transcript
+        if (r.isFinal) {
+          final += r[0].transcript
+          // Only finals carry a meaningful confidence; average across them.
+          if (typeof r[0].confidence === 'number') { conf += r[0].confidence; confN++ }
+        } else {
+          interim += r[0].transcript
+        }
       }
-      if (final) cbRef.current.onResult?.({ text: final.trim(), isFinal: true })
-      else if (interim) cbRef.current.onResult?.({ text: interim.trim(), isFinal: false })
+      const confidence = confN ? conf / confN : 0
+      if (final) cbRef.current.onResult?.({ text: final.trim(), isFinal: true, confidence })
+      else if (interim) cbRef.current.onResult?.({ text: interim.trim(), isFinal: false, confidence: 0 })
     }
 
     rec.onerror = (e) => {

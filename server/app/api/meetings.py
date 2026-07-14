@@ -3,6 +3,7 @@ import csv
 import hashlib
 import hmac
 import io
+import json
 import logging
 import secrets
 import string
@@ -140,6 +141,60 @@ def _waiting_count(meeting_id: int, db: Session) -> int:
             )
         )
         or 0
+    )
+
+
+def _log_meeting_started_for_host(db: Session, meeting: Meeting, host: User) -> None:
+    """Record a 'meeting started' activity entry the first time the host joins.
+
+    A meeting only truly goes live when its host walks in, so this is the point
+    we log it — instant meetings fire immediately, create-a-link meetings the
+    host never opens don't fire, and scheduled meetings fire when they actually
+    start rather than when they were created.
+
+    Feeds the Team activity list on Home (which reads the notifications feed)
+    and pushes live to the header notification bell over /ws/notifications, so
+    the alert appears without a page reload.
+
+    Best-effort by contract: callers commit the participant row first and wrap
+    this in a try/except, so a failure here can never block someone joining.
+    """
+    from app.api.notifications import push_to_user
+    from app.models.organization import Notification, NOTIF_MEETING_STARTED
+    from app.websocket.manager import meet_manager
+
+    data = json.dumps({"meeting_code": meeting.code})
+    notif = Notification(
+        user_id=host.id,
+        type=NOTIF_MEETING_STARTED,
+        title=f"Meeting started: {meeting.title}",
+        body=f"\"{meeting.title}\" is now live.",
+        data=data,
+    )
+    db.add(notif)
+    db.commit()
+    db.refresh(notif)
+
+    # Real-time push to any open notification bell for the host. Scheduled onto
+    # the event loop because this runs in a sync (threadpool) request handler;
+    # `data` is sent as the same JSON string the REST feed returns so the client
+    # parses it identically.
+    meet_manager.schedule(
+        push_to_user(
+            host.id,
+            {
+                "type": "notification",
+                "notification": {
+                    "id": notif.id,
+                    "type": notif.type,
+                    "title": notif.title,
+                    "body": notif.body,
+                    "data": data,
+                    "is_read": False,
+                    "created_at": notif.created_at.isoformat(),
+                },
+            },
+        )
     )
 
 
@@ -957,6 +1012,15 @@ def join_meeting(
                 raise HTTPException(status_code=500, detail="Could not join meeting")
             return participant
         db.refresh(participant)
+        # The host's first join is when the meeting goes live — log it to the
+        # activity feed. Best-effort: the participant row is already committed,
+        # so a failure here only rolls back the (isolated) notification insert.
+        if is_host:
+            try:
+                _log_meeting_started_for_host(db, meeting, user)
+            except Exception:
+                log.exception("meeting_started notification failed (code=%s)", code)
+                db.rollback()
         return participant
     except HTTPException:
         raise

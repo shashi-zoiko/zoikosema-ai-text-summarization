@@ -18,6 +18,7 @@ from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.core.recording_cleanup import recording_cleanup_loop
 from app.core.guest_cleanup import guest_cleanup_loop
 from app.core.meeting_reminders import meeting_reminder_loop
+from app.core.meeting_reaper import meeting_reaper_loop
 from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence, webhooks, support, settings as settings_api
 from app.websocket import chat as chat_ws, signaling as meeting_ws
 from app.websocket.manager import chat_manager, meet_manager
@@ -64,14 +65,15 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(recording_cleanup_loop())
     guest_task = asyncio.create_task(guest_cleanup_loop())
     reminder_task = asyncio.create_task(meeting_reminder_loop())
+    reaper_task = asyncio.create_task(meeting_reaper_loop())
     try:
         yield
     finally:
         await meet_manager.stop_fanout()
         await chat_manager.stop_fanout()
-        for t in (init_task, cleanup_task, guest_task, reminder_task):
+        for t in (init_task, cleanup_task, guest_task, reminder_task, reaper_task):
             t.cancel()
-        for t in (init_task, cleanup_task, guest_task, reminder_task):
+        for t in (init_task, cleanup_task, guest_task, reminder_task, reaper_task):
             try:
                 await t
             except asyncio.CancelledError:
@@ -221,10 +223,34 @@ app.include_router(settings_api.router)
 # Strangler-fig: legacy paths keep working; new features consume /api/connect/*.
 app.include_router(connect_router)
 
-# Serve uploaded files
+# Serve uploaded files.
+#
+# Deliberately NOT a bare StaticFiles mount: office/archive types (.docx, .xlsx,
+# .pptx, .zip, …) have no browser renderer, so when a chat file link opened them
+# inline (target="_blank") the tab filled with raw binary text — the reported QA
+# bug. We force a download for everything except a small allowlist of types the
+# browser can safely display inline (images, PDF, audio, plain text — which also
+# covers the inline <img>/<audio> tags and profile avatars served from here).
 _upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 os.makedirs(_upload_dir, exist_ok=True)
-app.mount("/api/uploads", StaticFiles(directory=_upload_dir), name="uploads")
+
+_INLINE_UPLOAD_EXTS = {
+    "png", "jpg", "jpeg", "gif", "webp", "svg",
+    "pdf", "txt",
+    "mp3", "wav", "ogg", "m4a", "webm",
+}
+
+
+@app.get("/api/uploads/{name}", include_in_schema=False)
+async def serve_upload(name: str):
+    # basename() strips any path components, blocking ../ traversal.
+    safe = os.path.basename(name)
+    path = os.path.join(_upload_dir, safe)
+    if not safe or not os.path.isfile(path):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    ext = safe.rsplit(".", 1)[-1].lower() if "." in safe else ""
+    disposition = "inline" if ext in _INLINE_UPLOAD_EXTS else "attachment"
+    return FileResponse(path, content_disposition_type=disposition)
 
 # Serve recording files
 _rec_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "recordings")
