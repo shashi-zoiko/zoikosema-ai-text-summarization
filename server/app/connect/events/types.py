@@ -37,3 +37,11 @@ PROVIDER_CONNECTION_DISCONNECTED = "provider_connection.disconnected.v1"
 
 # Calendar plane (Sema Calendar & Mail, spec §12.2)
 CALENDAR_SYNC_COMPLETED = "calendar.sync.completed.v1"
+
+# Policy Engine plane (Sema Calendar & Mail, spec §12.2 — Phase 2 slice 1).
+# `policy.evaluated` is audit-logged on every resolution but deliberately
+# has no outbox/event-bus constant yet: no Observability consumer exists to
+# read per-evaluation fanout, matching calendar_service's own precedent for
+# skipping per-event emission with no real subscriber (see calendar_service
+# /service.py). Add one when a real consumer needs it.
+SETTINGS_POLICY_VERSIONED = "settings.policy.versioned.v1"
