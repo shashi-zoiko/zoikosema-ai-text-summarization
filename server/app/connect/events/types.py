@@ -43,6 +43,11 @@ CALENDAR_SYNC_COMPLETED = "calendar.sync.completed.v1"
 # that native events actually exist.
 CALENDAR_EVENT_MUTATED = "calendar.event.mutated.v1"
 
+# Mail plane (Sema Calendar & Mail, spec §12.2 — Phase 3 slice 2). One event
+# per sync run, not per message, same "no per-item consumer yet" reasoning
+# calendar.sync.completed already established.
+MAIL_MESSAGE_SYNCED = "mail.message.synced.v1"
+
 # Policy Engine plane (Sema Calendar & Mail, spec §12.2 — Phase 2 slice 1).
 # `policy.evaluated` is audit-logged on every resolution but deliberately
 # has no outbox/event-bus constant yet: no Observability consumer exists to
