@@ -1,0 +1,109 @@
+.sg-panel {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.sg-header-btn {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--sg-header-btn-border);
+  background: var(--sg-header-btn-bg);
+  color: var(--sg-header-btn-icon);
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+  cursor: pointer;
+}
+
+.sg-header-btn:hover {
+  background: var(--sg-header-btn-hover-bg);
+}
+
+.sg-header-btn:focus-visible {
+  outline: 2px solid var(--sg-violet);
+  outline-offset: 2px;
+}
+
+.sg-header-btn:active {
+  transform: scale(0.96);
+}
+
+.sg-header {
+  transition: background-color 200ms ease;
+}
+
+.sg-markdown h1,
+.sg-markdown h2,
+.sg-markdown h3 {
+  scroll-margin-top: 8px;
+}
+
+.sg-markdown h1 + p,
+.sg-markdown h2 + p,
+.sg-markdown h3 + p {
+  margin-top: -4px;
+}
+
+.sg-markdown ul ul,
+.sg-markdown ol ol,
+.sg-markdown ul ol,
+.sg-markdown ol ul {
+  margin-bottom: 0;
+}
+
+.sg-markdown li > p {
+  margin-bottom: 0;
+}
+
+.sg-markdown li::marker {
+  color: var(--c-accent);
+}
+
+.sg-markdown code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── Launcher ─────────────────────────────────────────────────── */
+.sg-launcher {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sg-launcher-inner {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: var(--c-surface, #FFFFFF);
+  border: 1px solid var(--c-line, rgba(255,255,255,0.8));
+  display: grid;
+  place-items: center;
+  will-change: transform;
+}
+
+.sg-launcher:focus-visible .sg-launcher-inner {
+  outline: 2px solid var(--c-accent, #6366F1);
+  outline-offset: 3px;
+}
+
+@media (max-width: 640px) {
+  .sg-launcher-inner {
+    width: 56px;
+    height: 56px;
+  }
+
+  .sg-panel {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    border-radius: 0 !important;
+    bottom: 0 !important;
+    right: 0 !important;
+    box-shadow: none !important;
+  }
+}

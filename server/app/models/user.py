@@ -29,6 +29,8 @@ class User(Base):
     # coloured initials even if a photo is set.
     show_photo_in_meetings: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     show_photo_on_dashboard: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Billing plan for AI gateway rate limiting and feature gating
+    plan: Mapped[str] = mapped_column(String(32), default="free", nullable=False)
     # Platform admin flag — gates the /api/admin/* dashboard endpoints. Replaces
     # the old hardcoded "admin == user id 1" assumption. Granted via the
     # ADMIN_EMAILS setting (synced on startup) or by promoting a user directly.

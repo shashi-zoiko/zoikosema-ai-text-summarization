@@ -4,6 +4,8 @@ import { meetingPath } from './lib/meetingUrls.js'
 import Layout from './components/Layout.jsx'
 import UpdateToast from './components/UpdateToast.jsx'
 import CallOverlay from './components/CallOverlay.jsx'
+import SemaGuideToggle from './components/SemaGuideToggle.jsx'
+import SemaGuidePanel from './features/sema-guide/SemaGuidePanel.jsx'
 import Spinner from './components/ui/Spinner.jsx'
 import RoomErrorBoundary from './features/meeting/components/RoomErrorBoundary.jsx'
 import { useAuth } from './context/AuthContext.jsx'
@@ -110,6 +112,8 @@ export default function App() {
     <>
     <UpdateToast />
     <CallOverlay />
+    <SemaGuidePanel />
+    <SemaGuideToggle />
     <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route
