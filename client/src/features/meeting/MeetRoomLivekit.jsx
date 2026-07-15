@@ -25,7 +25,6 @@ import ReactionOverlay from './components/ReactionOverlay.jsx'
 import ParticipantsPanel from './components/ParticipantsPanel.jsx'
 import SettingsDrawer from './components/SettingsDrawer.jsx'
 import MeetingInfoDrawer from './components/MeetingInfoDrawer.jsx'
-import ConversationsPanel from './components/ConversationsPanel.jsx'
 import CaptionProvider from './captions/CaptionProvider.jsx'
 import CaptionOverlay from './captions/CaptionOverlay.jsx'
 import { useCaptionControls, useLiveCaptions } from './captions/useCaptions.js'
@@ -234,12 +233,30 @@ function MeetRoom() {
   const [recording, setRecording] = useState({ recording: false, recording_id: null })
 
   // Local UI state
-  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | 'conversations' | null
+  const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | null
   // Set once, the first time "Start Summarizing" (inside the header's
   // SummarizerButton popover, not just opening it) is clicked — the zero
-  // point for both the Conversations panel and the Meet Summarizer status
-  // card's timestamps. Before this is set, neither has a session to show yet.
+  // point for both the Meet Summarizer status card's timestamps and the
+  // lower bound of the raw-conversation-log slice sent at host-leave (see
+  // userLeave below). The conversation itself is never shown in-meeting —
+  // only captured — so this has no visible panel to gate.
   const [summarizerStartedAt, setSummarizerStartedAt] = useState(null)
+  // Toggled from the Conversations button's Transcribing popover
+  // (MeetingHeader.jsx) — a genuine pause/resume, not a one-way stop. The
+  // Conversations button itself stays visible and toggleable the whole time
+  // Meet Summarizer is on; only turning Meet Summarizer OFF entirely (the
+  // 'summarizer-changed' WS handler above) resets this back to false and
+  // clears `pausedRanges`, so a later restart begins a fresh session.
+  const [transcribingPaused, setTranscribingPaused] = useState(false)
+  // Every pause/resume cycle while Meet Summarizer is on, as {from, to}
+  // (`to: null` = still paused). Does NOT touch `capturing`/`summarizer_on`:
+  // caption capture keeps running silently in the background regardless, so
+  // the eventual AI summary still covers the full conversation — this only
+  // shapes the narrower raw-conversation-log slice sent to the backend at
+  // host-leave (see userLeave below), which is the one place any of this
+  // conversation content is ever shown, and only on the post-meeting summary
+  // page — never live, in-meeting.
+  const [pausedRanges, setPausedRanges] = useState([])
   // Bumped whenever the header admit-chip / lobby "open" is used, so the People
   // panel scrolls its waiting section into view.
   const [waitingScrollSignal, setWaitingScrollSignal] = useState(0)
@@ -400,6 +417,15 @@ function MeetRoom() {
         // Room-wide, server-synced — every participant's header button glow
         // and popover update from this, not just the host who toggled it.
         setMeeting((m) => ({ ...m, summarizer_on: !!data.on }))
+        if (!data.on) {
+          // Meet Summarizer turned off entirely — reset the Conversations
+          // button's pause/resume state back to initial, so if it's turned
+          // on again later this meeting, it starts a fresh session rather
+          // than resuming a stale paused/resumed history.
+          setSummarizerStartedAt(null)
+          setTranscribingPaused(false)
+          setPausedRanges([])
+        }
       } else if (t === 'meeting-ended') {
         userLeftRef.current = true
         setToast({ kind: 'info', text: 'Meeting ended by host' })
@@ -554,6 +580,25 @@ function MeetRoom() {
   const startSummarizing = useCallback(() => {
     setSummarizerStartedAt((t) => t ?? Date.now())
   }, [])
+  // Pause/resume toggle for the Conversations button's Transcribing popover.
+  // Background capture (`capturing`/`summarizer_on`) is untouched either way
+  // — see the state declaration above. Records the pause/resume boundary in
+  // `pausedRanges` so userLeave can exclude paused spans from the raw log.
+  const toggleTranscribingPaused = useCallback(() => {
+    const now = Date.now()
+    setTranscribingPaused((wasPaused) => {
+      if (wasPaused) {
+        // Resuming — close the currently-open paused range.
+        setPausedRanges((prev) => (
+          prev.map((r, i) => (i === prev.length - 1 && r.to === null ? { ...r, to: now } : r))
+        ))
+      } else {
+        // Pausing — open a new range.
+        setPausedRanges((prev) => [...prev, { from: now, to: null }])
+      }
+      return !wasPaused
+    })
+  }, [])
   // Wire the floating chat cards' actions. "Mark as read" clears the unread
   // badge without opening chat; tapping a card's preview opens the chat drawer
   // (which also clears). Join-request admit/deny live only in the People panel.
@@ -632,9 +677,25 @@ function MeetRoom() {
     // lifecycle. Only the host can generate it (backend also enforces this),
     // and only if anything was actually captured.
     if (isHost && transcriptRef.current.length > 0) {
+      // `transcript` (full, unfiltered) is what the AI summary is generated
+      // from — always the whole meeting, regardless of any pausing.
+      // `visible_transcript` excludes anything said during a paused span
+      // (`pausedRanges` — an open range with `to: null` means still paused
+      // at leave-time, so it covers through "now" too) — the summary page's
+      // raw conversation log renders this narrower slice instead, even
+      // though the real summary covers everything. The conversation itself
+      // is never shown in-meeting, only on that page.
+      const visibleSlice = transcriptRef.current.filter((l) => (
+        l.ts >= (summarizerStartedAt ?? 0)
+        && !pausedRanges.some((r) => l.ts >= r.from && (r.to === null || l.ts <= r.to))
+      ))
       api(`/api/meetings/${code}/intelligence`, {
         method: 'POST',
-        body: { transcript: transcriptToChatLog(transcriptRef.current), force: true },
+        body: {
+          transcript: transcriptToChatLog(transcriptRef.current),
+          visible_transcript: transcriptToChatLog(visibleSlice),
+          force: true,
+        },
       }).catch(() => { /* best-effort — nothing the user can act on mid-leave */ })
     }
     // Google-Meet-style hang-up tone. Played via the shared SoundManager (a
@@ -646,7 +707,7 @@ function MeetRoom() {
     // Home). Only this path shows it; auth-expiry / server errors go to the
     // error splash, and host-ended / removed go home (handled below).
     navigate(meetingLeftPath(code), { replace: true })
-  }, [navigate, code, isHost])
+  }, [navigate, code, isHost, summarizerStartedAt, pausedRanges])
 
   const handleDisconnected = useCallback((reason) => {
     // Only navigate when the user actually clicked Leave OR the SFU
@@ -752,9 +813,11 @@ function MeetRoom() {
         onScreenEnabled={setScreenEnabled}
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         onOpenPeople={openPeopleWaiting}
-        onOpenConversations={() => setSidebar((s) => (s === 'conversations' ? null : 'conversations'))}
         onSetSummarizer={setSummarizerOn}
         onStartSummarizing={startSummarizing}
+        showConversationsButton={!!meeting.summarizer_on}
+        transcribingPaused={transcribingPaused}
+        onToggleTranscribing={toggleTranscribingPaused}
       />
 
       <div className="relative flex min-h-0 flex-1">
@@ -820,9 +883,6 @@ function MeetRoom() {
             joinedAt={joinedAtRef.current}
             onClose={() => setSidebar(null)}
           />
-        )}
-        {sidebar === 'conversations' && (
-          <ConversationsPanel onClose={() => setSidebar(null)} startedAt={summarizerStartedAt} />
         )}
         {sidebar === 'settings' && (
           <SettingsDrawer

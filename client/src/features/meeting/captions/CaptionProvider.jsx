@@ -80,7 +80,7 @@ const FRAGMENT_MERGE_GAP_MS = 2000
  *     popover, via `capturing`/`setCapturing` on the control context
  *     (MeetingHeader renders inside this provider, so its SummarizerButton
  *     reads/drives it directly — no prop drilling needed). Feeds the
- *     Conversations transcript. Never touches `enabled`, never persisted,
+ *     background transcript capture. Never touches `enabled`, never persisted,
  *     and never makes the bubble overlay appear — that stays keyed to
  *     `enabled` alone.
  * Recognition itself runs whenever EITHER is true (one shared mic tap), but
@@ -109,7 +109,8 @@ export default function CaptionProvider({ children }) {
   const [bySpeaker, dispatch] = useReducer(reducer, {})
   // Full-meeting transcript — every FINAL caption, in order, across all
   // speakers. Interims never land here (they're corrections-in-progress);
-  // only `bySpeaker` shows those, live. Consumed by the Conversations panel.
+  // only `bySpeaker` shows those, live. Captured silently — never rendered
+  // in-meeting — and read via transcriptRef in MeetRoomLivekit at host-leave.
   const [transcript, setTranscript] = useState([])
 
   const timersRef = useRef({}) // speakerId -> silence timeout
@@ -256,7 +257,7 @@ export default function CaptionProvider({ children }) {
     [enabled, supported, micError, toggle, summarizerCapturing, setCapturing],
   )
   // Live value: changes per frame, consumed only by the overlay + the
-  // Conversations panel.
+  // background transcript capture (never rendered in-meeting).
   const live = useMemo(() => ({ bySpeaker, transcript }), [bySpeaker, transcript])
 
   return (

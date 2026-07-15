@@ -27,7 +27,7 @@ export const CAPTION_CONFIG = {
   // line (many consecutive fragments stitched together — see CaptionProvider's
   // fragment-merge logic). One shared cap, generous enough that neither a
   // single long continuous utterance nor a multi-fragment merged sentence gets
-  // silently truncated before it reaches the Conversations panel.
+  // silently truncated before it reaches the captured transcript.
   maxLineChars: 8000,
 
   // Concurrent speakers shown at once. Meet shows ~1–2; older ones fade as new

@@ -364,6 +364,13 @@ def _auto_table(result: dict):
     in the schema, so a missing/empty result for it is left as an empty
     table (a correct, expected outcome when the meeting never discussed
     budget/staffing) rather than invented.
+
+    `key_takeaways` (present on the transcript-summary schema, which has no
+    `action_items`/`risks` fields at all) is a second fallback source for
+    task_tracker, used only when action_items didn't already supply rows —
+    the transcript prompt requires every takeaway to carry a real assignee,
+    so a takeaway with both `text` and `assignee` is exactly as grounded as
+    an action item and safe to reuse the same way.
     """
     by_type = {}
     existing = result.get("tables")
@@ -374,11 +381,16 @@ def _auto_table(result: dict):
 
     items = result.get("action_items") or []
     risks = result.get("risks") or []
+    takeaways = result.get("key_takeaways") or []
+    task_tracker_rows = [
+        {"task": i.get("task", ""), "assignee": i.get("owner", ""), "deadline": i.get("due", "")}
+        for i in items if i.get("task")
+    ] or [
+        {"task": t.get("text", ""), "assignee": t.get("assignee", ""), "deadline": ""}
+        for t in takeaways if t.get("text") and t.get("assignee")
+    ]
     fallback_rows = {
-        "task_tracker": [
-            {"task": i.get("task", ""), "assignee": i.get("owner", ""), "deadline": i.get("due", "")}
-            for i in items if i.get("task")
-        ],
+        "task_tracker": task_tracker_rows,
         "resource_allocation": [],
         "risk_matrix": [
             {"risk": r.get("title", ""), "impact": r.get("severity", ""), "solution": r.get("rationale", "")}
@@ -711,7 +723,12 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=1024,
+            # 1024 was tight enough that a meeting with several speakers (each
+            # requiring an assignee-tagged key takeaway) could burn the whole
+            # budget before ever reaching the tables section, leaving
+            # task_tracker/risk_matrix empty even when the transcript had
+            # clearly actionable content. 2048 gives both room to complete.
+            max_tokens=2048,
             response_format={"type": "json_object"},
         )
         meta["_model"] = model

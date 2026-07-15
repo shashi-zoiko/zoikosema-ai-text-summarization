@@ -201,7 +201,18 @@ class MeetingIntelligence(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     # URL to the saved transcript file, so transcript-based summaries can be
     # regenerated in a different language without the client resending data.
+    # This is always the FULL meeting transcript — what the summary itself is
+    # generated from.
     transcript_file_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # URL to the saved "raw conversation log" shown on the summary page. When
+    # the host stops transcribing mid-meeting, this is the narrower slice that
+    # was actually visible in the Conversations panel (bounded by when
+    # summarizing started/stopped) — deliberately narrower than
+    # transcript_file_url so the log matches what people saw, while the AI
+    # summary above it still reflects the whole conversation. Falls back to
+    # transcript_file_url when null (summarizer was never stopped, or an
+    # older row predating this column).
+    raw_conversation_file_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True

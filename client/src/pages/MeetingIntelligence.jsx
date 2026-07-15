@@ -1029,7 +1029,7 @@ export default function MeetingIntelligence() {
               </motion.section>
               {!editing && (
                 <section className="mb-8">
-                  <ConversationLog conversation={payload.conversation} />
+                  <ConversationLog conversation={intel.conversation} />
                 </section>
               )}
             </>
@@ -1344,7 +1344,7 @@ export default function MeetingIntelligence() {
 
           {/* ============ Conversation ============ */}
           <section className="mb-8">
-            <ConversationLog conversation={payload.conversation} />
+            <ConversationLog conversation={intel.conversation} />
           </section>
         </>
         )

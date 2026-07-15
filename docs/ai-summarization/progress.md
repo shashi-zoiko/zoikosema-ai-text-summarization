@@ -387,6 +387,113 @@ schema (item 14), the summary now:
 - `client/src/pages/MeetingIntelligence.jsx` (`TranscriptSummaryView`,
   `transcriptToMarkdown`, edit state + `saveEdit`, branched action buttons)
 
+### 16. Conversations button becomes a Transcribing status popover — no live transcript display, ever
+
+This landed in several iterations that each superseded the last; only the
+final shape is documented here (git history has the intermediate steps).
+
+The Conversations header button is now hidden until Meet Summarizer is
+turned on, and hovering **or** clicking it opens an anchored popover
+(`TranscribingNotice.jsx`'s `TranscribingCard`, positioned like the existing
+SummarizerButton popover) styled after Google Meet's own "this meeting is
+being transcribed" card — title, a short blurb, and a status row (icon,
+"Transcribing"/"Paused" + language, a pause/resume toggle button).
+
+Two product decisions that shaped this, in order:
+- **The conversation itself is never shown in-meeting, anywhere** —
+  `ConversationsPanel.jsx` (the side-drawer that used to render the live
+  transcript) was deleted outright, along with the "View conversation" link
+  that opened it. Capture into the shared transcript still runs completely
+  unchanged in the background via `CaptionProvider`/`CaptionsLiveContext` —
+  only the *display* of it was removed. The one place any of this
+  conversation content is ever surfaced is the raw conversation log on the
+  post-meeting summary page (see item 17).
+- **The stop control is a real pause/resume toggle, not a one-way stop.**
+  Toggling it does NOT touch `capturing`/`summarizer_on` — capture keeps
+  running in the background regardless, so the eventual AI summary always
+  covers the full meeting. It only records pause/resume boundaries
+  (`pausedRanges` in `MeetRoomLivekit.jsx`, `{from, to}` pairs) used to narrow
+  the raw-log slice sent to the backend at host-leave. The Conversations
+  button's own visibility is gated purely on `meeting.summarizer_on` — it
+  stays visible and toggleable the whole time Meet Summarizer is on,
+  regardless of pause state, and only disappears (resetting
+  `summarizerStartedAt`/`pausedRanges` back to initial) when Meet Summarizer
+  itself is turned off entirely, via the `'summarizer-changed'` WS handler.
+
+**Frontend:**
+- `client/src/features/meeting/components/TranscribingNotice.jsx` (new;
+  presentational `TranscribingCard` + `StatusRow` only — no positioning or
+  visibility state of its own)
+- `client/src/features/meeting/components/MeetingHeader.jsx`
+  (`ConversationsButton` — owns the hover/click/outside-click popover logic)
+- `client/src/features/meeting/components/ConversationsPanel.jsx` (deleted)
+- `client/src/features/meeting/MeetRoomLivekit.jsx`
+  (`transcribingPaused`/`pausedRanges` state, `toggleTranscribingPaused`)
+- `client/src/features/meeting/captions/CaptionProvider.jsx`,
+  `useCaptions.js`, `config.js` (comments updated to stop referencing the
+  deleted panel as the transcript's consumer)
+
+### 17. Raw conversation log narrowed to what was captured before pausing; attendee-only access
+
+The post-meeting summary page's raw conversation log can now be a narrower
+slice than what the AI summary was generated from — bounded by
+`summarizerStartedAt`..`pausedRanges` from item 16 — while the summary itself
+(title/summary/key_takeaways) always covers the full meeting regardless of
+pausing. This needed a backend change since the summary page loads from a
+server-stored file after the meeting ends, so it couldn't be frontend-only.
+
+- New `MeetingIntelligence.raw_conversation_file_url` column (additive
+  migration, same pattern as `transcript_file_url`) — the frozen slice, saved
+  separately from the full transcript. `_load_conversation()` prefers it,
+  falling back to `transcript_file_url` for older rows.
+- `IntelligenceGenerateIn.visible_transcript` — the new field the client
+  sends at host-leave alongside the existing (unfiltered) `transcript`.
+- `_has_access()` (view-access gate) now checks `MeetingParticipant.status`
+  is `admitted`/`disconnected`/`left` — previously it only checked that a
+  participant row *existed*, which incorrectly included anyone denied entry
+  or still pending when the meeting ended. Editing remains host-or-platform-
+  admin only (`_is_host_or_platform_admin`), unchanged.
+- Also fixed: the summary page read `payload.conversation` for the raw log,
+  but the backend actually returns `conversation` as a field sibling to
+  `payload`, not nested inside it — so the log always rendered empty
+  regardless of what the backend sent. Now reads `intel.conversation`.
+
+**Backend:**
+- `server/app/models/meeting.py`, `server/app/core/database.py` (new column
+  + additive migration)
+- `server/app/schemas/meeting.py` (`visible_transcript` field)
+- `server/app/api/intelligence.py` (`run_generation`, `_load_conversation`,
+  `_has_access`)
+
+**Frontend:**
+- `client/src/features/meeting/MeetRoomLivekit.jsx` (`userLeave` now sends
+  `visible_transcript` alongside `transcript`)
+- `client/src/pages/MeetingIntelligence.jsx` (`intel.conversation` fix)
+
+### 18. Summary tables were empty even with clearly actionable content — Groq backfill + token budget
+
+`groq_summarize_transcript` already prompted Groq for the 3 summary tables
+(task_tracker/resource_allocation/risk_matrix — this was already AI-driven,
+not static), but a real test meeting with an obvious action item ("add
+caching/retry logic for the AI service", attributed to a named speaker) came
+back with all 3 tables empty. Root-caused via the actual saved transcript
+file on disk plus the fallback logic in `_auto_table()`:
+
+- `_auto_table()`'s backfill only ever pulled from `action_items`/`risks` —
+  fields that exist on the chat-based intelligence schema but NOT on the
+  transcript-summary schema, which only has `key_takeaways`. So a transcript
+  summary had zero fallback if the model itself left `task_tracker` empty.
+  Added `key_takeaways` (every takeaway is required by the prompt to carry a
+  real assignee) as a fallback source for `task_tracker`, reusing the same
+  already-grounded-content principle as the existing action_items/risks
+  fallbacks. Verified against the actual failing case.
+- Bumped `max_tokens` 1024 → 2048 for the Groq call — a meeting with several
+  speakers (each requiring an assignee-tagged takeaway) could plausibly
+  exhaust the smaller budget before ever reaching the tables section.
+
+**Backend:**
+- `server/app/core/ai.py` (`_auto_table`, `groq_summarize_transcript`)
+
 ## Not yet implemented
 
 - Installing `groq` into the actual dev venv (see above) and confirming an

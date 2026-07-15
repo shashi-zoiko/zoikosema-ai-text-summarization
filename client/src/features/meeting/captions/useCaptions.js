@@ -9,8 +9,11 @@ import { createContext, useContext } from 'react'
  *   (capturing/setCapturing — drives both the header button's glow effect
  *   and its popover's Start/Pause Summarizing toggle).
  * - LiveContext changes FREQUENTLY (every interim/final caption frame).
- *   Consumers: the CaptionOverlay (bySpeaker) and the Conversations panel
- *   (transcript — the accumulated, finals-only log across the whole call).
+ *   Consumers: the CaptionOverlay (bySpeaker) and MeetRoomLivekit's
+ *   transcriptRef bridge (transcript — the accumulated, finals-only log
+ *   across the whole call, captured silently and never shown in-meeting;
+ *   only sent to the backend at host-leave to generate the AI summary and
+ *   the post-meeting raw conversation log).
  *
  * Because the caption state lives here and not in the meeting room component,
  * the participant grid never re-renders when captions update.
@@ -31,7 +34,7 @@ export function useCaptionControls() {
   return useContext(CaptionsControlContext)
 }
 
-/** Live transcript consumer (the overlay + the Conversations panel). */
+/** Live transcript consumer (the overlay + the background transcript capture). */
 export function useLiveCaptions() {
   return useContext(CaptionsLiveContext)
 }
