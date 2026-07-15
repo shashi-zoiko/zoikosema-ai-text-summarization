@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BarChart3, Calendar, CheckCircle2, ChevronDown, ChevronsUpDown,
-  CreditCard, HelpCircle, Home, LogOut, Menu, MessageSquareText,
+  ClipboardCheck, CreditCard, HelpCircle, Home, LogOut, Menu, MessageSquareText,
   PlayCircle, Settings, ShieldCheck, Sparkles, Users, Video, X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
@@ -60,6 +60,7 @@ const WORKSPACE_NAV = [
   { key: 'calendar',   label: 'Calendar',    icon: Calendar,          go: '/scheduled' },
   { key: 'summaries',  label: 'AI Summaries', icon: Sparkles,         to: '/ai-summaries', badge: { text: 'Soon' } },
   { key: 'actions',    label: 'Actions',     icon: CheckCircle2,      to: '/actions' },
+  { key: 'review-queue', label: 'Review Queue', icon: ClipboardCheck, to: '/review-queue' },
   { key: 'recordings', label: 'Recordings',  icon: PlayCircle,        to: '/recordings', badge: { text: 'Soon' } },
 ]
 

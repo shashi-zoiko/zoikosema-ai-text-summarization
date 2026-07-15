@@ -118,6 +118,54 @@ class Settings(BaseSettings):
     # Redis (control-plane fanout + idempotency cache)
     redis_url: str = ""
 
+    # Sema Calendar & Mail — provider connection token vault (Phase 1 minimal
+    # form, see architecture/SEMA_CALENDAR_MAIL_CONTEXT.md open question #3).
+    # Fernet key (Fernet.generate_key()); empty in dev disables encrypt/decrypt
+    # by raising, so a missing key fails loudly instead of storing plaintext.
+    token_vault_key: str = ""
+
+    # Google Calendar OAuth app (distinct from the login-OAuth app, if any —
+    # this one requests Calendar API scopes, not identity scopes).
+    google_calendar_client_id: str = ""
+    google_calendar_client_secret: str = ""
+    google_calendar_redirect_uri: str = ""
+
+    # Microsoft Graph (Outlook Calendar) OAuth app registration.
+    microsoft_calendar_client_id: str = ""
+    microsoft_calendar_client_secret: str = ""
+    microsoft_calendar_redirect_uri: str = ""
+    # "common" accepts both personal Microsoft accounts and any Azure AD
+    # tenant; override to a specific tenant GUID to restrict to one org.
+    microsoft_calendar_tenant: str = "common"
+
+    # Gmail OAuth app (Phase 3 slice 1) — a SEPARATE Google Cloud OAuth app
+    # from google_calendar_*. Gmail restricted scopes (gmail.readonly, later
+    # gmail.send) are their own Google verification/CASA review track
+    # (spec §7.3); reusing the Calendar app's client id would conflate two
+    # independent scope-review processes.
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
+    gmail_redirect_uri: str = ""
+
+    # ZoikoTime workforce-truth availability signal (spec §6.1) — read-only
+    # visibility only per Phase 1 phasing, hard enforcement is Phase 2+. Off
+    # by default: no real data source exists yet in this repo (that's
+    # plans/zoikotime-workforce-signal-integration.md's scope, a separate
+    # cross-repo plan/webhook). Same flag name that plan already commits to,
+    # so both sides gate on the identical setting once it lands.
+    zoikotime_integration_enabled: bool = False
+
+    # Upgrades the ZoikoTime signal from "visible" to "enforced" (spec §6.1:
+    # "Constraint phases: read-only visibility Phase 1; hard enforcement
+    # Phase 2+"). A plain global flag, not a Policy Engine category, is the
+    # right size for this today: Policy Engine only models a per-category
+    # autonomy ceiling, and there's no real WorkforceSignal data yet for a
+    # tenant-versioned policy dimension to be worth the schema change — a
+    # bare on/off knob is all this flag currently needs to do. Revisit if/
+    # when real enforcement needs to vary per tenant. Meaningless unless
+    # zoikotime_integration_enabled is also True.
+    zoikotime_hard_enforcement_enabled: bool = False
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
