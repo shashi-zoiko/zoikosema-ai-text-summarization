@@ -24,7 +24,6 @@ from app.connect.events.outbox import enqueue
 from app.connect.mail_service.models import MailMessage
 from app.connect.provider_connections import service as provider_connections_service
 from app.connect.provider_connections.adapters import get_adapter
-from app.connect.provider_connections.adapters import gmail as gmail_adapter
 from app.connect.provider_connections.models import ProviderConnection
 from app.connect.shared.envelope import EventEnvelope
 from app.connect.shared.errors import NotFound
@@ -34,14 +33,17 @@ from app.connect.shared.tenant import TenantContext
 
 DEFAULT_SYNC_WINDOW_PAST = timedelta(days=30)
 
-# Providers whose adapter exposes history.list-style incremental sync.
-# Outlook Mail (slice 3) uses delta queries with its own token shape, added
-# here when that slice lands — not presumptively today.
-_INCREMENTAL_PROVIDERS = {"gmail"}
-
 
 async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict:
     adapter = get_adapter(provider)
+    # Incremental-sync convention (duck-typed, same as get_adapter()'s existing
+    # style): an adapter opts in by exposing list_messages_delta(access_token,
+    # start_history_id=...) -> (messages, next_checkpoint), and a HistoryExpired
+    # exception class raised when the stored checkpoint is too old to resume
+    # from. Adapters without incremental support (or a not-yet-built Outlook
+    # Mail adapter) simply don't define these, and full-pull is used instead.
+    list_messages_delta = getattr(adapter, "list_messages_delta", None)
+    history_expired = getattr(adapter, "HistoryExpired", None)
 
     connection = (
         db.query(ProviderConnection)
@@ -59,15 +61,18 @@ async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict
     access_token = await provider_connections_service.ensure_valid_access_token(db, connection, adapter)
 
     mode = "full"
-    if provider in _INCREMENTAL_PROVIDERS and connection.mail_history_id:
+    if list_messages_delta and connection.mail_history_id:
         try:
-            raw_messages, next_history_id = await gmail_adapter.list_messages_delta(
+            raw_messages, next_history_id = await list_messages_delta(
                 access_token, start_history_id=connection.mail_history_id,
             )
             mode = "incremental"
-        except gmail_adapter.HistoryExpired:
-            connection.mail_history_id = None
-            raw_messages = None  # fall through to full pull below
+        except Exception as exc:
+            if history_expired is not None and isinstance(exc, history_expired):
+                connection.mail_history_id = None
+                raw_messages = None  # fall through to full pull below
+            else:
+                raise
     else:
         raw_messages = None
 
@@ -121,7 +126,7 @@ async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict
         if raw.history_id and (next_history_id is None or raw.history_id > next_history_id):
             next_history_id = raw.history_id
 
-    if provider in _INCREMENTAL_PROVIDERS:
+    if list_messages_delta:
         connection.mail_history_id = next_history_id
 
     audit.log(

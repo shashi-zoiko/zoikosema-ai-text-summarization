@@ -71,6 +71,8 @@ Detailed now that Phase 2's actual shape (Policy Engine, Action Review Queue, na
 
 **Phase 3 exit gate**: Google restricted-scope requirements satisfied, rendering security audit clean, delayed-send rollback verified, inbox freshness SLO met.
 
+**Pre-slice-3 follow-up (2026-07-15):** `mail_service/service.py`'s full-vs-incremental sync dispatch was refactored from a hardcoded `_INCREMENTAL_PROVIDERS = {"gmail"}` check into a generic, duck-typed check on whichever adapter `get_adapter()` returns — same pattern calendar already used for its two providers. No new abstraction added, no public API/schema change, Gmail's behavior verified unchanged. Detail in slice 2's plan file follow-up note. This means slice 3 (Outlook Mail) can add incremental sync support, if its adapter has it, without touching the shared sync function.
+
 ## Phase 4 — Shared Inboxes & L4 (spec §18 row 4) — sequencing only
 
 1. Shared/group mailboxes + delegated access model.

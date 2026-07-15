@@ -11,7 +11,7 @@ Second mail provider, same sync semantics as slice 2 — proves `mail_service` i
 
 ## Reuse — don't rebuild
 
-- `mail_service/service.py::sync_mail` (slice 2) — extend the SAME function's provider dispatch via `get_adapter()`, don't fork a second sync function.
+- `mail_service/service.py::sync_mail` (slice 2) — extend the SAME function's provider dispatch via `get_adapter()`, don't fork a second sync function. **Already provider-agnostic as of the 2026-07-15 dispatch refactor** (see slice 2's follow-up note): full-vs-incremental is decided by `getattr(adapter, "list_messages_delta", None)` / `getattr(adapter, "HistoryExpired", None)` on whichever adapter `get_adapter()` returns, not by a hardcoded provider name. If Outlook Mail's adapter defines both, incremental sync works automatically with no `mail_service/service.py` changes; if it doesn't yet, full pull is used automatically — either is fine to start with.
 - `adapters/get_adapter(provider)` registry, `adapters/shared.py::RawMessage` — Outlook's adapter returns the same `RawMessage` shape, same discipline as calendar's Google/Outlook adapters converging on `RawEvent`.
 - Microsoft Graph delta-query mechanics already exist for calendar (`adapters/outlook.py`'s pagination-via-`@odata.nextLink` handling, the `Prefer: outlook.timezone` lesson) — Mail delta (`/me/mailFolders/inbox/messages/delta`) follows the identical pagination shape; reuse the SAME pagination loop code if it can be factored into `adapters/shared.py`, rather than copy-pasting it a third time.
 

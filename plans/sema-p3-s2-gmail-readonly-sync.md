@@ -43,3 +43,18 @@ Built as planned — full pull and `history.list`-based incremental sync as two 
 - No Outlook Mail handling added yet (correctly deferred to slice 3) — `_INCREMENTAL_PROVIDERS = {"gmail"}` is the seam that slice adds to, not a speculative abstraction built now.
 
 Verified against the real dev Postgres DB (a real `ProviderConnection` + `User` row, Gmail's own HTTP calls mocked): first sync with no checkpoint does a full pull and stores `mail_history_id`; second sync uses `history.list` and only processes the one new message, advancing the checkpoint; a simulated 404 correctly falls back to a full pull and re-seeds the checkpoint without duplicating the already-synced row. Regression-checked: Gmail OAuth connect flow (Phase 3 slice 1) and calendar sync (Phase 1 slice 2, through its refactored shared token helper) both still pass, plus the two permanent test files (`test_recurrence.py`, `test_availability_merge.py`).
+
+### Follow-up (2026-07-15): dispatch made provider-agnostic ahead of slice 3
+
+A pre-slice-3 design review flagged that `sync_mail()`'s incremental-vs-full dispatch had drifted from the `get_adapter()` discipline established elsewhere in this codebase: it imported `gmail` directly by name, hardcoded `_INCREMENTAL_PROVIDERS = {"gmail"}`, and caught `gmail_adapter.HistoryExpired` by name — meaning Outlook's addition in slice 3 would have meant a second hardcoded `elif provider == "outlook_mail"` branch next to Gmail's, rather than the two providers sharing one dispatch path (the same trap calendar's own two-provider precedent had already identified and avoided when Outlook Calendar was added — see `architecture/SEMA_CALENDAR_MAIL_CONTEXT.md`).
+
+Fixed with the smallest possible change, on explicit instruction to introduce no new abstraction (no base class, protocol, or second registry) and to reuse `get_adapter()` as-is:
+
+- `_INCREMENTAL_PROVIDERS` and the direct `gmail` import are gone from `mail_service/service.py`.
+- The already-obtained `adapter` object (from `get_adapter(provider)`) is asked directly, via `getattr(adapter, "list_messages_delta", None)` / `getattr(adapter, "HistoryExpired", None)`, whether it supports incremental sync — the same duck-typing convention `get_adapter()` itself already uses (callers call `adapter.list_events`/`adapter.list_messages` by name/convention, not through an enforced interface).
+- `gmail.py` and `adapters/shared.py` were **not** touched — `HistoryExpired` and `list_messages_delta` keep their existing names and shapes; only how the caller finds them changed.
+- No public API or database schema changes.
+
+This means the convention slice 3 needs is now: an adapter supporting incremental sync exposes `list_messages_delta(access_token, start_history_id=...)` and a `HistoryExpired`-style exception class; an adapter without incremental support (e.g. an early Outlook Mail adapter) simply omits both, and `sync_mail()` falls back to `list_messages` automatically — no changes to `mail_service/service.py` required when slice 3 lands.
+
+Verified (real `sync_mail()` function, fake DB session + fake adapter modules — no live Postgres/Gmail account available in the review environment): full sync with no checkpoint, incremental sync advancing the checkpoint, and expired-checkpoint fallback re-establishing a fresh checkpoint all behave identically to the pre-refactor version. A full run against a live Postgres instance and a real connected Gmail account is still outstanding (same gap slice 2 itself already carried).
