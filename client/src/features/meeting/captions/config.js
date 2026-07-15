@@ -26,11 +26,16 @@ export const CAPTION_CONFIG = {
 
   // Minimum gap between *interim* broadcasts. Interims fire many times per
   // second from the engine; this caps bandwidth/fan-out. Finals are never
-  // throttled.
-  interimThrottleMs: 250,
+  // throttled. Local echo (your own caption bubble) ignores this entirely —
+  // it only governs what remote participants receive over the data channel.
+  interimThrottleMs: 150,
 
-  // Hard cap on a single caption payload (matches the server's existing cap).
-  maxChars: 300,
+  // Hard cap applied to every caption fragment AND to a full merged transcript
+  // line (many consecutive fragments stitched together — see CaptionProvider's
+  // fragment-merge logic). One shared cap, generous enough that neither a
+  // single long continuous utterance nor a multi-fragment merged sentence gets
+  // silently truncated before it reaches the captured transcript.
+  maxLineChars: 8000,
 
   // Concurrent speakers shown at once. Meet shows ~1–3; older ones fade as new
   // speakers appear. Each speaker keeps an INDEPENDENT stream — raising this

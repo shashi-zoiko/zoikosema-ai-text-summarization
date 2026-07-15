@@ -16,7 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
-from app.core.ai import ai_generate_intelligence
+from app.api.admin import _is_admin
+from app.core.ai import ai_generate_intelligence, groq_summarize_transcript
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.meeting import (
@@ -28,11 +29,15 @@ from app.models.meeting import (
     INTEL_STATUS_READY,
     INTEL_STATUS_FAILED,
     INTEL_SOURCE_CHAT,
+    INTEL_SOURCE_TRANSCRIPT,
     ROLE_HOST,
     ROLE_COHOST,
+    STATUS_ADMITTED,
+    STATUS_DISCONNECTED,
+    STATUS_LEFT,
 )
 from app.models.user import User
-from app.schemas.meeting import IntelligenceGenerateIn, MeetingIntelligenceOut
+from app.schemas.meeting import IntelligenceEditIn, IntelligenceGenerateIn, MeetingIntelligenceOut
 
 router = APIRouter(prefix="/api/meetings", tags=["intelligence"])
 
@@ -48,13 +53,22 @@ _CACHE_SECONDS = 60
 
 
 def _has_access(meeting: Meeting, user: User, db: Session) -> bool:
-    """Anyone who hosted or participated in the meeting can read intelligence."""
+    """Anyone who hosted or actually ATTENDED the meeting can read intelligence
+    — not merely anyone with a MeetingParticipant row. A row is created the
+    moment someone requests to join (STATUS_PENDING, before the host admits
+    them from the waiting room), so without this status filter someone who
+    was denied entry, kicked before ever being admitted, or left pending when
+    the meeting ended would incorrectly pass. Only ADMITTED / DISCONNECTED
+    (admitted, WS dropped) / LEFT (admitted, then left) count as attended —
+    same org membership is NOT sufficient on its own.
+    """
     if meeting.host_id == user.id:
         return True
     row = db.scalar(
         select(MeetingParticipant).where(
             MeetingParticipant.meeting_id == meeting.id,
             MeetingParticipant.user_id == user.id,
+            MeetingParticipant.status.in_([STATUS_ADMITTED, STATUS_DISCONNECTED, STATUS_LEFT]),
         )
     )
     return row is not None
@@ -73,7 +87,22 @@ def _is_host_or_cohost(meeting: Meeting, user: User, db: Session) -> bool:
     return row is not None
 
 
-def _intel_to_out(rec: MeetingIntelligence, meeting: Meeting) -> dict:
+def _is_host_or_platform_admin(meeting: Meeting, user: User) -> bool:
+    """Strict gate for CONTROLLING transcript-sourced summaries (generating,
+    editing) — host or platform admin ONLY, deliberately excluding co-hosts
+    and other participants (per the product ask: only the host/admin can
+    switch summarizing on or edit the result). Viewing is separate and open
+    to any attendee — see `_has_access`. Unlike `_is_host_or_cohost`, this
+    never touches the DB (no MeetingParticipant lookup needed)."""
+    return meeting.host_id == user.id or _is_admin(user)
+
+
+def _intel_to_out(
+    rec: MeetingIntelligence,
+    meeting: Meeting,
+    user: User,
+    conversation: list[dict] | None = None,
+) -> dict:
     return {
         "id": rec.id,
         "meeting_id": rec.meeting_id,
@@ -92,6 +121,8 @@ def _intel_to_out(rec: MeetingIntelligence, meeting: Meeting) -> dict:
         "completed_at": rec.completed_at,
         "meeting_code": meeting.code,
         "meeting_title": meeting.title,
+        "can_edit": _is_host_or_platform_admin(meeting, user),
+        "conversation": conversation,
     }
 
 
@@ -115,45 +146,79 @@ def run_generation(
     participants: list[dict] | None,
     requested_by_id: int | None,
     recording: MeetingRecording | None = None,
+    transcript: list[dict] | None = None,
+    language: str = "english",
+    transcript_file_url: str | None = None,
+    visible_transcript: list[dict] | None = None,
+    raw_conversation_file_url: str | None = None,
 ) -> MeetingIntelligence:
     """Core generation pipeline used by both the API endpoint and the
     auto-trigger after recording upload.
 
     Always inserts a fresh row so history is preserved; sets status to
     `ready` or `failed` based on the AI call outcome.
-    """
-    if recording is None:
-        recording = db.scalar(
-            select(MeetingRecording)
-            .where(MeetingRecording.meeting_id == meeting.id)
-            .order_by(desc(MeetingRecording.created_at))
-            .limit(1)
-        )
 
-    if chat_log is None or len(chat_log) == 0:
-        chat_log = _load_chat_log_from_recording(recording) if recording else []
-    if participants is None:
-        participants = _resolve_participants(meeting, db)
+    Branches on `transcript`: when present (the post-meeting spoken
+    transcript, posted by the client when the host leaves), calls Groq via
+    `groq_summarize_transcript` and stores `{title, summary, key_takeaways}`
+    with `source=INTEL_SOURCE_TRANSCRIPT`. Otherwise runs the existing
+    chat-log → Claude path with `source=INTEL_SOURCE_CHAT`, unchanged.
+
+    `visible_transcript` / `raw_conversation_file_url` (transcript path only):
+    the summary itself always generates from the FULL `transcript`, but the
+    raw conversation log shown on the summary page can be a narrower slice —
+    what was actually visible before the host clicked "stop transcribing".
+    Pass `visible_transcript` to save it fresh (a new POST), or
+    `raw_conversation_file_url` directly to reuse an already-saved slice (the
+    language-regeneration reuse path, which resaves nothing). If neither is
+    given, the raw log falls back to the full transcript file.
+    """
+    is_transcript = bool(transcript)
+
+    if not is_transcript:
+        if recording is None:
+            recording = db.scalar(
+                select(MeetingRecording)
+                .where(MeetingRecording.meeting_id == meeting.id)
+                .order_by(desc(MeetingRecording.created_at))
+                .limit(1)
+            )
+        if chat_log is None or len(chat_log) == 0:
+            chat_log = _load_chat_log_from_recording(recording) if recording else []
+        if participants is None:
+            participants = _resolve_participants(meeting, db)
 
     duration_seconds = recording.duration if recording else None
+
+    resolved_raw_conversation_file_url = raw_conversation_file_url
+    if is_transcript and resolved_raw_conversation_file_url is None and visible_transcript:
+        resolved_raw_conversation_file_url = _save_transcript_file(visible_transcript)
+    if is_transcript and resolved_raw_conversation_file_url is None:
+        resolved_raw_conversation_file_url = transcript_file_url
 
     intel = MeetingIntelligence(
         meeting_id=meeting.id,
         recording_id=recording.id if recording else None,
         requested_by_id=requested_by_id,
         status=INTEL_STATUS_GENERATING,
-        source=INTEL_SOURCE_CHAT,
+        source=INTEL_SOURCE_TRANSCRIPT if is_transcript else INTEL_SOURCE_CHAT,
+        transcript_file_url=transcript_file_url,
+        raw_conversation_file_url=resolved_raw_conversation_file_url,
     )
     db.add(intel)
     db.commit()
     db.refresh(intel)
 
-    result = ai_generate_intelligence(
-        chat_log=chat_log,
-        meeting_title=meeting.title,
-        participants=participants,
-        duration_seconds=duration_seconds,
-    )
+    if is_transcript:
+        result = groq_summarize_transcript(transcript=transcript, meeting_title=meeting.title, language=language)
+    else:
+        result = ai_generate_intelligence(
+            chat_log=chat_log,
+            meeting_title=meeting.title,
+            participants=participants,
+            duration_seconds=duration_seconds,
+            language=language,
+        )
 
     intel.completed_at = datetime.now(timezone.utc)
     intel.model_used = result.pop("_model", None)
@@ -169,7 +234,10 @@ def run_generation(
     else:
         intel.status = INTEL_STATUS_READY
         intel.payload = result
-        intel.tldr = (result.get("tldr") or "")[:1000] or None
+        # Chat-based payloads have `tldr`; transcript-based ones have `title`
+        # instead — either way this column is the cheap-list-view headline.
+        headline = result.get("tldr") or result.get("title") or ""
+        intel.tldr = headline[:1000] or None
 
     db.commit()
     db.refresh(intel)
@@ -244,10 +312,18 @@ def get_intelligence(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Return the most recent intelligence row for the meeting, or null."""
+    """Return the most recent intelligence row for the meeting, or null.
+
+    Access: anyone who hosted or attended the meeting can read its summary,
+    regardless of source — someone who never joined gets a 403. Only
+    generating/editing a transcript-sourced summary stays host/admin-only
+    (see `_is_host_or_platform_admin`, used for the POST/PATCH routes and to
+    compute `can_edit` below).
+    """
     meeting = db.scalar(select(Meeting).where(Meeting.code == code))
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+
     if not _has_access(meeting, user, db):
         raise HTTPException(status_code=403, detail="Not a participant of this meeting")
 
@@ -259,7 +335,104 @@ def get_intelligence(
     )
     if not rec:
         return None
-    return _intel_to_out(rec, meeting)
+
+    # If the latest row failed, fall back to the previous ready row so the
+    # user doesn't permanently lose their working intelligence.
+    if rec.status == INTEL_STATUS_FAILED:
+        prev = db.scalar(
+            select(MeetingIntelligence)
+            .where(
+                MeetingIntelligence.meeting_id == meeting.id,
+                MeetingIntelligence.status == INTEL_STATUS_READY,
+            )
+            .order_by(desc(MeetingIntelligence.created_at))
+            .limit(1)
+        )
+        if prev:
+            rec = prev
+
+    conversation = _load_conversation(rec, meeting, db)
+    return _intel_to_out(rec, meeting, user, conversation=conversation)
+
+
+def _save_transcript_file(transcript: list[dict]) -> str | None:
+    """Save transcript data to a JSON file and return its URL path."""
+    if not transcript:
+        return None
+    import uuid
+    fname = f"transcript_{uuid.uuid4().hex}.json"
+    fpath = os.path.join(RECORDINGS_DIR, fname)
+    try:
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(transcript, f, ensure_ascii=False)
+        return f"/api/recordings/files/{fname}"
+    except Exception:
+        return None
+
+
+def _load_transcript_from_url(url: str | None) -> list[dict] | None:
+    """Load transcript data from a saved JSON file URL."""
+    if not url:
+        return None
+    fname = url.rsplit("/", 1)[-1]
+    fpath = os.path.join(RECORDINGS_DIR, fname)
+    if not os.path.exists(fpath):
+        return None
+    try:
+        with open(fpath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _normalize_conversation(msgs: list[dict] | None) -> list[dict] | None:
+    """Reshape raw chat-log/transcript entries into the fixed {time, name,
+    body} shape the summary page renders, tolerating the same field-name
+    fallbacks `_format_chat_log` already does (timestamp/sender/user/text/
+    content). Returns None (not []) when there's nothing to show, so the
+    client can tell "no conversation on file" apart from "empty list"."""
+    if not msgs:
+        return None
+    out = []
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        body = m.get("body") or m.get("text") or m.get("content") or ""
+        if not body:
+            continue
+        out.append({
+            "time": m.get("time") or m.get("timestamp") or "",
+            "name": m.get("name") or m.get("sender") or m.get("user") or "Unknown",
+            "body": body,
+        })
+    return out or None
+
+
+def _load_conversation(rec: MeetingIntelligence, meeting: Meeting, db: Session) -> list[dict] | None:
+    """Load the raw message-by-message log shown on the summary page.
+
+    For transcript-sourced rows this is `raw_conversation_file_url` — the
+    slice actually visible in the Conversations panel, which can be narrower
+    than what the summary above it was generated from if the host stopped
+    transcribing mid-meeting (see run_generation) — falling back to the full
+    `transcript_file_url` for older rows that predate this column.
+    """
+    if rec.source == INTEL_SOURCE_TRANSCRIPT:
+        return _normalize_conversation(
+            _load_transcript_from_url(rec.raw_conversation_file_url or rec.transcript_file_url)
+        )
+
+    recording = db.get(MeetingRecording, rec.recording_id) if rec.recording_id else None
+    if not recording:
+        recording = db.scalar(
+            select(MeetingRecording)
+            .where(MeetingRecording.meeting_id == meeting.id)
+            .order_by(desc(MeetingRecording.created_at))
+            .limit(1)
+        )
+    if not recording:
+        return None
+    return _normalize_conversation(_load_chat_log_from_recording(recording))
 
 
 @router.post("/{code}/intelligence", response_model=MeetingIntelligenceOut, status_code=201)
@@ -271,23 +444,95 @@ def generate_intelligence(
 ):
     """Generate (or return cached) intelligence for a meeting.
 
-    Source resolution:
-      1. `data.chat_log` if supplied (typical: client posts the in-memory log
-         right after the meeting ends).
-      2. The latest recording's chat_log file on disk.
-
-    Hosts + co-hosts can always generate. Plain participants can re-fetch but
-    not regenerate, to prevent token-burn from arbitrary attendees.
+    Two independent paths, chosen by whether `data.transcript` is present:
+      - Transcript path (post-meeting spoken transcript → Groq): host or
+        platform admin ONLY — only the host/admin can switch summarizing on
+        for a meeting, per the product ask. Once generated, though, any
+        attendee can VIEW the result (see get_intelligence). Always
+        generates fresh (no cache short-circuit — this only ever fires once,
+        automatically, when the host leaves).
+      - Chat path (unchanged): `data.chat_log` if supplied, else the latest
+        recording's chat_log file. Hosts + co-hosts can generate; plain
+        participants can re-fetch but not regenerate, to prevent token-burn
+        from arbitrary attendees. Cached short-circuit within
+        `_CACHE_SECONDS` unless `force=true`.
     """
     meeting = db.scalar(select(Meeting).where(Meeting.code == code))
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if data.transcript:
+        if not _is_host_or_platform_admin(meeting, user):
+            raise HTTPException(status_code=403, detail="Only the host or an admin can generate this summary")
+        transcript_url = _save_transcript_file(data.transcript)
+        intel = run_generation(
+            db,
+            meeting,
+            chat_log=None,
+            participants=None,
+            requested_by_id=user.id,
+            transcript=data.transcript,
+            language=data.language,
+            transcript_file_url=transcript_url,
+            visible_transcript=data.visible_transcript,
+        )
+        return _intel_to_out(intel, meeting, user, conversation=_load_conversation(intel, meeting, db))
+
     if not _has_access(meeting, user, db):
         raise HTTPException(status_code=403, detail="Not a participant of this meeting")
     if not _is_host_or_cohost(meeting, user, db):
         raise HTTPException(
             status_code=403, detail="Only hosts and co-hosts can generate intelligence"
         )
+
+    # Check if any transcript-based intelligence has a saved transcript file.
+    # This handles both the case where the latest row is transcript (new
+    # meetings) and where a failed chat row sits on top (the old bug).
+    transcript_with_file = db.scalar(
+        select(MeetingIntelligence)
+        .where(
+            MeetingIntelligence.meeting_id == meeting.id,
+            MeetingIntelligence.source == INTEL_SOURCE_TRANSCRIPT,
+            MeetingIntelligence.transcript_file_url.isnot(None),
+        )
+        .order_by(desc(MeetingIntelligence.created_at))
+        .limit(1)
+    )
+    if transcript_with_file:
+        stored = _load_transcript_from_url(transcript_with_file.transcript_file_url)
+        if stored:
+            intel = run_generation(
+                db,
+                meeting,
+                chat_log=None,
+                participants=None,
+                requested_by_id=user.id,
+                transcript=stored,
+                language=data.language,
+                transcript_file_url=transcript_with_file.transcript_file_url,
+                raw_conversation_file_url=transcript_with_file.raw_conversation_file_url,
+            )
+            return _intel_to_out(intel, meeting, user, conversation=_load_conversation(intel, meeting, db))
+
+    # If any ready transcript intelligence exists but without a stored file,
+    # and the user is trying to regenerate, return a clear error instead of
+    # silently falling through to the chat path (which would also fail).
+    if data.force:
+        latest_ready_transcript = db.scalar(
+            select(MeetingIntelligence)
+            .where(
+                MeetingIntelligence.meeting_id == meeting.id,
+                MeetingIntelligence.source == INTEL_SOURCE_TRANSCRIPT,
+                MeetingIntelligence.status == INTEL_STATUS_READY,
+            )
+            .order_by(desc(MeetingIntelligence.created_at))
+            .limit(1)
+        )
+        if latest_ready_transcript:
+            raise HTTPException(
+                status_code=400,
+                detail="This summary was generated before the language-regeneration feature was added, so the original transcript wasn't saved to disk. Only new meetings (after this update) will support language switching. If you need to regenerate this specific meeting, please start a new meeting and leave again.",
+            )
 
     # Cached-recent short-circuit unless force=true.
     if not data.force:
@@ -297,13 +542,14 @@ def generate_intelligence(
             .where(
                 MeetingIntelligence.meeting_id == meeting.id,
                 MeetingIntelligence.status == INTEL_STATUS_READY,
+                MeetingIntelligence.source == INTEL_SOURCE_CHAT,
                 MeetingIntelligence.created_at >= cutoff,
             )
             .order_by(desc(MeetingIntelligence.created_at))
             .limit(1)
         )
         if cached:
-            return _intel_to_out(cached, meeting)
+            return _intel_to_out(cached, meeting, user, conversation=_load_conversation(cached, meeting, db))
 
     intel = run_generation(
         db,
@@ -311,8 +557,56 @@ def generate_intelligence(
         chat_log=data.chat_log,
         participants=data.participants,
         requested_by_id=user.id,
+        language=data.language,
     )
-    return _intel_to_out(intel, meeting)
+    return _intel_to_out(intel, meeting, user, conversation=_load_conversation(intel, meeting, db))
+
+
+@router.patch("/{code}/intelligence", response_model=MeetingIntelligenceOut)
+def edit_intelligence(
+    code: str,
+    data: IntelligenceEditIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Edit the latest transcript-sourced summary's fields in place (no new
+    row — this corrects the existing one). Host/admin-only, same gate as
+    generating and reading a transcript-sourced summary.
+
+    Only chat-sourced meetings have no transcript-sourced row to edit yet —
+    404s rather than silently editing the wrong kind of row.
+    """
+    meeting = db.scalar(select(Meeting).where(Meeting.code == code))
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    if not _is_host_or_platform_admin(meeting, user):
+        raise HTTPException(status_code=403, detail="Only the host or an admin can edit this summary")
+
+    rec = db.scalar(
+        select(MeetingIntelligence)
+        .where(
+            MeetingIntelligence.meeting_id == meeting.id,
+            MeetingIntelligence.source == INTEL_SOURCE_TRANSCRIPT,
+        )
+        .order_by(desc(MeetingIntelligence.created_at))
+        .limit(1)
+    )
+    if not rec:
+        raise HTTPException(status_code=404, detail="No transcript summary to edit")
+
+    payload = dict(rec.payload or {})
+    if data.title is not None:
+        payload["title"] = data.title
+        rec.tldr = data.title[:1000] or None
+    if data.summary is not None:
+        payload["summary"] = data.summary
+    if data.key_takeaways is not None:
+        payload["key_takeaways"] = data.key_takeaways
+    rec.payload = payload
+
+    db.commit()
+    db.refresh(rec)
+    return _intel_to_out(rec, meeting, user, conversation=_load_conversation(rec, meeting, db))
 
 
 @router.get("/{code}/intelligence/history", response_model=list[MeetingIntelligenceOut])
@@ -335,7 +629,7 @@ def list_intelligence_history(
         .order_by(desc(MeetingIntelligence.created_at))
         .limit(25)
     ).all()
-    return [_intel_to_out(r, meeting) for r in rows]
+    return [_intel_to_out(r, meeting, user) for r in rows]
 
 
 # ── Action items (cross-meeting aggregation) ───────────────────────────────

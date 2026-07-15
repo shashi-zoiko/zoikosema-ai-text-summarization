@@ -27,7 +27,7 @@ import SettingsDrawer from './components/SettingsDrawer.jsx'
 import MeetingInfoDrawer from './components/MeetingInfoDrawer.jsx'
 import CaptionProvider from './captions/CaptionProvider.jsx'
 import CaptionOverlay from './captions/CaptionOverlay.jsx'
-import { useCaptionControls } from './captions/useCaptions.js'
+import { useCaptionControls, useLiveCaptions } from './captions/useCaptions.js'
 import { backgroundEffectsSupported } from './backgroundEngine.js'
 import { getPreset, NONE_EFFECT } from './backgroundPresets.js'
 import { LkBackgroundProcessor } from './lkBackgroundProcessor.js'
@@ -135,6 +135,19 @@ function isDeviceError(e) {
     .test(e?.message || '')
 }
 
+// Reshape the accumulated caption transcript into the {time, name, body}
+// shape server/app/core/ai.py's _format_chat_log already reads (accepts
+// timestamp/sender/user/text/content fallbacks too) — same mapping
+// MeetSummaryPanel used to build before the summary moved to the post-meeting
+// intelligence page.
+function transcriptToChatLog(transcript) {
+  return transcript.map((line) => ({
+    time: new Date(line.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    name: line.name,
+    body: line.text,
+  }))
+}
+
 // Invisible probe: after the camera track starts, reads its REAL delivered
 // format (getSettings/getCapabilities) and stores it in the room store. Never
 // reports the *requested* resolution — a cam asked for 1080p may only give 720p,
@@ -224,6 +237,11 @@ function MeetRoom() {
   const joinPrefs = useMemo(() => {
     try { return JSON.parse(sessionStorage.getItem(`zoiko_meet_prefs_${code}`) || '{}') } catch { return {} }
   }, [code])
+  // Live mute/camera state, synced from the room so <LiveKitRoom>'s `audio`
+  // prop always reflects the user's current choice (not the initial lobby pref).
+  // This prevents LiveKit reconnections from overriding a user who muted mid-call.
+  const [audioOn, setAudioOn] = useState(() => joinPrefs.audio !== false)
+  const [videoOn, setVideoOn] = useState(() => joinPrefs.video !== false)
 
   // Connection bootstrap
   const [token, setToken] = useState(null)
@@ -292,12 +310,36 @@ function MeetRoom() {
     locked: false,
     chat_enabled: true,
     screenshare_enabled: true,
+    summarizer_on: false,
   })
   const [handRaised, setHandRaised] = useState(false)
   const [recording, setRecording] = useState({ recording: false, recording_id: null })
 
   // Local UI state
   const [sidebar, setSidebar] = useState(null) // 'chat' | 'people' | 'info' | 'settings' | null
+  // Set once, the first time "Start Summarizing" (inside the header's
+  // SummarizerButton popover, not just opening it) is clicked — the zero
+  // point for both the Meet Summarizer status card's timestamps and the
+  // lower bound of the raw-conversation-log slice sent at host-leave (see
+  // userLeave below). The conversation itself is never shown in-meeting —
+  // only captured — so this has no visible panel to gate.
+  const [summarizerStartedAt, setSummarizerStartedAt] = useState(null)
+  // Toggled from the Conversations button's Transcribing popover
+  // (MeetingHeader.jsx) — a genuine pause/resume, not a one-way stop. The
+  // Conversations button itself stays visible and toggleable the whole time
+  // Meet Summarizer is on; only turning Meet Summarizer OFF entirely (the
+  // 'summarizer-changed' WS handler above) resets this back to false and
+  // clears `pausedRanges`, so a later restart begins a fresh session.
+  const [transcribingPaused, setTranscribingPaused] = useState(false)
+  // Every pause/resume cycle while Meet Summarizer is on, as {from, to}
+  // (`to: null` = still paused). Does NOT touch `capturing`/`summarizer_on`:
+  // caption capture keeps running silently in the background regardless, so
+  // the eventual AI summary still covers the full conversation — this only
+  // shapes the narrower raw-conversation-log slice sent to the backend at
+  // host-leave (see userLeave below), which is the one place any of this
+  // conversation content is ever shown, and only on the post-meeting summary
+  // page — never live, in-meeting.
+  const [pausedRanges, setPausedRanges] = useState([])
   // Bumped whenever the header admit-chip / lobby "open" is used, so the People
   // panel scrolls its waiting section into view.
   const [waitingScrollSignal, setWaitingScrollSignal] = useState(0)
@@ -319,6 +361,12 @@ function MeetRoom() {
   const [showEmoji, setShowEmoji] = useState(false)
   const [showWhiteboard, setShowWhiteboard] = useState(false)
   const joinedAtRef = useRef(null) // wall-clock ms when media token landed → header timer
+  // Synced by <TranscriptRefSync> (rendered inside CaptionProvider, below) so
+  // userLeave — which lives outside the provider's own context subtree and
+  // can't call useLiveCaptions() directly — can read the latest transcript
+  // synchronously at leave-time without triggering a re-render on every
+  // caption.
+  const transcriptRef = useRef([])
   // Bridge the legacy { kind, text } toast API onto the notification engine so
   // recording / permission-denied / error paths keep working unchanged.
   const setToast = useCallback(({ kind, text, title } = {}) => {
@@ -357,6 +405,7 @@ function MeetRoom() {
           locked: !!data.meeting?.locked,
           chat_enabled: !!data.meeting?.chat_enabled,
           screenshare_enabled: !!data.meeting?.screenshare_enabled,
+          summarizer_on: !!data.meeting?.summarizer_on,
         })
         // Seed the role map: self + every peer already in the room.
         const entries = []
@@ -447,6 +496,19 @@ function MeetRoom() {
         }))
       } else if (t === 'meeting-locked') {
         setMeeting((m) => ({ ...m, locked: !!data.locked }))
+      } else if (t === 'summarizer-changed') {
+        // Room-wide, server-synced — every participant's header button glow
+        // and popover update from this, not just the host who toggled it.
+        setMeeting((m) => ({ ...m, summarizer_on: !!data.on }))
+        if (!data.on) {
+          // Meet Summarizer turned off entirely — reset the Conversations
+          // button's pause/resume state back to initial, so if it's turned
+          // on again later this meeting, it starts a fresh session rather
+          // than resuming a stale paused/resumed history.
+          setSummarizerStartedAt(null)
+          setTranscribingPaused(false)
+          setPausedRanges([])
+        }
       } else if (t === 'meeting-ended') {
         userLeftRef.current = true
         setToast({ kind: 'info', text: 'Meeting ended by host' })
@@ -594,6 +656,32 @@ function MeetRoom() {
   }, [])
   // Google-Meet: clicking the grid's "+N others" tile opens the People panel.
   const openPeople = useCallback(() => setSidebar('people'), [])
+  // Called by the header's SummarizerButton popover whenever its toggle turns
+  // capture ON (that button drives capturing itself via
+  // CaptionsControlContext — this just stamps the session's zero point,
+  // first call only, ever).
+  const startSummarizing = useCallback(() => {
+    setSummarizerStartedAt((t) => t ?? Date.now())
+  }, [])
+  // Pause/resume toggle for the Conversations button's Transcribing popover.
+  // Background capture (`capturing`/`summarizer_on`) is untouched either way
+  // — see the state declaration above. Records the pause/resume boundary in
+  // `pausedRanges` so userLeave can exclude paused spans from the raw log.
+  const toggleTranscribingPaused = useCallback(() => {
+    const now = Date.now()
+    setTranscribingPaused((wasPaused) => {
+      if (wasPaused) {
+        // Resuming — close the currently-open paused range.
+        setPausedRanges((prev) => (
+          prev.map((r, i) => (i === prev.length - 1 && r.to === null ? { ...r, to: now } : r))
+        ))
+      } else {
+        // Pausing — open a new range.
+        setPausedRanges((prev) => [...prev, { from: now, to: null }])
+      }
+      return !wasPaused
+    })
+  }, [])
   // Wire the floating chat cards' actions. "Mark as read" clears the unread
   // badge without opening chat; tapping a card's preview opens the chat drawer
   // (which also clears). Join-request admit/deny live only in the People panel.
@@ -632,6 +720,10 @@ function MeetRoom() {
       : (getPreset(bgEffectId) || bgUploads.find((u) => u.id === bgEffectId) || NONE_EFFECT)
   const setChatEnabled = useCallback((v) => ctrlSend({ type: 'set-permissions', chat_enabled: v }), [ctrlSend])
   const setScreenEnabled = useCallback((v) => ctrlSend({ type: 'set-permissions', screenshare_enabled: v }), [ctrlSend])
+  // Room-wide Meet Summarizer on/off — broadcast to every participant (see
+  // the 'summarizer-changed' handler above) so the header button's glow and
+  // popover status stay in sync for everyone, not just the toggling host.
+  const setSummarizerOn = useCallback((on) => ctrlSend({ type: 'set-summarizer', on }), [ctrlSend])
   // ponytail: "end meeting for all" removed — a host leaving only disconnects
   // themselves (Google-Meet style); the meeting stays live for everyone else.
 
@@ -660,6 +752,35 @@ function MeetRoom() {
   const userLeftRef = useRef(false)
   const userLeave = useCallback(() => {
     userLeftRef.current = true
+    // Host leaving is what triggers the post-meeting summary (Groq, via the
+    // same /intelligence endpoint the chat-based path already uses, branched
+    // on `transcript` — see server/app/api/intelligence.py). Fire-and-forget:
+    // don't block the exit navigation below on this network call, and it
+    // survives the component unmounting since fetch() isn't tied to React
+    // lifecycle. Only the host can generate it (backend also enforces this),
+    // and only if anything was actually captured.
+    if (isHost && transcriptRef.current.length > 0) {
+      // `transcript` (full, unfiltered) is what the AI summary is generated
+      // from — always the whole meeting, regardless of any pausing.
+      // `visible_transcript` excludes anything said during a paused span
+      // (`pausedRanges` — an open range with `to: null` means still paused
+      // at leave-time, so it covers through "now" too) — the summary page's
+      // raw conversation log renders this narrower slice instead, even
+      // though the real summary covers everything. The conversation itself
+      // is never shown in-meeting, only on that page.
+      const visibleSlice = transcriptRef.current.filter((l) => (
+        l.ts >= (summarizerStartedAt ?? 0)
+        && !pausedRanges.some((r) => l.ts >= r.from && (r.to === null || l.ts <= r.to))
+      ))
+      api(`/api/meetings/${code}/intelligence`, {
+        method: 'POST',
+        body: {
+          transcript: transcriptToChatLog(transcriptRef.current),
+          visible_transcript: transcriptToChatLog(visibleSlice),
+          force: true,
+        },
+      }).catch(() => { /* best-effort — nothing the user can act on mid-leave */ })
+    }
     // Google-Meet-style hang-up tone. Played via the shared SoundManager (a
     // detached <audio> element) so it keeps sounding after we navigate away and
     // this component unmounts.
@@ -669,7 +790,7 @@ function MeetRoom() {
     // Home). Only this path shows it; auth-expiry / server errors go to the
     // error splash, and host-ended / removed go home (handled below).
     navigate(meetingLeftPath(code), { replace: true })
-  }, [navigate, code])
+  }, [navigate, code, isHost, summarizerStartedAt, pausedRanges])
 
   const handleDisconnected = useCallback((reason) => {
     // Only navigate when the user actually clicked Leave OR the SFU
@@ -736,8 +857,8 @@ function MeetRoom() {
       token={token}
       serverUrl={wsUrl}
       connect={e2eeArmed}
-      audio={joinPrefs.audio !== false}
-      video={joinPrefs.video !== false}
+      audio={audioOn}
+      video={videoOn}
       onDisconnected={handleDisconnected}
       onError={(e) => {
         // Recoverable device/permission errors → brief toast, not the fatal
@@ -764,6 +885,7 @@ function MeetRoom() {
           the grid. */}
       <MeetingCryptoProvider keyB64={e2eeKey}>
       <CaptionProvider>
+      <TranscriptRefSync transcriptRef={transcriptRef} />
       <MeetingHeader
         code={code}
         ctrlConnected={ctrlConnected}
@@ -777,6 +899,11 @@ function MeetRoom() {
         onScreenEnabled={setScreenEnabled}
         onOpenInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         onOpenPeople={openPeopleWaiting}
+        onSetSummarizer={setSummarizerOn}
+        onStartSummarizing={startSummarizing}
+        showConversationsButton={!!meeting.summarizer_on}
+        transcribingPaused={transcribingPaused}
+        onToggleTranscribing={toggleTranscribingPaused}
       />
 
       <div className="relative flex min-h-0 flex-1">
@@ -883,6 +1010,8 @@ function MeetRoom() {
         toggleWhiteboard={() => setShowWhiteboard((v) => !v)}
         openInfo={() => setSidebar((s) => (s === 'info' ? null : 'info'))}
         openBackgrounds={() => { setSettingsTab('backgrounds'); setSidebar('settings') }}
+        onAudioChange={setAudioOn}
+        onVideoChange={setVideoOn}
         leave={userLeave}
       />
 
@@ -902,6 +1031,19 @@ function MeetRoom() {
 }
 
 /* ── Subcomponents ─────────────────────────────────────────────────────── */
+
+/**
+ * Keeps `transcriptRef` (owned by MeetRoom, read by userLeave) in sync with
+ * the live transcript. Exists only because userLeave's own scope sits
+ * outside CaptionProvider's context subtree and can't call useLiveCaptions()
+ * directly — this tiny bridge is the one place that can, rendered as a child
+ * of <CaptionProvider>. Renders nothing.
+ */
+function TranscriptRefSync({ transcriptRef }) {
+  const { transcript } = useLiveCaptions()
+  useEffect(() => { transcriptRef.current = transcript }, [transcript, transcriptRef])
+  return null
+}
 
 /**
  * Bridges the shared <MeetingDock> to LiveKit's local-participant state.
@@ -933,6 +1075,8 @@ function LivekitDockAdapter({
   toggleWhiteboard,
   openInfo,
   openBackgrounds,
+  onAudioChange,
+  onVideoChange,
   leave,
 }) {
   const { localParticipant } = useLocalParticipant()
@@ -946,6 +1090,7 @@ function LivekitDockAdapter({
   const micOn = !!localParticipant?.isMicrophoneEnabled
   const camOn = !!localParticipant?.isCameraEnabled
   const screenOn = !!localParticipant?.isScreenShareEnabled
+
   // Capability check (NOT user-agent sniffing): iPhone Safari has no
   // getDisplayMedia, so screen-share is impossible there. iPadOS and desktop
   // expose it. Used to fail gracefully with a toast instead of silently.
@@ -955,12 +1100,30 @@ function LivekitDockAdapter({
     typeof navigator.mediaDevices.getDisplayMedia === 'function'
 
   const toggleMic = useCallback(
-    () => localParticipant?.setMicrophoneEnabled(!micOn).catch(() => {}),
-    [localParticipant, micOn],
+    () => {
+      const next = !micOn
+      localParticipant?.setMicrophoneEnabled(next).catch((err) => {
+        notify('error', {
+          title: 'Microphone unavailable',
+          text: err?.message || 'Could not access the microphone. Check your device and browser permissions.',
+        })
+      })
+      onAudioChange?.(next)
+    },
+    [localParticipant, micOn, onAudioChange, notify],
   )
   const toggleCam = useCallback(
-    () => localParticipant?.setCameraEnabled(!camOn).catch(() => {}),
-    [localParticipant, camOn],
+    () => {
+      const next = !camOn
+      localParticipant?.setCameraEnabled(next).catch((err) => {
+        notify('error', {
+          title: 'Camera unavailable',
+          text: err?.message || 'Could not access the camera. Check your device and browser permissions.',
+        })
+      })
+      onVideoChange?.(next)
+    },
+    [localParticipant, camOn, onVideoChange, notify],
   )
   const startShare = useCallback(async () => {
     if (!localParticipant) return
