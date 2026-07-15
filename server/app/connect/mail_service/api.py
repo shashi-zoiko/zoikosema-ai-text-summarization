@@ -20,7 +20,7 @@ router = APIRouter(prefix="/mail", tags=["connect.mail"])
 
 
 class SyncMailIn(BaseModel):
-    provider: Literal["gmail"]
+    provider: Literal["gmail", "microsoft_mail"]
 
 
 class MailMessageOut(BaseModel):
