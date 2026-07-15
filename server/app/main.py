@@ -19,6 +19,7 @@ from app.core.recording_cleanup import recording_cleanup_loop
 from app.core.guest_cleanup import guest_cleanup_loop
 from app.core.meeting_reminders import meeting_reminder_loop
 from app.api import auth, users, chat, meetings, recordings, organizations, notifications, invites, dashboard, ai, admin, calls, intelligence, webhooks, support, settings as settings_api
+from app.connect.sema_guide.api import router as sema_guide_router
 from app.websocket import chat as chat_ws, signaling as meeting_ws
 from app.websocket.manager import chat_manager, meet_manager
 from app.connect import router as connect_router
@@ -216,6 +217,7 @@ app.include_router(meeting_ws.router)
 app.include_router(webhooks.router)
 app.include_router(support.router)
 app.include_router(settings_api.router)
+app.include_router(sema_guide_router)
 
 # Zoiko Connect v3 — new bounded services mounted alongside legacy routers.
 # Strangler-fig: legacy paths keep working; new features consume /api/connect/*.

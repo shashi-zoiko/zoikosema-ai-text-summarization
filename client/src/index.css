@@ -1328,3 +1328,45 @@ textarea { resize: vertical; }
   .zk-loader__bar,
   .zk-loader__ball { animation: none; }
 }
+
+/* =====================================================================
+   Sema Guide Panel — AI support agent design system
+   ===================================================================== */
+
+/* Sema action violet — used for primary actions in the Guide panel */
+:root {
+  --sg-violet: #7c3aed;
+  --sg-violet-soft: rgba(124, 58, 237, 0.15);
+  --sg-violet-ring: rgba(124, 58, 237, 0.3);
+  --sg-violet-2: #6d28d9;
+  --sg-violet-3: #a78bfa;
+  --sg-header-bg: #ffffff;
+  --sg-header-btn-bg: #f8fafc;
+  --sg-header-btn-border: #e5e7eb;
+  --sg-header-btn-icon: #1f2937;
+  --sg-header-btn-hover-bg: #f3f4f6;
+}
+
+[data-theme="midnight"] {
+  --sg-violet: #8b5cf6;
+  --sg-violet-soft: rgba(139, 92, 246, 0.18);
+  --sg-violet-ring: rgba(139, 92, 246, 0.35);
+  --sg-violet-2: #7c3aed;
+  --sg-violet-3: #a78bfa;
+  --sg-header-bg: #11141d;
+  --sg-header-btn-bg: #18181b;
+  --sg-header-btn-border: rgba(255, 255, 255, 0.08);
+  --sg-header-btn-icon: #ffffff;
+  --sg-header-btn-hover-bg: #27272a;
+}
+
+/* Action button transition - used by WelcomeState quick action buttons */
+.sg-action {
+  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+/* Verified answer glow */
+@keyframes sg-verified-pop {
+  0%   { transform: scale(0.8); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
