@@ -196,6 +196,37 @@ def ai_suggest_actions(
 
 # ── Structured meeting intelligence ────────────────────────────────────────
 
+# The 3 fixed table types every intelligence/summary payload always carries,
+# in display order. Columns are fixed per type — only `rows` varies per
+# meeting. Unlike the old single-auto-picked-table design, all 3 always show
+# on the summary page's Table view so users can see at a glance which aspects
+# of project management this meeting did/didn't cover.
+_TABLE_DEFS = [
+    ("task_tracker", "Task Tracker", [
+        {"key": "task", "label": "Task"},
+        {"key": "assignee", "label": "Assignee"},
+        {"key": "deadline", "label": "Deadline"},
+    ]),
+    ("resource_allocation", "Resource Allocation", [
+        {"key": "member", "label": "Team Member"},
+        {"key": "hours", "label": "Hours Allocated"},
+        {"key": "cost", "label": "Cost"},
+    ]),
+    ("risk_matrix", "Risk Matrix", [
+        {"key": "risk", "label": "Project Risk"},
+        {"key": "impact", "label": "Impact"},
+        {"key": "solution", "label": "Solution"},
+    ]),
+]
+
+
+def _empty_tables() -> list[dict]:
+    return [
+        {"type": t, "type_label": label, "columns": cols, "rows": []}
+        for t, label, cols in _TABLE_DEFS
+    ]
+
+
 # Schema string is embedded in the prompt so the model knows exactly what
 # JSON shape to produce. Kept in lockstep with `_EMPTY_INTELLIGENCE` so the
 # UI never has to special-case "missing key" vs "empty list".
@@ -237,13 +268,11 @@ _INTELLIGENCE_SCHEMA = """{
     {"summary": "what conflicts", "between": ["statement A", "statement B"]}
   ],
   "knowledge_nuggets": ["facts/decisions worth saving to the org wiki"],
-  "table_data": {
-    "enabled": true,
-    "type": "task_tracker|resource_allocation|risk_matrix|discussion_overview|participant_summary",
-    "type_label": "Human-readable table name, e.g. 'Task Tracker'",
-    "columns": [{"key": "col_name", "label": "Column Header"}],
-    "rows": [{"col_name": "cell value"}]
-  }
+  "tables": [
+    {"type": "task_tracker", "type_label": "Task Tracker", "columns": [{"key": "task", "label": "Task"}, {"key": "assignee", "label": "Assignee"}, {"key": "deadline", "label": "Deadline"}], "rows": [{"task": "string", "assignee": "string", "deadline": "string"}]},
+    {"type": "resource_allocation", "type_label": "Resource Allocation", "columns": [{"key": "member", "label": "Team Member"}, {"key": "hours", "label": "Hours Allocated"}, {"key": "cost", "label": "Cost"}], "rows": []},
+    {"type": "risk_matrix", "type_label": "Risk Matrix", "columns": [{"key": "risk", "label": "Project Risk"}, {"key": "impact", "label": "Impact"}, {"key": "solution", "label": "Solution"}], "rows": [{"risk": "string", "impact": "string", "solution": "string"}]}
+  ]
 }"""
 
 
@@ -268,7 +297,7 @@ def _empty_intelligence() -> dict:
         "follow_ups": {"emails": [], "slack": [], "tasks": []},
         "contradictions": [],
         "knowledge_nuggets": [],
-        "table_data": {"enabled": True, "type": "discussion_overview", "type_label": "Discussion Overview", "columns": [{"key": "speaker", "label": "Speaker"}, {"key": "topic", "label": "Topic"}, {"key": "key_point", "label": "Key Point"}], "rows": []},
+        "tables": _empty_tables(),
     }
 
 
@@ -325,107 +354,45 @@ def _format_chat_log(chat_log: list[dict], limit: int = 800) -> str:
 
 
 def _auto_table(result: dict):
-    """If the AI skipped table_data, build one from existing fields."""
-    td = result.get("table_data")
-    if td is None:
-        td = {}
-        result["table_data"] = td
-    if td.get("rows"):
-        return
+    """Ensure `tables` is always exactly the 3 fixed types (task_tracker,
+    resource_allocation, risk_matrix), in order, with fixed columns.
+
+    Backfills any row list the model left out using data it already
+    extracted elsewhere in the SAME response (action_items -> task_tracker,
+    risks -> risk_matrix) — reusing already-grounded fields, never
+    fabricating new content. Resource Allocation has no such source field
+    in the schema, so a missing/empty result for it is left as an empty
+    table (a correct, expected outcome when the meeting never discussed
+    budget/staffing) rather than invented.
+    """
+    by_type = {}
+    existing = result.get("tables")
+    if isinstance(existing, list):
+        for t in existing:
+            if isinstance(t, dict) and t.get("type"):
+                by_type[t["type"]] = t
 
     items = result.get("action_items") or []
-    if items:
-        td.clear()
-        td.update({
-            "enabled": True,
-            "type": "task_tracker",
-            "type_label": "Task Tracker",
-            "columns": [
-                {"key": "task", "label": "Task"},
-                {"key": "assignee", "label": "Assignee"},
-                {"key": "deadline", "label": "Deadline"},
-            ],
-            "rows": [
-                {"task": i.get("task", ""), "assignee": i.get("owner", ""), "deadline": i.get("due", "")}
-                for i in items if i.get("task")
-            ],
-        })
-        return
-
     risks = result.get("risks") or []
-    if risks:
-        td.clear()
-        td.update({
-            "enabled": True,
-            "type": "risk_matrix",
-            "type_label": "Risk Matrix",
-            "columns": [
-                {"key": "risk", "label": "Project Risk"},
-                {"key": "impact", "label": "Impact"},
-                {"key": "solution", "label": "Solution"},
-            ],
-            "rows": [
-                {"risk": r.get("title", ""), "impact": r.get("severity", ""), "solution": r.get("rationale", "")}
-                for r in risks if r.get("title")
-            ],
-        })
-        return
+    fallback_rows = {
+        "task_tracker": [
+            {"task": i.get("task", ""), "assignee": i.get("owner", ""), "deadline": i.get("due", "")}
+            for i in items if i.get("task")
+        ],
+        "resource_allocation": [],
+        "risk_matrix": [
+            {"risk": r.get("title", ""), "impact": r.get("severity", ""), "solution": r.get("rationale", "")}
+            for r in risks if r.get("title")
+        ],
+    }
 
-    decisions = result.get("decisions") or []
-    if decisions:
-        td.clear()
-        td.update({
-            "enabled": True,
-            "type": "task_tracker",
-            "type_label": "Decisions",
-            "columns": [
-                {"key": "title", "label": "Decision"},
-                {"key": "detail", "label": "Detail"},
-                {"key": "status", "label": "Status"},
-            ],
-            "rows": [
-                {"title": d.get("title", ""), "detail": d.get("detail", ""), "status": d.get("type", "")}
-                for d in decisions if d.get("title")
-            ],
-        })
-        return
-
-    speakers = result.get("speakers") or []
-    if speakers:
-        td.clear()
-        td.update({
-            "enabled": True,
-            "type": "participant_summary",
-            "type_label": "Speaker Summary",
-            "columns": [
-                {"key": "name", "label": "Speaker"},
-                {"key": "role", "label": "Role"},
-                {"key": "messages", "label": "Messages"},
-            ],
-            "rows": [
-                {"name": s.get("name", ""), "role": s.get("role_in_meeting", ""), "messages": str(s.get("message_count", ""))}
-                for s in speakers if s.get("name")
-            ],
-        })
-        return
-
-    takeaways = result.get("key_takeaways") or []
-    if takeaways:
-        td.clear()
-        td.update({
-            "enabled": True,
-            "type": "discussion_overview",
-            "type_label": "Discussion Overview",
-            "columns": [
-                {"key": "speaker", "label": "Speaker"},
-                {"key": "key_point", "label": "Key Point"},
-            ],
-            "rows": [
-                {"speaker": t.get("assignee", ""), "key_point": t.get("text", "")}
-                for t in takeaways if t.get("text")
-            ],
-        })
-        return
+    tables = []
+    for ttype, label, cols in _TABLE_DEFS:
+        found = by_type.get(ttype)
+        rows = found.get("rows") if isinstance(found, dict) and found.get("rows") else fallback_rows[ttype]
+        columns = found.get("columns") if isinstance(found, dict) and found.get("columns") else cols
+        tables.append({"type": ttype, "type_label": label, "columns": columns, "rows": rows})
+    result["tables"] = tables
 
 
 def ai_generate_intelligence(
@@ -491,19 +458,23 @@ def ai_generate_intelligence(
         "- Score fields are 0-100 integers; calibrate honestly.\n"
         "- Sentiment must be grounded in actual language — don't sugarcoat.\n"
         "- tldr should read like a McKinsey one-liner: what was decided, why it matters.\n"
-        "- You MUST include table_data in EVERY response. Always set enabled=true.\n"
-        "- Pick the most relevant table type based on the discussion:\n"
-        "  • task_tracker — columns: Task, Assignee, Deadline. Best for project tracking.\n"
-        "  • resource_allocation — columns: Team Member, Hours Allocated, Cost. Best for managers.\n"
-        "  • risk_matrix — columns: Project Risk, Impact, Solution. Best for stakeholders.\n"
-        "  • discussion_overview — columns: Speaker, Topic, Key Point. Fallback for general conversation.\n"
-        "  • participant_summary — columns: Participant, Role, Contribution. Fallback for check-in meetings.\n"
-        "  If none of these fit, design custom columns that match the discussion.\n"
-        "- Always provide at least 2 columns and as many rows as there are "
-        "participants or discussion points. Never return an empty rows array.\n"
+        "- You MUST include \"tables\" in EVERY response: an array of EXACTLY 3 "
+        "objects, always in this order, each with these FIXED columns (never "
+        "rename, add, or remove columns):\n"
+        "  1. task_tracker — columns: Task, Assignee, Deadline. Best for project tracking.\n"
+        "  2. resource_allocation — columns: Team Member, Hours Allocated, Cost. Best for managers.\n"
+        "  3. risk_matrix — columns: Project Risk, Impact, Solution. Best for stakeholders.\n"
+        "- Populate each table's rows ONLY from things actually said in the chat log:\n"
+        "  • task_tracker rows come from real action items with real owners/deadlines.\n"
+        "  • resource_allocation rows require real names WITH real hours/cost/effort "
+        "actually discussed — if the meeting never covered budget or staffing hours, "
+        "leave its rows as an empty array. Do not estimate or invent numbers.\n"
+        "  • risk_matrix rows come from real risks or concerns actually raised.\n"
+        "- An empty rows array for a table is CORRECT and EXPECTED when the "
+        "meeting didn't cover that topic — never fabricate rows just to fill a table.\n"
         "- Output ALL text fields (tldr, topics, decisions, action_items, risks, "
         "speakers, sentiment, follow_ups, contradictions, knowledge_nuggets, "
-        "table_data labels and cell values) in the language specified. "
+        "table labels and cell values) in the language specified. "
         "Preserve participant names and proper nouns as-is — only translate "
         "the analysis text itself.\n"
         "- Use the CORRECT script for the target language: for Chinese use "
@@ -634,7 +605,7 @@ def _empty_transcript_summary() -> dict:
     meaningful to summarize so the UI can always render the same structure."""
     return {
         "title": "", "summary": "", "key_takeaways": [],
-        "table_data": {"enabled": True, "type": "discussion_overview", "type_label": "Discussion Overview", "columns": [{"key": "speaker", "label": "Speaker"}, {"key": "topic", "label": "Topic"}, {"key": "key_point", "label": "Key Point"}], "rows": []},
+        "tables": _empty_tables(),
     }
 
 
@@ -683,9 +654,8 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         "- Output JSON ONLY. No prose before or after. No markdown code fences.\n"
         '- Schema: {"title": string, "summary": string, "key_takeaways": '
         '[{"assignee": string|null, "text": string}], '
-        '"table_data": {"enabled": bool, "type": string|null, '
-        '"type_label": string|null, "columns": [{"key": string, "label": string}], '
-        '"rows": [dict]}}\n'
+        '"tables": [{"type": string, "type_label": string, '
+        '"columns": [{"key": string, "label": string}], "rows": [dict]}]}\n'
         '- "title" is a short (under ~8 words) headline for what this meeting '
         "was about.\n"
         '- "summary" is 2-4 sentences covering what was discussed and decided.\n'
@@ -700,18 +670,22 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         "- Never invent names, tasks, or decisions that don't appear in the "
         "transcript. If nothing substantive was discussed, say so plainly in "
         '"summary" and return an empty "key_takeaways" array.\n'
-        "- You MUST include table_data in EVERY response. Always set enabled=true.\n"
-        "- Pick the most relevant table type:\n"
-        "  • task_tracker — columns: Task, Assignee, Deadline. Best for project tracking.\n"
-        "  • resource_allocation — columns: Team Member, Hours Allocated, Cost. Best for managers.\n"
-        "  • risk_matrix — columns: Project Risk, Impact, Solution. Best for stakeholders.\n"
-        "  • discussion_overview — columns: Speaker, Topic, Key Point. Fallback for general conversation.\n"
-        "  • participant_summary — columns: Participant, Role, Contribution. Fallback for check-in meetings.\n"
-        "  If none fit, design custom columns that match the discussion.\n"
-        "- Always provide at least 2 columns. Populate rows with every speaker "
-        "or discussion point. Never return an empty rows array.\n"
+        "- You MUST include \"tables\" in EVERY response: an array of EXACTLY 3 "
+        "objects, always in this order, each with these FIXED columns (never "
+        "rename, add, or remove columns):\n"
+        "  1. task_tracker — columns: Task, Assignee, Deadline. Best for project tracking.\n"
+        "  2. resource_allocation — columns: Team Member, Hours Allocated, Cost. Best for managers.\n"
+        "  3. risk_matrix — columns: Project Risk, Impact, Solution. Best for stakeholders.\n"
+        "- Populate each table's rows ONLY from things actually said in the transcript:\n"
+        "  • task_tracker rows come from real action items with real owners/deadlines.\n"
+        "  • resource_allocation rows require real names WITH real hours/cost/effort "
+        "actually discussed — if the conversation never covered budget or staffing "
+        "hours, leave its rows as an empty array. Do not estimate or invent numbers.\n"
+        "  • risk_matrix rows come from real risks or concerns actually raised.\n"
+        "- An empty rows array for a table is CORRECT and EXPECTED when the "
+        "conversation didn't cover that topic — never fabricate rows just to fill a table.\n"
         f"- Language: {language}. ALL output text (title, summary, key_takeaways "
-        "text, table_data labels and cell values) must be in {language}. "
+        "text, table labels and cell values) must be in {language}. "
         "Preserve participant names and proper nouns as-is — only translate "
         "the analysis content.\n"
         "- Use the CORRECT script: for Chinese use Simplified Chinese characters "

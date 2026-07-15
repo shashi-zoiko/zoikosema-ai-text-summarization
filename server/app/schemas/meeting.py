@@ -193,3 +193,10 @@ class MeetingIntelligenceOut(BaseModel):
     # attendee can view a transcript-sourced summary, but only host/admin can
     # change it, so the client uses this to decide whether to show Edit.
     can_edit: bool = False
+    # The raw message-by-message log (spoken transcript or text chat) this
+    # summary was generated from, normalized to {time, name, body} — lets the
+    # summary page show the actual conversation underneath the AI's
+    # synthesized analysis. None when there's nothing on file (e.g. the
+    # recording's chat log was cleaned up) or on list/history responses,
+    # which omit it to avoid a disk read per row.
+    conversation: list[dict] | None = None
