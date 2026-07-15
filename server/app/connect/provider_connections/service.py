@@ -50,16 +50,19 @@ def create_oauth_state(user_id: int, provider: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def verify_oauth_state(state: str, *, expected_provider: str) -> int:
-    """Decode+verify a state token, returning the user_id it was issued for."""
+def verify_oauth_state(state: str) -> tuple[int, str]:
+    """Decode+verify a state token, returning (user_id, provider) it was issued
+    for. The redirect back from Google/Microsoft never carries a `provider`
+    query param (that's not part of the OAuth spec) — this token is the only
+    place the callback can recover which provider a connect was for."""
     settings = get_settings()
     try:
         payload = jwt.decode(state, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except JWTError as exc:
         raise Invalid("Invalid or expired OAuth state") from exc
-    if payload.get("purpose") != _STATE_PURPOSE or payload.get("provider") != expected_provider:
+    if payload.get("purpose") != _STATE_PURPOSE:
         raise Invalid("Invalid or expired OAuth state")
-    return int(payload["sub"])
+    return int(payload["sub"]), payload["provider"]
 
 
 async def connect_provider(
