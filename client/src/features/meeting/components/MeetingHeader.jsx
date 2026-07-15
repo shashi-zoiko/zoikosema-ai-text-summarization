@@ -228,9 +228,14 @@ function ConversationsButton({ isHostOrCohost, paused, onToggle }) {
  *   - everyone else, on: the SAME status card, but the toggle renders
  *     disabled — they can see it's running, not stop it.
  *   - everyone else, off: a locked "you don't have permission" card.
- * `setCapturing` (local, off CaptionsControlContext) still separately gates
- * the HOST's OWN mic recognition — only the toggling host's speech feeds the
- * transcript this way, same as before; non-hosts merely see the status.
+ * `setCapturing` (local, off CaptionsControlContext) is kept in sync with
+ * `summarizerOn` for EVERY participant via the effect below, not just the
+ * toggling host's own click — `summarizerOn` is room-wide, so this makes
+ * every participant's own mic recognition follow it too. Without this, only
+ * whoever physically clicked "Start Summarizing" (or anyone who separately
+ * happened to have their own personal CC toggle on) ever gets captured, and
+ * everyone else's contribution is silently absent from the transcript no
+ * matter what they said — a real bug this used to have, not a design choice.
  * `onStartSummarizing` stamps the Conversations panel's session zero point
  * the first time capture turns on (idempotent there). Closes on outside
  * click or Escape, same pattern as HostMenu.
@@ -239,6 +244,16 @@ function SummarizerButton({ isHostOrCohost, summarizerOn, onSetSummarizer, onSta
   const { setCapturing } = useCaptionControls()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
+
+  // Synchronizing local capture state with an external system (starting/
+  // stopping this participant's own speech-recognition engine, inside
+  // CaptionProvider) in response to room-wide state that changes for
+  // reasons outside this component's control (another participant, usually
+  // the host, toggling it) — the textbook case an effect is for, not the
+  // "derive during render" anti-pattern.
+  useEffect(() => {
+    setCapturing(summarizerOn)
+  }, [summarizerOn, setCapturing])
 
   useEffect(() => {
     if (!open) return undefined
@@ -257,7 +272,6 @@ function SummarizerButton({ isHostOrCohost, summarizerOn, onSetSummarizer, onSta
   const toggleCapturing = () => {
     const next = !summarizerOn
     onSetSummarizer(next)
-    setCapturing(next)
     if (next) onStartSummarizing?.()
     setOpen(false)
   }

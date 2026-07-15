@@ -130,10 +130,13 @@ export default function CaptionProvider({ children }) {
     ({ speakerId, name, text, isFinal }) => {
       const clean = sanitize(text)
       if (!clean || !speakerId) return
-      // Drop meaningless STT artifacts — fragments with no letter in any script
-      // (e.g. "1.00", ".", "- -"). Real speech always has letters; these are
-      // recogniser noise that otherwise flashes on screen as a stray caption.
-      if (!/\p{L}/u.test(clean)) return
+      // Drop meaningless STT artifacts — fragments with no letter OR digit in
+      // any script (e.g. ".", "- -", pure punctuation noise). Real speech —
+      // including spoken numbers the recognizer transcribed as digits, e.g.
+      // "50" for "fifty" — always has letters or digits; only punctuation-only
+      // noise has neither. Requiring letters alone silently dropped every
+      // number-only fragment a speaker said, which reads as missing words.
+      if (!/[\p{L}\p{N}]/u.test(clean)) return
       dispatch({
         type: 'upsert',
         speakerId,
