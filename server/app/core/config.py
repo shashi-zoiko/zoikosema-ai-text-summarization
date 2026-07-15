@@ -147,6 +147,16 @@ class Settings(BaseSettings):
     gmail_client_secret: str = ""
     gmail_redirect_uri: str = ""
 
+    # Microsoft Graph (Outlook Mail) OAuth app registration (Phase 3 slice 3)
+    # — a SEPARATE Azure AD app registration from microsoft_calendar_*, same
+    # reasoning as Gmail's separate app: Mail.Read is a materially different
+    # permission grant than Calendars.Read and gets its own admin-consent/
+    # review track.
+    microsoft_mail_client_id: str = ""
+    microsoft_mail_client_secret: str = ""
+    microsoft_mail_redirect_uri: str = ""
+    microsoft_mail_tenant: str = "common"
+
     # ZoikoTime workforce-truth availability signal (spec §6.1) — read-only
     # visibility only per Phase 1 phasing, hard enforcement is Phase 2+. Off
     # by default: no real data source exists yet in this repo (that's
