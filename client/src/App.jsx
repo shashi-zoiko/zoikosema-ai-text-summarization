@@ -27,9 +27,12 @@ const ScheduledMeetings = lazy(() => import('./pages/ScheduledMeetings.jsx'))
 const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx'))
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
 const AccountSettings = lazy(() => import('./pages/AccountSettings.jsx'))
+const CalendarIntegrations = lazy(() => import('./pages/CalendarIntegrations.jsx'))
+const ReviewQueue = lazy(() => import('./pages/ReviewQueue.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
 const Billing = lazy(() => import('./pages/Billing.jsx'))
 const HelpSupport = lazy(() => import('./pages/HelpSupport.jsx'))
+const ComingSoon = lazy(() => import('./pages/ComingSoon.jsx'))
 const Settings = lazy(() => import('./pages/Settings.jsx'))
 const SharedRecording = lazy(() => import('./pages/SharedRecording.jsx'))
 
@@ -199,9 +202,18 @@ export default function App() {
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/calendar" element={<CalendarIntegrations />} />
+          <Route path="/review-queue" element={<ReviewQueue />} />
           <Route path="/security" element={<AccountSettings section="security" />} />
           <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
-          <Route path="/billing" element={<Billing />} />
+          {/* Billing exposes tenant-wide commercial data + destructive controls.
+              Admin-only, matching the sidebar's Manage section. Non-admins who
+              type the URL are bounced home by RequireAdmin (the backend that
+              backs the mutating actions is the real boundary; this is UX). */}
+          <Route path="/billing" element={<RequireAdmin><Billing /></RequireAdmin>} />
+          <Route path="/recordings" element={<ComingSoon feature="Recordings" description="A searchable archive of your meeting recordings will live here. Recording capture is being finalized." />} />
+          <Route path="/analytics" element={<ComingSoon feature="Analytics" description="Usage trends, meeting insights, and workspace reports are on the way." />} />
+          <Route path="/ai-summaries" element={<ComingSoon feature="AI Summaries" description="Automatic recaps, action items, and highlights from your meetings are coming soon." />} />
           <Route path="/help-support" element={<HelpSupport />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -50,21 +50,29 @@ export default function useSpeechRecognition(active, { lang, onResult, onError }
     rec.onresult = (e) => {
       let interim = ''
       let final = ''
+      let conf = 0
+      let confN = 0
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
         const piece = r[0].transcript
         // A single event can carry more than one result piece (e.g. two
         // distinct finals batched together); concatenating without a
         // separator glued them into one run-on word instead of two.
-        if (r.isFinal) final += (final ? ' ' : '') + piece
-        else interim += (interim ? ' ' : '') + piece
+        if (r.isFinal) {
+          final += (final ? ' ' : '') + piece
+          // Only finals carry a meaningful confidence; average across them.
+          if (typeof r[0].confidence === 'number') { conf += r[0].confidence; confN++ }
+        } else {
+          interim += (interim ? ' ' : '') + piece
+        }
       }
+      const confidence = confN ? conf / confN : 0
       if (final) {
         pendingInterim = ''
-        cbRef.current.onResult?.({ text: final.trim(), isFinal: true })
+        cbRef.current.onResult?.({ text: final.trim(), isFinal: true, confidence })
       } else if (interim) {
         pendingInterim = interim
-        cbRef.current.onResult?.({ text: interim.trim(), isFinal: false })
+        cbRef.current.onResult?.({ text: interim.trim(), isFinal: false, confidence: 0 })
       }
     }
 

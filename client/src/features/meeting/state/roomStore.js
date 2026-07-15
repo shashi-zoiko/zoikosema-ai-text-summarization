@@ -52,6 +52,14 @@ export const useRoomStore = create((set) => ({
       reactions: [...s.reactions.slice(-49), { ...r, _ts: Date.now() }],
     })),
 
+  // cameraStats: the REAL delivered camera format {width,height,frameRate,tier,
+  // maxWidth,maxHeight,maxFrameRate} measured from the live track — NOT the
+  // requested resolution. null while the camera is off. Written by
+  // <CameraQualityProbe>; the single source of truth for honest HD reporting.
+  cameraStats: null,
+  setCameraStats: (stats) =>
+    set((s) => (s.cameraStats === stats ? s : { cameraStats: stats })),
+
   // roles: Map<user_id, 'host' | 'co_host' | 'participant'>. Seeded from the
   // welcome event (peers list + self) and updated on role-changed/peer-joined.
   // Used by the Participants panel to decide which actions to surface.
@@ -78,5 +86,6 @@ export const useRoomStore = create((set) => ({
       raisedHands: new Set(),
       reactions: [],
       roles: new Map(),
+      cameraStats: null,
     }),
 }))

@@ -31,6 +31,7 @@ import { useCaptionControls, useLiveCaptions } from './captions/useCaptions.js'
 import { backgroundEffectsSupported } from './backgroundEngine.js'
 import { getPreset, NONE_EFFECT } from './backgroundPresets.js'
 import { LkBackgroundProcessor } from './lkBackgroundProcessor.js'
+import { getCameraProfile, readCameraCapability } from './videoQuality.js'
 // Private per-participant notebook (rich-text notes + personal drawing canvas).
 // Lazy-loaded so the TipTap editor bundle isn't in the initial meeting load.
 const PrivateNotebook = lazy(() => import('./notebook/PrivateNotebook.jsx'))
@@ -57,24 +58,40 @@ const CANVAS = '#0B1220'
 // (roomStore.js) and captions (CaptionOverlay.jsx). Raise/lower here.
 const MAX_CHAT_MESSAGES = 500
 
+// Camera capture/publish policy is chosen once per session from real hardware +
+// network signals: capable machines publish Full HD (1080p ladder), weak ones
+// fall back to the classic 720p ladder. See videoQuality.js. Screen-share keeps
+// its own high-bitrate ladder + maintain-resolution (below) regardless.
+const CAMERA_PROFILE = getCameraProfile()
+
 const ROOM_OPTIONS = {
   adaptiveStream: true,
   dynacast: true,
   publishDefaults: {
     simulcast: true,
-    videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
-    // Screen-share publish defaults — keep shared content sharp. Camera tracks
-    // top out at 720p (above) because faces don't need more, but a shared screen
-    // is full of fine text/UI, so it gets its own high-bitrate ladder and is
-    // told to drop frame-rate before resolution (text legibility > motion).
+    // Camera ladder from the session profile: h360/h720/h1080 on capable
+    // devices, h180/h360/h720 on weak ones. `videoEncoding` pins the top layer's
+    // bitrate/fps (maxBitrate/maxFramerate) so the primary rung is explicit.
+    videoSimulcastLayers: CAMERA_PROFILE.simulcastLayers,
+    videoEncoding: CAMERA_PROFILE.videoEncoding,
+    // Screen-share publish defaults — keep shared content sharp. A shared screen
+    // is full of fine text/UI, so it gets its own high-bitrate ladder and drops
+    // frame-rate before resolution (text legibility > motion) via the per-publish
+    // override in SCREEN_PUBLISH_OPTIONS.
     screenShareEncoding: ScreenSharePresets.h1080fps30.encoding,
     screenShareSimulcastLayers: [ScreenSharePresets.h720fps15, ScreenSharePresets.h1080fps30],
-    degradationPreference: 'maintain-resolution',
+    // Camera favours a Google-Meet-style balance of sharpness + smooth motion
+    // under CPU/bandwidth pressure (was 'maintain-resolution', which froze FPS to
+    // hold pixels). Screen-share overrides this back to 'maintain-resolution' at
+    // its call site.
+    degradationPreference: 'balanced',
     dtx: true,
     red: true,
   },
   videoCaptureDefaults: {
-    resolution: VideoPresets.h720.resolution,
+    // 1080p on capable devices, 720p otherwise. Requested as `ideal`, so a
+    // webcam that can't hit the target simply delivers less — never an error.
+    resolution: CAMERA_PROFILE.captureResolution,
   },
 }
 
@@ -129,6 +146,72 @@ function transcriptToChatLog(transcript) {
     name: line.name,
     body: line.text,
   }))
+}
+
+// Invisible probe: after the camera track starts, reads its REAL delivered
+// format (getSettings/getCapabilities) and stores it in the room store. Never
+// reports the *requested* resolution — a cam asked for 1080p may only give 720p,
+// so this is the single source of truth for honest quality reporting (no fake
+// HD badge). Re-reads on (re)publish and device switch.
+function CameraQualityProbe() {
+  const { localParticipant } = useLocalParticipant()
+  const setCameraStats = useRoomStore((s) => s.setCameraStats)
+  useEffect(() => {
+    if (!localParticipant) return undefined
+    let cancelled = false
+    const read = () => {
+      const track = localParticipant.getTrackPublication?.(Track.Source.Camera)?.track
+      if (!track) { if (!cancelled) setCameraStats(null); return }
+      const cap = readCameraCapability(track)
+      if (cancelled || !cap) return
+      setCameraStats(cap)
+      if (import.meta.env.DEV) {
+        // REQUESTED (session policy) vs ACTUAL (what the camera delivered). The
+        // requested tier is chosen from hardware/network in getCameraProfile();
+        // the actual comes straight from the live track's getSettings().
+        const req = CAMERA_PROFILE.captureResolution
+        const reqKbps = Math.round((CAMERA_PROFILE.videoEncoding?.maxBitrate || 0) / 1000)
+        console.info(
+          `[camera] requested ${req.width}×${req.height}@${req.frameRate}fps ` +
+            `(${CAMERA_PROFILE.hd ? 'HD' : '720p-fallback'} profile, top layer ~${reqKbps}kbps) — ` +
+            `actual ${cap.width}×${cap.height}@${cap.frameRate}fps (${cap.tier})` +
+            (cap.maxHeight ? ` — device max ${cap.maxWidth}×${cap.maxHeight}@${cap.maxFrameRate}fps` : ''),
+        )
+        // Only warn on an UNEXPLAINED shortfall: we asked for more than we got
+        // AND the hardware claims it can do more. A 720p-only webcam delivering
+        // 720p is correct fallback, not a bug — don't cry wolf.
+        if (
+          cap.height && req.height && cap.height < req.height &&
+          cap.maxHeight && cap.maxHeight >= req.height
+        ) {
+          console.warn(
+            `[camera] requested ${req.height}p but only got ${cap.height}p though the ` +
+              `device supports ${cap.maxHeight}p — capture may be constrained (CPU/driver/another app).`,
+          )
+        }
+      }
+    }
+    // getSettings() stabilises a moment after the track starts, so read now and
+    // again shortly after; also on publish / mute-unmute (device switch).
+    read()
+    const onEvt = () => setTimeout(read, 400)
+    try {
+      localParticipant.on('localTrackPublished', onEvt)
+      localParticipant.on('trackMuted', onEvt)
+      localParticipant.on('trackUnmuted', onEvt)
+    } catch { /* older SDK event names — the timed reads still cover us */ }
+    const t = setTimeout(read, 900)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+      try {
+        localParticipant.off('localTrackPublished', onEvt)
+        localParticipant.off('trackMuted', onEvt)
+        localParticipant.off('trackUnmuted', onEvt)
+      } catch { /* ignore */ }
+    }
+  }, [localParticipant, setCameraStats])
+  return null
 }
 
 export default function MeetRoomLivekit() {
@@ -792,6 +875,9 @@ function MeetRoom() {
       {/* Dev-only: reports the room's REAL E2EE status once the frame cryptor
           engages (stripped from production builds). */}
       <MediaE2EEStatus />
+      {/* Measures the camera's actual delivered resolution/fps and stores it for
+          honest quality reporting (never the requested value). */}
+      <CameraQualityProbe />
       {/* MeetingCryptoProvider shares the text-channel key with captions (deep
           in the tree). CaptionProvider must live inside <LiveKitRoom> (it uses
           the local participant + data channel). Both only render context

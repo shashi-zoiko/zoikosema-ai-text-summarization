@@ -2,9 +2,9 @@ import { Suspense, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  BarChart3, Building2, Calendar, CheckCircle2, ChevronDown, ChevronsUpDown,
-  CreditCard, HelpCircle, Home, LogOut, Menu, MessageSquareText,
-  PlayCircle, Search, Settings, ShieldCheck, Sparkles, Users, Video, X,
+  BarChart3, Calendar, CheckCircle2, ChevronDown, ChevronsUpDown,
+  ClipboardCheck, CreditCard, HelpCircle, Home, LogOut, Menu, MessageSquareText,
+  PlayCircle, Settings, ShieldCheck, Sparkles, Users, Video, X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
@@ -46,6 +46,7 @@ import Logo from './ui/Logo'
 import Spinner from './ui/Spinner'
 import ThemeToggle from './ui/ThemeToggle'
 import NotificationBell from './NotificationBell'
+import GlobalSearch from './GlobalSearch'
 
 /* ────────────────────────── nav config ──────────────────────────
  * `to` items are real routes (NavLink, with active state). `action`
@@ -57,16 +58,20 @@ const WORKSPACE_NAV = [
   { key: 'meetings',   label: 'Meetings',    icon: Video,             to: '/scheduled' },
   { key: 'chat',       label: 'Chat',        icon: MessageSquareText, to: '/chat', countTone: 'danger' },
   { key: 'calendar',   label: 'Calendar',    icon: Calendar,          go: '/scheduled' },
-  { key: 'summaries',  label: 'AI Summaries', icon: Sparkles,         go: '/dashboard', badge: { text: 'New' } },
+  { key: 'summaries',  label: 'AI Summaries', icon: Sparkles,         to: '/ai-summaries', badge: { text: 'Soon' } },
   { key: 'actions',    label: 'Actions',     icon: CheckCircle2,      to: '/actions' },
-  { key: 'recordings', label: 'Recordings',  icon: PlayCircle,        go: '/admin' },
+  { key: 'review-queue', label: 'Review Queue', icon: ClipboardCheck, to: '/review-queue' },
+  { key: 'recordings', label: 'Recordings',  icon: PlayCircle,        to: '/recordings', badge: { text: 'Soon' } },
 ]
 
+// NOTE: no 'Workspace' entry here — it used to point at /settings, the exact
+// same target as the footer Settings link (and the avatar menu's "Workspace
+// settings"), so it was a redundant duplicate route. The footer Settings link
+// is the universal entry (Manage is admin-only), so that's the one kept.
 const MANAGE_NAV = [
   { key: 'people',    label: 'People',    icon: Users,       to: '/admin' },
-  { key: 'workspace', label: 'Workspace', icon: Building2,   to: '/settings' },
   { key: 'security',  label: 'Security',  icon: ShieldCheck, to: '/security' },
-  { key: 'analytics', label: 'Analytics', icon: BarChart3,   to: '/dashboard' },
+  { key: 'analytics', label: 'Analytics', icon: BarChart3,   to: '/analytics', badge: { text: 'Soon' } },
   { key: 'billing',   label: 'Billing',   icon: CreditCard,  to: '/billing' },
 ]
 
@@ -160,6 +165,7 @@ function MenuItem({ icon, children, danger, onClick }) {
 export default function Layout() {
   const { user } = useAuth()
   const location = useLocation()
+  const navigate = useNavigate()
   const [navOpen, setNavOpen] = useState(false)
   const chatUnread = useChatUnread()
   const workspaceNav = WORKSPACE_NAV.map((item) =>
@@ -274,28 +280,11 @@ export default function Layout() {
             <Menu className="h-5 w-5" />
           </button>
 
-          {/* Search */}
-          <label className="flex h-11 min-w-0 max-w-[560px] flex-1 items-center gap-2.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-surface)] px-3.5 text-[var(--c-fg-muted)] transition focus-within:border-[var(--c-accent)] focus-within:shadow-[0_0_0_4px_var(--c-accent-ring)]">
-            <Search className="h-[18px] w-[18px] shrink-0" />
-            <input
-              type="search"
-              placeholder="Search meetings, messages, summaries or people…"
-              className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-[var(--c-fg)] outline-none placeholder:text-[var(--c-fg-muted)]"
-            />
-            <kbd className="hidden shrink-0 items-center gap-0.5 rounded-md border border-[var(--c-line-strong)] bg-[var(--c-bg-2)] px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--c-fg-muted)] sm:inline-flex">
-              ⌘ K
-            </kbd>
-          </label>
+          {/* Search — real quick-search over the user's meetings + chats */}
+          <GlobalSearch />
 
           <div className="ml-auto flex items-center gap-1.5">
             <ThemeToggle />
-            <button
-              type="button"
-              aria-label="Help"
-              className="grid h-10 w-10 place-items-center rounded-xl text-[var(--c-fg-dim)] transition hover:bg-[var(--c-bg-3)] hover:text-[var(--c-fg)]"
-            >
-              <HelpCircle className="h-[19px] w-[19px]" />
-            </button>
             <NotificationBell />
             <span aria-hidden className="mx-1 hidden h-7 w-px bg-[var(--c-line)] sm:block" />
             <UserMenu />

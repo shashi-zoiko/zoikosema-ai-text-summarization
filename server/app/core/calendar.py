@@ -1,6 +1,5 @@
 """Generate .ics (iCalendar) files for meeting invites."""
 from datetime import datetime, timedelta, timezone
-import uuid
 
 from app.core.config import get_settings
 
@@ -15,9 +14,27 @@ def generate_ics(
     organizer_email: str | None = None,
     attendee_email: str | None = None,
     description: str | None = None,
+    method: str = "REQUEST",
+    sequence: int = 0,
+    partstat: str | None = None,
+    rrule: str | None = None,
 ) -> bytes:
-    """Generate a .ics calendar event for a meeting.
-    Returns UTF-8 encoded bytes suitable for email attachment or download."""
+    """Generate a .ics (iTIP) calendar object for a meeting.
+
+    ``method`` selects the iTIP method (RFC 5546): "REQUEST" (invite/update),
+    "CANCEL" (meeting cancelled), or "REPLY" (attendee RSVP echoed back to the
+    organizer). ``partstat`` ("ACCEPTED"/"DECLINED") is only meaningful for
+    METHOD:REPLY. Returns UTF-8 encoded bytes suitable for email attachment.
+
+    UID is deterministic (derived from meeting_code, not random) so REQUEST,
+    CANCEL, and REPLY objects for the same meeting all reference the same
+    calendar entry — required for a receiving client to correlate them.
+    ``sequence`` should be non-decreasing across an event's revisions per
+    RFC 5546; this codebase has no reschedule-in-place flow yet (only
+    create/cancel), so callers pass a fixed 0 (initial) or 1 (cancel) rather
+    than tracking a persisted counter — revisit if/when in-place reschedule
+    ships.
+    """
 
     # The ORGANIZER must be a real, deliverable address: because this is a
     # METHOD:REQUEST invite, mail clients send the attendee's RSVP back to it.
@@ -26,7 +43,7 @@ def generate_ics(
     # configured, domain-verified sending identity.
     organizer_email = organizer_email or get_settings().mail_from_email
     uid_domain = organizer_email.split("@", 1)[-1] if "@" in organizer_email else "zoikosema.com"
-    uid = f"{uuid.uuid4()}@{uid_domain}"
+    uid = f"{meeting_code}@{uid_domain}"
     now = datetime.now(timezone.utc)
 
     start = scheduled_at if scheduled_at.tzinfo else scheduled_at.replace(tzinfo=timezone.utc)
@@ -36,15 +53,17 @@ def generate_ics(
         return dt.strftime("%Y%m%dT%H%M%SZ")
 
     desc = description or f"Join the meeting: {join_url}\\nMeeting code: {meeting_code}"
+    status = "CANCELLED" if method == "CANCEL" else "CONFIRMED"
 
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//ZoikoSema//EN",
         "CALSCALE:GREGORIAN",
-        "METHOD:REQUEST",
+        f"METHOD:{method}",
         "BEGIN:VEVENT",
         f"UID:{uid}",
+        f"SEQUENCE:{sequence}",
         f"DTSTAMP:{fmt(now)}",
         f"DTSTART:{fmt(start)}",
         f"DTEND:{fmt(end)}",
@@ -52,17 +71,30 @@ def generate_ics(
         f"DESCRIPTION:{_escape(desc)}",
         f"URL:{join_url}",
         f"ORGANIZER;CN={_escape(organizer_name)}:mailto:{organizer_email}",
-        "STATUS:CONFIRMED",
-        # 15-minute reminder
-        "BEGIN:VALARM",
-        "TRIGGER:-PT15M",
-        "ACTION:DISPLAY",
-        f"DESCRIPTION:Meeting \"{title}\" starts in 15 minutes",
-        "END:VALARM",
+        f"STATUS:{status}",
     ]
+    if rrule:
+        # Bare value, no leading "RRULE:" in the stored/passed string — this
+        # mirrors how native_events.py stores it (a plain "FREQ=...;..."
+        # value, same convention dateutil.rrule.rrulestr accepts directly).
+        lines.append(f"RRULE:{rrule}")
+
+    # A reminder alarm only makes sense on the original invite — a cancel or
+    # an attendee's reply shouldn't schedule a new one on the receiving side.
+    if method == "REQUEST":
+        lines += [
+            "BEGIN:VALARM",
+            "TRIGGER:-PT15M",
+            "ACTION:DISPLAY",
+            f"DESCRIPTION:Meeting \"{title}\" starts in 15 minutes",
+            "END:VALARM",
+        ]
 
     if attendee_email:
-        lines.append(f"ATTENDEE;RSVP=TRUE;CN={attendee_email}:mailto:{attendee_email}")
+        if method == "REPLY" and partstat:
+            lines.append(f"ATTENDEE;PARTSTAT={partstat};CN={attendee_email}:mailto:{attendee_email}")
+        else:
+            lines.append(f"ATTENDEE;RSVP=TRUE;CN={attendee_email}:mailto:{attendee_email}")
 
     lines += [
         "END:VEVENT",

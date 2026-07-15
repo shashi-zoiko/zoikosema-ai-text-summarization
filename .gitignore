@@ -26,6 +26,7 @@ server/test_zoiko.db
 # =========================
 .env
 .env.*
+!.env.example
 *.local
 
 # =========================
@@ -71,3 +72,19 @@ Thumbs.db
 # Misc
 # =========================
 *.cache
+
+# =========================
+# AI coding environment (Claude Code)
+# =========================
+# Shared, non-personal config lives in .claude/settings.json (committed).
+# Everything below is machine/user-specific and must not be committed.
+.claude/settings.local.json
+.claude/*.local.json
+.claude/shell-snapshots/
+.claude/projects/
+.claude/todos/
+CLAUDE.local.md
+.mcp.local.json
+
+# Local planning docs (dev-machine-local, never pushed)
+plans/

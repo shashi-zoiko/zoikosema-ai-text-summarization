@@ -1688,6 +1688,7 @@ const MessageBubble = memo(function MessageBubble({
             href={`${getApiBase()}${msg.file_url}`}
             target="_blank"
             rel="noopener noreferrer"
+            download={msg.file_name || true}
             className="-mx-0.5 mb-1 flex items-center gap-2.5 rounded-md border border-line bg-bg-3 px-3 py-2 text-inherit transition hover:border-[color-mix(in_srgb,var(--c-accent)_25%,transparent)] hover:bg-accent-soft"
           >
             <Icon name="file" size={18} />
@@ -1990,7 +1991,7 @@ function NewChannelModal({ onClose, onCreated }) {
                 key={u.id}
                 onClick={() => toggle(u.id)}
                 className={cn(
-                  'flex w-full items-center justify-start gap-3 rounded-md border-0 !px-2 !py-2 text-left !shadow-none transition',
+                  'flex w-full shrink-0 items-center justify-start gap-3 rounded-md border-0 !px-2 !py-2 text-left !shadow-none transition',
                   isSelected
                     ? '!bg-accent-soft'
                     : '!bg-transparent hover:!bg-[color-mix(in_srgb,var(--c-fg)_5%,transparent)]'
