@@ -121,7 +121,6 @@ def get_authorization_url(
 
 @router.get("/callback")
 async def oauth_callback(
-    provider: _PROVIDERS = Query(...),
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
@@ -137,8 +136,10 @@ async def oauth_callback(
     if not (code and state):
         return RedirectResponse(f"{return_url}?error=missing_code_or_state")
 
+    # `provider` is recovered from `state`, not a query param — Google/
+    # Microsoft's redirect back only ever carries `code`/`state`/`error`.
     try:
-        user_id = service.verify_oauth_state(state, expected_provider=provider)
+        user_id, provider = service.verify_oauth_state(state)
         user = db.get(User, user_id)
         if user is None:
             raise DomainError("User for this OAuth state no longer exists")

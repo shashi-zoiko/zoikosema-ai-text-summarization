@@ -14,6 +14,8 @@ import { cn } from '../lib/cn'
 const PROVIDERS = [
   { key: 'google_calendar', label: 'Google Calendar' },
   { key: 'microsoft_calendar', label: 'Outlook / Microsoft 365 Calendar' },
+  { key: 'gmail', label: 'Gmail' },
+  { key: 'microsoft_mail', label: 'Outlook Mail' },
 ]
 
 const ERROR_MESSAGES = {
