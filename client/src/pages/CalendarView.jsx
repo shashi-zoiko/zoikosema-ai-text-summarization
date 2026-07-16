@@ -15,10 +15,12 @@ import { useToast } from '../components/ui/Toast'
  * this is that page. Read-only sync'd events (Google, via GET
  * /calendar/events) and Sema-native events (GET /calendar/native-events,
  * with recurring series expanded via .../occurrences for the visible range)
- * are merged into one grid — Week (hour-by-hour, the default, like most
- * calendar apps' primary view) or Month. Not a clone of any one product,
- * but the click-a-slot-to-schedule interaction is table stakes for a
- * calendar: clicking an empty time slot (week view) or an empty day
+ * are merged into one grid — Day, Week (the default, like most calendar
+ * apps' primary view), or Month. Day and Week share the same hour-grid
+ * component (WeekGrid — it's generic over however many day columns it's
+ * given), just one day column instead of seven. Not a clone of any one
+ * product, but the click-a-slot-to-schedule interaction is table stakes for
+ * a calendar: clicking an empty time slot (day/week view) or an empty day
  * (month view) opens the create form with that date/time already filled
  * in — still fully editable, just not blank by default. Creating an event
  * goes through the same governed path everything else in Connect uses —
@@ -210,6 +212,9 @@ export default function CalendarView() {
   }, [])
 
   const viewDays = useMemo(() => {
+    if (mode === 'day') {
+      return [new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate())]
+    }
     if (mode === 'week') {
       const start = startOfWeek(cursor)
       return Array.from({ length: 7 }, (_, i) => addDays(start, i))
@@ -317,10 +322,17 @@ export default function CalendarView() {
   }, [events])
 
   const today = new Date()
-  const headerLabel = mode === 'week' ? weekLabel(viewDays) : cursor.toLocaleDateString([], { month: 'long', year: 'numeric' })
+  const headerLabel =
+    mode === 'day' ? cursor.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+    : mode === 'week' ? weekLabel(viewDays)
+    : cursor.toLocaleDateString([], { month: 'long', year: 'numeric' })
 
-  const goPrev = () => setCursor((c) => (mode === 'week' ? addDays(c, -7) : new Date(c.getFullYear(), c.getMonth() - 1, 1)))
-  const goNext = () => setCursor((c) => (mode === 'week' ? addDays(c, 7) : new Date(c.getFullYear(), c.getMonth() + 1, 1)))
+  const goPrev = () => setCursor((c) => (
+    mode === 'day' ? addDays(c, -1) : mode === 'week' ? addDays(c, -7) : new Date(c.getFullYear(), c.getMonth() - 1, 1)
+  ))
+  const goNext = () => setCursor((c) => (
+    mode === 'day' ? addDays(c, 1) : mode === 'week' ? addDays(c, 7) : new Date(c.getFullYear(), c.getMonth() + 1, 1)
+  ))
   const goToday = () => setCursor(new Date())
 
   const openCreateBlank = () => {
@@ -383,7 +395,7 @@ export default function CalendarView() {
           <div className="ml-1 text-[15px] font-semibold text-[var(--c-fg)]">{headerLabel}</div>
         </div>
         <div className="flex gap-1 rounded-[10px] border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] p-1">
-          {['week', 'month'].map((m) => (
+          {['day', 'week', 'month'].map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
@@ -408,7 +420,7 @@ export default function CalendarView() {
         <div className="flex items-center justify-center rounded-[14px] border border-[var(--c-line)] bg-[var(--c-bg-1)] py-16">
           <Spinner size="lg" />
         </div>
-      ) : mode === 'week' ? (
+      ) : mode === 'day' || mode === 'week' ? (
         <WeekGrid
           days={viewDays}
           eventsByDay={eventsByDay}
@@ -462,17 +474,18 @@ function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) 
   }, [])
 
   const hasAllDay = days.some((d) => (eventsByDay.get(d.toDateString()) || []).some((e) => e.allDay))
+  const gridCols = `52px repeat(${days.length}, 1fr)`
 
   return (
     <div className="overflow-hidden rounded-[14px] border border-[var(--c-line)] bg-[var(--c-bg-1)] shadow-sm">
-      <div className="grid grid-cols-[52px_repeat(7,1fr)] border-b border-[var(--c-line)]">
+      <div className="grid border-b border-[var(--c-line)]" style={{ gridTemplateColumns: gridCols }}>
         <div className="flex items-end justify-center pb-1 text-[9.5px] text-[var(--c-fg-muted)]">
           GMT{now.toLocaleTimeString([], { timeZoneName: 'shortOffset' }).split(' ').pop()?.replace('GMT', '') || ''}
         </div>
         {days.map((d) => (
           <div key={d.toISOString()} className="border-l border-[var(--c-line)] px-2 py-1.5 text-center">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">
-              {d.toLocaleDateString([], { weekday: 'short' })}
+              {d.toLocaleDateString([], { weekday: days.length === 1 ? 'long' : 'short' })}
             </div>
             <div className={cn(
               'mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-[13px] font-medium',
@@ -485,7 +498,7 @@ function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) 
       </div>
 
       {hasAllDay && (
-        <div className="grid grid-cols-[52px_repeat(7,1fr)] border-b border-[var(--c-line)]">
+        <div className="grid border-b border-[var(--c-line)]" style={{ gridTemplateColumns: gridCols }}>
           <div className="px-1 py-1 text-[9.5px] text-[var(--c-fg-muted)]">All day</div>
           {days.map((d) => (
             <div key={d.toISOString()} className="space-y-1 border-l border-[var(--c-line)] p-1">
@@ -504,7 +517,7 @@ function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) 
       )}
 
       <div ref={scrollRef} className="max-h-[600px] overflow-y-auto">
-        <div className="grid grid-cols-[52px_repeat(7,1fr)]">
+        <div className="grid" style={{ gridTemplateColumns: gridCols }}>
           <div>
             {hours.map((h) => (
               <div key={h} style={{ height: HOUR_H }} className="relative">
