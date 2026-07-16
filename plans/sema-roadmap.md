@@ -97,7 +97,7 @@ Detailed now (2026-07-16) that Phase 3 is code-complete — see per-slice plan f
 
 **Slices 1/2/4 bundled into one commit/branch (2026-07-16),** same reasoning as Phase 3 slices 5/8/10: `mail_service/api.py` grew endpoints for all three in the same working session, making a clean per-slice split impractical without risky manual patch surgery.
 
-**No client UI built for slices 1/2/4** — a real, disclosed gap, not silently skipped. All three are backend-complete and verified against real Postgres; a shared-mailbox delegate management screen, an assignment/notes UI in the Inbox reading pane, and an executive-briefing card (e.g. on the dashboard) are the natural next additions whenever client work on this phase is prioritized.
+**Client UI for slices 1/2/4 added 2026-07-16** (`sema/phase4-client-ui`, merged): a "Delegates" grant/revoke modal on connected Gmail/Outlook Mail rows (`CalendarIntegrations.jsx`), an "Assign & notes" action in the Inbox reading pane (`MailMessageActions.jsx`), and an Executive Briefing panel on the Home dashboard (`Home.jsx`). One disclosed limitation: the delegate-search box reuses the admin panel's existing user search, which is workspace-admin-only — a non-admin mailbox owner can still grant/revoke (the backend only requires owner-or-admin) but sees a plain "ask an admin" hint instead of search results. Verified: client build/lint clean, backend booted for real via uvicorn and correctly served/auth-gated every route these components call.
 
 **Phase 4 exit gate**: L4 incident-free 60 days on design-partner tenants; audit-ledger export accepted by enterprise compliance reviewer. Slice 3 (L4 itself) isn't built yet, so this gate can't start clocking regardless of the other three slices being done.
 
