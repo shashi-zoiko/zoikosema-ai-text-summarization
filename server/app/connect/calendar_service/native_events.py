@@ -188,6 +188,7 @@ async def create_event(
         return {"staged": True, "review_item": staged}
 
     event = _insert_version(db, ctx, version_chain_id=uuid7_str(), version_number=1, status="confirmed", **_parsed(payload))
+    _link_attendees_to_work_graph(db, ctx, event)
     env = _emit_mutated(db, ctx, event, action="created")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -212,6 +213,7 @@ async def create_event_from_approved_proposal(db: DbSession, ctx: TenantContext,
         db, ctx, version_chain_id=uuid7_str(), version_number=1, status="confirmed",
         **_parsed(p),
     )
+    _link_attendees_to_work_graph(db, ctx, event)
     env = _emit_mutated(db, ctx, event, action="created")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -305,6 +307,7 @@ async def update_event(
         db, ctx, version_chain_id=version_chain_id, version_number=version_number + 1,
         status="confirmed", recurrence_id=recurrence_id, **merged,
     )
+    _link_attendees_to_work_graph(db, ctx, event)
     env = _emit_mutated(db, ctx, event, action="updated")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -465,6 +468,32 @@ def _insert_version(
     db.add(event)
     db.flush()
     return event
+
+
+def _link_attendees_to_work_graph(db: DbSession, ctx: TenantContext, event: NativeCalendarEvent) -> None:
+    """Work Graph attendee_of edge (Person->CalendarEvent, spec §3.2), Phase
+    3 slice 7. Local (function-scoped) import: work_graph/service.py imports
+    this module (native_events) to resolve calendar_event nodes, so a
+    top-of-file import here would be a circular import at module load time
+    — deferring it until this function actually runs breaks the cycle since
+    both modules are already fully loaded by then. Only attendees who are
+    registered users resolve to a Person node; external attendees have no
+    Person node to link to yet, same as mail_service's sender-linking."""
+    from app.connect.work_graph import service as work_graph
+    from app.models.user import User
+
+    for attendee in event.attendees or []:
+        email = attendee.get("email")
+        if not email:
+            continue
+        user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            continue
+        work_graph.create_edge(
+            db, ctx, edge_type="attendee_of",
+            from_node_type="person", from_node_id=str(user.id),
+            to_node_type="calendar_event", to_node_id=event.version_chain_id,
+        )
 
 
 def _emit_mutated(db: DbSession, ctx: TenantContext, event: NativeCalendarEvent, *, action: str) -> EventEnvelope:

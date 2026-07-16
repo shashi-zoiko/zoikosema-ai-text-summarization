@@ -19,6 +19,7 @@ from app.connect.calendar_service.api import router as calendar_router
 from app.connect.policy_engine.api import router as policy_engine_router
 from app.connect.action_review.api import router as action_review_router
 from app.connect.mail_service.api import router as mail_router
+from app.connect.work_graph.api import router as work_graph_router
 
 router = APIRouter(prefix="/api/connect", tags=["connect-v3"])
 router.include_router(session_router)
@@ -32,5 +33,6 @@ router.include_router(calendar_router)
 router.include_router(policy_engine_router)
 router.include_router(action_review_router)
 router.include_router(mail_router)
+router.include_router(work_graph_router)
 
 __all__ = ["router"]
