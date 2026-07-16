@@ -26,6 +26,7 @@ def build_context(
         pkg.sources.append({
             "label": doc.source_label,
             "url": doc.source_url,
+            "title": doc.title,
             "relevance": doc.relevance_score,
         })
 

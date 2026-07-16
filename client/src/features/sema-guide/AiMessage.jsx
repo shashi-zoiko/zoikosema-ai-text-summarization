@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { CheckCircle, Sparkles, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
+import { CheckCircle, Sparkles, ChevronDown, ChevronRight, FileText } from 'lucide-react'
 import { cn } from '../../lib/cn'
 import { useSemaGuide } from './store'
 
@@ -10,8 +10,21 @@ function stripCitations(text) {
 }
 
 export default function AiMessage({ content, sources = [], verified = false, actionPreview = null }) {
-  const [sourcesOpen, setSourcesOpen] = useState(false)
+  const [showAllSources, setShowAllSources] = useState(false)
   const cleanContent = stripCitations(content)
+
+  const uniqueSources = useMemo(() => {
+    const seen = new Set()
+    return sources.filter((src) => {
+      const key = src.title || src.label || src.url
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [sources])
+
+  const visibleSources = showAllSources ? uniqueSources : uniqueSources.slice(0, 3)
+  const hasMore = uniqueSources.length > 3
 
   return (
     <div className="flex max-w-[90%] flex-col gap-1.5 self-start">
@@ -40,31 +53,32 @@ export default function AiMessage({ content, sources = [], verified = false, act
         </div>
       )}
 
-      {sources.length > 0 && (
+      {uniqueSources.length > 0 && (
         <div className="px-1">
-          <button
-            type="button"
-            onClick={() => setSourcesOpen(!sourcesOpen)}
-            className="flex items-center gap-1 text-[11px] font-medium text-[var(--c-accent)] transition hover:brightness-110"
-          >
-            {sourcesOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            References ({sources.length})
-          </button>
-          {sourcesOpen && (
-            <div className="mt-1.5 flex flex-col gap-1">
-              {sources.map((src, i) => (
-                <a
-                  key={i}
-                  href={src.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--c-line-strong)] bg-[var(--c-surface)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--c-fg)] transition hover:bg-[var(--c-bg-2)]"
-                >
-                  <ExternalLink className="h-3 w-3 shrink-0 text-[var(--c-accent)]" />
-                  <span className="line-clamp-1">{src.label}</span>
-                </a>
-              ))}
-            </div>
+          <span className="text-[11px] font-semibold text-[var(--c-fg-muted)]">References</span>
+          <div className="mt-1.5 flex flex-col gap-1">
+            {visibleSources.map((src, i) => (
+              <a
+                key={i}
+                href={src.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg border border-[var(--c-line-strong)] bg-[var(--c-surface)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--c-fg)] transition hover:bg-[var(--c-bg-2)]"
+              >
+                <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--c-accent)]" />
+                <span className="line-clamp-1">{src.title || src.label}</span>
+              </a>
+            ))}
+          </div>
+          {hasMore && (
+            <button
+              type="button"
+              onClick={() => setShowAllSources(!showAllSources)}
+              className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-[var(--c-accent)] transition hover:brightness-110"
+            >
+              {showAllSources ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              {showAllSources ? 'Show less' : `Show all references (${uniqueSources.length})`}
+            </button>
           )}
         </div>
       )}

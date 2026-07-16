@@ -119,6 +119,7 @@ class GuideChatRequest(BaseModel):
 class Source(BaseModel):
     label: str
     url: str | None = None
+    title: str = ""
 
 
 class ActionPreview(BaseModel):

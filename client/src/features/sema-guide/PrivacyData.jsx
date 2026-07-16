@@ -287,7 +287,7 @@ export default function PrivacyData() {
               const Icon = CONTROL_ICONS[ctl.icon] || Shield
               const isDelete = ctl.icon === 'trash'
               const actionId = ctl.id === 'download' ? 'download' : ctl.id === 'delete' ? 'delete' : null
-              const busy = isBusy(actionId)
+              const busy = actionId !== null && isBusy(actionId)
 
               const handleClick = () => {
                 if (ctl.id === 'download') handleDownload()
@@ -406,11 +406,32 @@ export default function PrivacyData() {
 
         {d.policy_links?.length > 0 && (
           <div className="flex flex-wrap gap-2 pb-4">
-            {d.policy_links.map((link, i) => (
-              <a key={i} href={link.url} className="inline-flex items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline" style={{ color: 'var(--c-accent)' }}>
-                <ExternalLink className="h-3 w-3" /> {link.label}
-              </a>
-            ))}
+            {d.policy_links.map((link, i) => {
+              const isUnavailable = !link.url || link.url === '#'
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    if (isUnavailable) {
+                      console.warn(`Policy link not yet available: ${link.label}`)
+                      toast({ variant: 'info', title: 'Unavailable', description: 'This page is currently unavailable.' })
+                    } else {
+                      window.open(link.url, '_blank', 'noopener,noreferrer')
+                    }
+                  }}
+                  aria-label={link.label}
+                  disabled={isUnavailable}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  style={{ color: isUnavailable ? 'var(--c-fg-muted)' : 'var(--c-accent)' }}
+                >
+                  <ExternalLink className="h-3 w-3" /> {link.label}
+                  {isUnavailable && (
+                    <span className="text-[10px] ml-0.5" style={{ color: 'var(--c-fg-muted)' }}>(coming soon)</span>
+                  )}
+                </button>
+              )
+            })}
           </div>
         )}
       </div>
