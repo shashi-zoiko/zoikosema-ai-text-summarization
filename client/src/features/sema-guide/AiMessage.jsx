@@ -9,7 +9,7 @@ function stripCitations(text) {
   return text.replace(/\s*\(#\d+\)/g, '').trim()
 }
 
-export default function AiMessage({ content, sources = [], verified = false, actionPreview = null, timestamp }) {
+export default function AiMessage({ content, sources = [], verified = false, actionPreview = null }) {
   const [sourcesOpen, setSourcesOpen] = useState(false)
   const cleanContent = stripCitations(content)
 

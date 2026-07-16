@@ -45,6 +45,13 @@ export default function Admin() {
       .finally(() => setLoading(false))
   }, [])
 
+  const updateGuidePolicy = async (key, value) => {
+    setGuidePolicy(prev => prev ? { ...prev, [key]: value } : prev)
+    try {
+      await api('/api/admin/sema-guide/policy', { method: 'PUT', body: { [key]: value } })
+    } catch {}
+  }
+
   const searchUsers = async () => {
     try {
       const res = await api(`/api/admin/users?search=${encodeURIComponent(search)}&limit=50`)
