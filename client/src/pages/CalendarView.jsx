@@ -130,6 +130,42 @@ function layoutDayEvents(sortedEvents) {
   return layout
 }
 
+const WEEKDAY_CODES = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA']
+
+// Builds a plain RFC 5545 RRULE string from the simplified "Repeat" picker —
+// the backend (recurrence.py, dateutil rrulestr) already speaks full RRULE
+// syntax, so there's no new format to invent here, just a friendlier set of
+// presets than asking someone to type FREQ=WEEKLY;BYDAY=... by hand.
+function buildRRule({ repeat, date, endType, endDate }) {
+  if (repeat === 'none' || !date) return null
+  const d = new Date(`${date}T00:00`)
+  let freqPart
+  switch (repeat) {
+    case 'daily': freqPart = 'FREQ=DAILY'; break
+    case 'weekly': freqPart = `FREQ=WEEKLY;BYDAY=${WEEKDAY_CODES[d.getDay()]}`; break
+    case 'weekdays': freqPart = 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR'; break
+    case 'monthly': freqPart = `FREQ=MONTHLY;BYMONTHDAY=${d.getDate()}`; break
+    case 'yearly': freqPart = 'FREQ=YEARLY'; break
+    default: return null
+  }
+  if (endType === 'on' && endDate) {
+    const until = new Date(`${endDate}T23:59:59`)
+    const untilStr = until.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
+    return `${freqPart};UNTIL=${untilStr}`
+  }
+  return freqPart
+}
+
+function repeatWeekdayLabel(date) {
+  if (!date) return 'week'
+  return new Date(`${date}T00:00`).toLocaleDateString([], { weekday: 'long' })
+}
+
+function repeatMonthDayLabel(date) {
+  if (!date) return 'month'
+  return new Date(`${date}T00:00`).getDate()
+}
+
 // Warn, don't block: overlap is a legitimate thing to want (a quick call
 // during a longer block, a double-booked room you're aware of) — this just
 // surfaces it before you confirm, same spirit as the week view now showing
@@ -660,6 +696,9 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
   const [startTime, setStartTime] = useState('09:00')
   const [endTime, setEndTime] = useState('09:30')
   const [location, setLocation] = useState('')
+  const [repeat, setRepeat] = useState('none')
+  const [endType, setEndType] = useState('never')
+  const [endDate, setEndDate] = useState('')
   const [saving, setSaving] = useState(false)
 
   const conflicts = useMemo(
@@ -674,6 +713,9 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
       setEndTime(initial?.endTime || '09:30')
       setTitle('')
       setLocation('')
+      setRepeat('none')
+      setEndType('never')
+      setEndDate('')
     }
     // Only re-sync when the modal opens — initial is a fresh object every
     // open, so it's read once here rather than kept as a dependency.
@@ -695,6 +737,7 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
           end_at,
           location: location.trim() || null,
           timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          rrule: buildRRule({ repeat, date, endType, endDate }),
         },
       })
       toast({
@@ -762,6 +805,12 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
             placeholder="Room 4 / video link"
           />
         </LabeledInput>
+        <RepeatPicker
+          repeat={repeat} setRepeat={setRepeat}
+          endType={endType} setEndType={setEndType}
+          endDate={endDate} setEndDate={setEndDate}
+          date={date}
+        />
         <ConflictWarning conflicts={conflicts} />
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
@@ -769,6 +818,50 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
         </div>
       </form>
     </Modal>
+  )
+}
+
+function RepeatPicker({ repeat, setRepeat, endType, setEndType, endDate, setEndDate, date }) {
+  return (
+    <div className="space-y-2">
+      <LabeledInput label="Repeat">
+        <select
+          value={repeat}
+          onChange={(e) => setRepeat(e.target.value)}
+          className="w-full bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+        >
+          <option value="none">Does not repeat</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly on {repeatWeekdayLabel(date)}</option>
+          <option value="weekdays">Every weekday (Mon–Fri)</option>
+          <option value="monthly">Monthly on day {repeatMonthDayLabel(date)}</option>
+          <option value="yearly">Annually</option>
+        </select>
+      </LabeledInput>
+      {repeat !== 'none' && (
+        <LabeledInput label="Ends">
+          <div className="flex items-center gap-3">
+            <select
+              value={endType}
+              onChange={(e) => setEndType(e.target.value)}
+              className="bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+            >
+              <option value="never">Never</option>
+              <option value="on">On date</option>
+            </select>
+            {endType === 'on' && (
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                required
+                className="flex-1 bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+              />
+            )}
+          </div>
+        </LabeledInput>
+      )}
+    </div>
   )
 }
 
