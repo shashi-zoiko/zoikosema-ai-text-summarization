@@ -185,6 +185,44 @@ function findConflicts(events, { date, startTime, endTime, excludeKey }) {
   )
 }
 
+// Per-event color tags. Purely a client-side organizational overlay — the
+// backend's NativeCalendarEvent has no color column, and adding one is a
+// bigger change than a personal visual-grouping feature warrants, so this
+// stores choices in localStorage instead (same pattern browsers use for
+// tab-group colors, etc.). Keyed by version_chain_id for native events —
+// NOT `id`, which is a new row per edit thanks to Sema's version-chain
+// model — and by the external sync's own key for Google events, both of
+// which stay stable for the event's whole life.
+const EVENT_COLOR_STORAGE_KEY = 'zoiko-calendar-event-colors'
+
+const EVENT_COLORS = [
+  { id: 'red', label: 'Tomato', hex: '#ef4444', bg: 'rgba(239,68,68,0.18)' },
+  { id: 'orange', label: 'Tangerine', hex: '#f97316', bg: 'rgba(249,115,22,0.18)' },
+  { id: 'amber', label: 'Banana', hex: '#eab308', bg: 'rgba(234,179,8,0.18)' },
+  { id: 'green', label: 'Basil', hex: '#22c55e', bg: 'rgba(34,197,94,0.18)' },
+  { id: 'teal', label: 'Peacock', hex: '#14b8a6', bg: 'rgba(20,184,166,0.18)' },
+  { id: 'blue', label: 'Blueberry', hex: '#3b82f6', bg: 'rgba(59,130,246,0.18)' },
+  { id: 'purple', label: 'Grape', hex: '#a855f7', bg: 'rgba(168,85,247,0.18)' },
+  { id: 'pink', label: 'Flamingo', hex: '#ec4899', bg: 'rgba(236,72,153,0.18)' },
+]
+
+function colorKeyFor(ev) {
+  return ev.source === 'native' ? `native-${ev.versionChainId}` : ev.key
+}
+
+function loadEventColors() {
+  try {
+    return JSON.parse(localStorage.getItem(EVENT_COLOR_STORAGE_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function colorStyleFor(colorId) {
+  const c = EVENT_COLORS.find((x) => x.id === colorId)
+  return c ? { background: c.bg, color: c.hex } : null
+}
+
 // Shared by the main view-range fetch and search's wider one-off fetch —
 // same merge (external sync + native events + recurring-series expansion)
 // either way, just a different [rangeStart, rangeEnd] window.
@@ -281,6 +319,7 @@ export default function CalendarView() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchPool, setSearchPool] = useState(null) // null = not fetched yet
   const [searchLoading, setSearchLoading] = useState(false)
+  const [eventColors, setEventColors] = useState(() => loadEventColors())
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000)
@@ -370,6 +409,17 @@ export default function CalendarView() {
     } catch (err) {
       toast({ variant: 'error', title: 'Could not delete event', description: err.message })
     }
+  }
+
+  const setEventColor = (ev, colorId) => {
+    const key = colorKeyFor(ev)
+    setEventColors((prev) => {
+      const next = { ...prev }
+      if (colorId) next[key] = colorId
+      else delete next[key]
+      localStorage.setItem(EVENT_COLOR_STORAGE_KEY, JSON.stringify(next))
+      return next
+    })
   }
 
   // Search covers a much wider window than whatever's currently on screen
@@ -471,6 +521,7 @@ export default function CalendarView() {
         <WeekGrid
           days={viewDays}
           eventsByDay={eventsByDay}
+          eventColors={eventColors}
           today={today}
           now={now}
           onSlotClick={openCreateForSlot}
@@ -481,6 +532,7 @@ export default function CalendarView() {
           days={viewDays}
           cursor={cursor}
           eventsByDay={eventsByDay}
+          eventColors={eventColors}
           today={today}
           onDayClick={openCreateForDay}
           onEventClick={setSelected}
@@ -489,6 +541,8 @@ export default function CalendarView() {
 
       <EventDetailModal
         event={selected}
+        colorId={selected ? eventColors[colorKeyFor(selected)] : null}
+        onColorChange={setEventColor}
         onClose={() => setSelected(null)}
         onEdit={(ev) => { setSelected(null); setEditing(ev) }}
         onDelete={onDelete}
@@ -512,7 +566,7 @@ export default function CalendarView() {
   )
 }
 
-function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) {
+function WeekGrid({ days, eventsByDay, eventColors, today, now, onSlotClick, onEventClick }) {
   const scrollRef = useRef(null)
   const hours = useMemo(() => Array.from({ length: 24 }, (_, i) => i), [])
 
@@ -606,6 +660,7 @@ function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) 
                   const height = ((endMin - startMin) / 60) * HOUR_H
                   const { col, colCount } = layout.get(ev.key) || { col: 0, colCount: 1 }
                   const widthPct = 100 / colCount
+                  const customColor = colorStyleFor(eventColors[colorKeyFor(ev)])
                   return (
                     <button
                       key={ev.key}
@@ -615,6 +670,7 @@ function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) 
                         left: `calc(${col * widthPct}% + 2px)`,
                         width: `calc(${widthPct}% - 4px)`,
                         zIndex: 20 + col,
+                        ...customColor,
                       }}
                       className={cn(
                         'absolute overflow-hidden rounded-[6px] px-1.5 py-0.5 text-left text-[11px] font-medium leading-tight',
@@ -639,7 +695,7 @@ function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) 
   )
 }
 
-function MonthGrid({ days, cursor, eventsByDay, today, onDayClick, onEventClick }) {
+function MonthGrid({ days, cursor, eventsByDay, eventColors, today, onDayClick, onEventClick }) {
   return (
     <div className="grid grid-cols-7 gap-px overflow-hidden rounded-[14px] border border-[var(--c-line)] bg-[var(--c-line)] shadow-sm">
       {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
@@ -675,6 +731,7 @@ function MonthGrid({ days, cursor, eventsByDay, today, onDayClick, onEventClick 
                   tabIndex={0}
                   onClick={(e) => { e.stopPropagation(); onEventClick(ev) }}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onEventClick(ev) } }}
+                  style={colorStyleFor(eventColors[colorKeyFor(ev)]) || undefined}
                   className={cn(
                     'block w-full truncate rounded-[6px] px-1.5 py-0.5 text-[11px] font-medium',
                     ev.source === 'native'
@@ -755,7 +812,7 @@ function SearchBox({ query, setQuery, results, loading, onFocus, onPick }) {
   )
 }
 
-function EventDetailModal({ event, onClose, onEdit, onDelete }) {
+function EventDetailModal({ event, colorId, onColorChange, onClose, onEdit, onDelete }) {
   const editable = event?.source === 'native'
   return (
     <Modal open={!!event} onClose={onClose} title={event?.title} size="sm">
@@ -767,6 +824,31 @@ function EventDetailModal({ event, onClose, onEdit, onDelete }) {
               {' · '}
               {event.start.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
             </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => onColorChange(event, null)}
+              title="Default color"
+              className={cn(
+                'h-5 w-5 rounded-full border-2',
+                !colorId ? 'border-[var(--c-fg)]' : 'border-transparent',
+              )}
+              style={{ background: 'var(--c-bg-3)' }}
+            />
+            {EVENT_COLORS.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => onColorChange(event, c.id)}
+                title={c.label}
+                className={cn(
+                  'h-5 w-5 rounded-full border-2',
+                  colorId === c.id ? 'border-[var(--c-fg)]' : 'border-transparent',
+                )}
+                style={{ background: c.hex }}
+              />
+            ))}
           </div>
           {event.location && (
             <div className="flex items-center gap-2">
