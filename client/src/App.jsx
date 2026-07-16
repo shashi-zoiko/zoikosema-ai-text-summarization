@@ -197,7 +197,7 @@ export default function App() {
           <Route path="/chat" element={<Chat />} />
           <Route path="/chat/:channelId" element={<Chat />} />
           <Route path="/actions" element={<Actions />} />
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/ai-summaries" element={<Dashboard />} />
           <Route path="/scheduled" element={<ScheduledMeetings />} />
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
@@ -213,7 +213,6 @@ export default function App() {
           <Route path="/billing" element={<RequireAdmin><Billing /></RequireAdmin>} />
           <Route path="/recordings" element={<ComingSoon feature="Recordings" description="A searchable archive of your meeting recordings will live here. Recording capture is being finalized." />} />
           <Route path="/analytics" element={<ComingSoon feature="Analytics" description="Usage trends, meeting insights, and workspace reports are on the way." />} />
-          <Route path="/ai-summaries" element={<ComingSoon feature="AI Summaries" description="Automatic recaps, action items, and highlights from your meetings are coming soon." />} />
           <Route path="/help-support" element={<HelpSupport />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
