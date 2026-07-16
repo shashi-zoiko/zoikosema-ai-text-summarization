@@ -63,7 +63,7 @@ Detailed now that Phase 2's actual shape (Policy Engine, Action Review Queue, na
 | 1 | Mail token vault + Gmail adapter | `sema/mail-gmail-connection` | done | [sema-p3-s1-mail-token-vault-gmail-adapter.md](./sema-p3-s1-mail-token-vault-gmail-adapter.md) |
 | 2 | Gmail read-only sync | `sema/gmail-readonly-sync` | done | [sema-p3-s2-gmail-readonly-sync.md](./sema-p3-s2-gmail-readonly-sync.md) |
 | 3 | Outlook Mail read-only sync | `sema/outlook-mail-readonly-sync` | done — real Azure AD/Outlook validated 2026-07-15 | [sema-p3-s3-outlook-mail-readonly-sync.md](./sema-p3-s3-outlook-mail-readonly-sync.md) |
-| 4 | Mail rendering/sanitization pipeline | `sema/mail-rendering-pipeline` | in progress | [sema-p3-s4-mail-rendering-pipeline.md](./sema-p3-s4-mail-rendering-pipeline.md) |
+| 4 | Mail rendering/sanitization pipeline | `sema/mail-rendering-pipeline` | done | [sema-p3-s4-mail-rendering-pipeline.md](./sema-p3-s4-mail-rendering-pipeline.md) |
 | 5 | Unified inbox UI + read-only search | `sema/unified-inbox-search` | planned | [sema-p3-s5-unified-inbox-search.md](./sema-p3-s5-unified-inbox-search.md) |
 | 6 | DLP MVP | `sema/dlp-mvp` | planned | [sema-p3-s6-dlp-mvp.md](./sema-p3-s6-dlp-mvp.md) |
 | 7 | Work Graph service MVP | `sema/work-graph-mvp` | planned | [sema-p3-s7-work-graph-mvp.md](./sema-p3-s7-work-graph-mvp.md) |
