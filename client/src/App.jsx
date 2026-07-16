@@ -28,6 +28,7 @@ const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx')
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
 const AccountSettings = lazy(() => import('./pages/AccountSettings.jsx'))
 const CalendarIntegrations = lazy(() => import('./pages/CalendarIntegrations.jsx'))
+const CalendarView = lazy(() => import('./pages/CalendarView.jsx'))
 const ReviewQueue = lazy(() => import('./pages/ReviewQueue.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
 const Billing = lazy(() => import('./pages/Billing.jsx'))
@@ -199,6 +200,7 @@ export default function App() {
           <Route path="/actions" element={<Actions />} />
           <Route path="/ai-summaries" element={<Dashboard />} />
           <Route path="/scheduled" element={<ScheduledMeetings />} />
+          <Route path="/calendar" element={<CalendarView />} />
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
           <Route path="/settings" element={<Settings />} />
