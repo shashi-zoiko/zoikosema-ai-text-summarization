@@ -64,7 +64,7 @@ function proxyRemoteImages(root) {
     if (!/^https?:\/\//i.test(originalSrc)) return // cid:/relative/already-stripped — leave as broken-image
     try {
       const res = await fetch(
-        `${apiBase}/api/mail/image-proxy?url=${encodeURIComponent(originalSrc)}`,
+        `${apiBase}/api/connect/mail/image-proxy?url=${encodeURIComponent(originalSrc)}`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {} },
       )
       if (!res.ok) return
@@ -89,7 +89,7 @@ export default function MailBodyView({ messageId }) {
 
   useEffect(() => {
     let cancelled = false
-    api(`/api/mail/messages/${encodeURIComponent(messageId)}/body`)
+    api(`/api/connect/mail/messages/${encodeURIComponent(messageId)}/body`)
       .then((data) => { if (!cancelled) setResult({ forId: messageId, body: data, error: null }) })
       .catch((err) => { if (!cancelled) setResult({ forId: messageId, body: null, error: err.message }) })
     return () => { cancelled = true }
