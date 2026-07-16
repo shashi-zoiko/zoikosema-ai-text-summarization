@@ -13,7 +13,9 @@ import { cn } from '../lib/cn'
 
 const PROVIDERS = [
   { key: 'google_calendar', label: 'Google Calendar' },
-  { key: 'microsoft_calendar', label: 'Outlook / Microsoft 365 Calendar' },
+  // Outlook/Microsoft 365 Calendar hidden from UI — costly to run; native Sema calendar is the direction.
+  // Backend/adapters kept intact, not deleted. Re-add the entry below to re-enable.
+  { key: 'microsoft_calendar', label: 'Outlook / Microsoft 365 Calendar', hidden: true },
   { key: 'gmail', label: 'Gmail' },
   { key: 'microsoft_mail', label: 'Outlook Mail' },
 ]
@@ -100,7 +102,7 @@ export default function CalendarIntegrations() {
         </div>
         <h1 className="text-[26px] font-bold tracking-[-0.03em] text-[var(--c-fg)]">Connected calendars</h1>
         <p className="mt-1 text-[14px] text-[var(--c-fg-muted)]">
-          Connect Google or Outlook so Sema can read your availability and show scheduling suggestions.
+          Connect Google so Sema can read your availability and show scheduling suggestions.
         </p>
       </header>
 
@@ -133,7 +135,7 @@ export default function CalendarIntegrations() {
             </div>
           )}
           {connections !== null &&
-            PROVIDERS.map((p) => {
+            PROVIDERS.filter((p) => !p.hidden).map((p) => {
               const conn = byProvider(p.key)
               const busy = busyProvider === p.key
               return (
