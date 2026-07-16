@@ -1,7 +1,7 @@
 # Phase 3 · Slice 4 — Mail Rendering / Sanitization Pipeline
 
 **Branch:** `sema/mail-rendering-pipeline`, cut from `feature/sema-calendar-mail`
-**Status:** planned
+**Status:** done — backend (body fetch, nh3 sanitize, SSRF-guarded image proxy) and client (MailBodyView, DOMPurify pass) built; wired into a temporary QA surface (`MailPreview.jsx`, not the real inbox); nh3 install + unit tests for sanitize/SSRF logic verified passing. The "Done when" acceptance run is now closed: a malicious-HTML corpus (script tag, tracking pixel, `onclick` + `javascript:` link, `data:` URI image, disallowed `position` style) was driven through the real running `/api/connect/mail/messages/{id}/body` endpoint (real DB row, monkeypatched Gmail network call only — no real Gmail account exists yet, OAuth app registration is still open per Phase 1's note) and observed rendering correctly in-browser: script never ran, tracking pixel neutralized, link inert, disallowed style stripped, allowed style preserved. Image-proxy SSRF guard verified live too — loopback/cloud-metadata targets rejected (400), a real public image proxied successfully (200, correct content-type). Found and fixed a real bug in the process: `MailBodyView.jsx` called `/api/mail/...` instead of the actually-mounted `/api/connect/mail/...`, which would have 404'd on every real body/image-proxy fetch. Attachment preview stays out of scope per plan.
 **Depends on:** Phase 3 slices 2-3 (synced mail metadata exists to attach body-fetch to)
 **Spec refs:** §10.2 (Mail Threat Surface), §19.2 (Security Testing)
 

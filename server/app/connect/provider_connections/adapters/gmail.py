@@ -20,8 +20,10 @@ from urllib.parse import urlencode
 import httpx
 
 from app.connect.provider_connections.adapters.shared import (
+    AttachmentMeta,
     ExchangedTokens,
     RawMessage,
+    RawMessageBody,
     RefreshedAccessToken,
 )
 from app.connect.shared.errors import Invalid
@@ -255,6 +257,58 @@ async def list_messages(
             if not page_token:
                 break
     return messages
+
+
+def _walk_mime_parts(payload: dict) -> tuple[str | None, str | None, list[AttachmentMeta]]:
+    """Depth-first walk of Gmail's nested MIME `payload` tree. Returns
+    (html, text, attachments) — first text/html and first text/plain part
+    found win (multipart/alternative puts the "best" version last per RFC,
+    but real-world messages are inconsistent enough that first-found is the
+    pragmatic choice here, same as most mail clients' actual behavior)."""
+    html: str | None = None
+    text: str | None = None
+    attachments: list[AttachmentMeta] = []
+
+    def visit(part: dict) -> None:
+        nonlocal html, text
+        mime_type = part.get("mimeType", "")
+        filename = part.get("filename") or ""
+        body = part.get("body", {})
+
+        if filename and body.get("attachmentId"):
+            attachments.append(AttachmentMeta(
+                provider_attachment_id=body["attachmentId"],
+                filename=filename,
+                size_bytes=int(body.get("size", 0)),
+                content_type=mime_type,
+            ))
+        elif mime_type == "text/html" and html is None and body.get("data"):
+            html = base64.urlsafe_b64decode(body["data"] + "==").decode("utf-8", errors="replace")
+        elif mime_type == "text/plain" and text is None and body.get("data"):
+            text = base64.urlsafe_b64decode(body["data"] + "==").decode("utf-8", errors="replace")
+
+        for sub_part in part.get("parts", []):
+            visit(sub_part)
+
+    visit(payload)
+    return html, text, attachments
+
+
+async def get_message_body(access_token: str, message_id: str) -> RawMessageBody:
+    """Full-format fetch for a single message — separate from list_messages'
+    metadata-only fetch since body content is materially larger and only
+    needed when a user actually opens a message (Phase 3 slice 4)."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(
+            f"{_GMAIL_API}/messages/{message_id}",
+            params={"format": "full"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if resp.status_code != 200:
+        raise Invalid(f"Gmail get message body failed: {resp.text}")
+    payload = resp.json().get("payload", {})
+    html, text, attachments = _walk_mime_parts(payload)
+    return RawMessageBody(html=html, text=text, attachments=attachments)
 
 
 async def send_message(

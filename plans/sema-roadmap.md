@@ -46,6 +46,9 @@ Governance substrate lands here because this is the first phase with an actual m
 | 6 | Scheduling Engine constraint solver (upgrades slice 1.4's L1 suggestions) | `sema/scheduling-engine-constraint-solver` | done | [sema-p2-s6-scheduling-engine-constraint-solver.md](./sema-p2-s6-scheduling-engine-constraint-solver.md) |
 | 7 | L2 event staging + confidential external placeholder | `sema/l2-event-staging-confidential-placeholder` | done | [sema-p2-s7-l2-event-staging-confidential-placeholder.md](./sema-p2-s7-l2-event-staging-confidential-placeholder.md) |
 | 8 | AI agenda builder / pre-meeting brief / follow-up, L1-L2 | `sema/ai-agenda-brief-followup` | done | [sema-p2-s8-ai-agenda-brief-followup.md](./sema-p2-s8-ai-agenda-brief-followup.md) |
+| 9 *(added later, not part of the original 8)* | Native calendar view UI (day/week/month grid, client-side) | `sema/native-calendar-ui` | next | see note below |
+
+**Slice 9 note (2026-07-16):** the original 8 slices built the full native-calendar backend (event CRUD/versioning, recurrence, governance, scheduling, AI agenda) but none of them included an actual frontend calendar view — `client/src/pages/CalendarIntegrations.jsx` is only the OAuth connect screen, not a calendar. The sidebar already reserves a "Calendar" nav slot (`client/src/components/Layout.jsx`, currently `go: '/scheduled'`, a placeholder pointing at Meetings) — this slice builds the real page behind it and repoints that nav link. Added to the roadmap after the fact, once the gap was noticed; branched straight off `main` (not off `feature/sema-calendar-mail`) since it has no dependency on the in-flight mail work and can merge to main independently, same precedent as PR #46 merging Phase 2's backend before its own beta exit-gate criteria closed.
 
 **Phase 2 exit gate** (spec §18): L2 Action Review live; event rollback restores versions and issues external updates; confidential external placeholder behaviour verified. Slices 2, 3, and 7 were the load-bearing ones for this gate — **all three are done and verified end-to-end** (commit `49a838cb`).
 
@@ -60,7 +63,7 @@ Detailed now that Phase 2's actual shape (Policy Engine, Action Review Queue, na
 | 1 | Mail token vault + Gmail adapter | `sema/mail-gmail-connection` | done | [sema-p3-s1-mail-token-vault-gmail-adapter.md](./sema-p3-s1-mail-token-vault-gmail-adapter.md) |
 | 2 | Gmail read-only sync | `sema/gmail-readonly-sync` | done | [sema-p3-s2-gmail-readonly-sync.md](./sema-p3-s2-gmail-readonly-sync.md) |
 | 3 | Outlook Mail read-only sync | `sema/outlook-mail-readonly-sync` | done — real Azure AD/Outlook validated 2026-07-15 | [sema-p3-s3-outlook-mail-readonly-sync.md](./sema-p3-s3-outlook-mail-readonly-sync.md) |
-| 4 | Mail rendering/sanitization pipeline | `sema/mail-rendering-pipeline` | planned | [sema-p3-s4-mail-rendering-pipeline.md](./sema-p3-s4-mail-rendering-pipeline.md) |
+| 4 | Mail rendering/sanitization pipeline | `sema/mail-rendering-pipeline` | done | [sema-p3-s4-mail-rendering-pipeline.md](./sema-p3-s4-mail-rendering-pipeline.md) |
 | 5 | Unified inbox UI + read-only search | `sema/unified-inbox-search` | planned | [sema-p3-s5-unified-inbox-search.md](./sema-p3-s5-unified-inbox-search.md) |
 | 6 | DLP MVP | `sema/dlp-mvp` | planned | [sema-p3-s6-dlp-mvp.md](./sema-p3-s6-dlp-mvp.md) |
 | 7 | Work Graph service MVP | `sema/work-graph-mvp` | planned | [sema-p3-s7-work-graph-mvp.md](./sema-p3-s7-work-graph-mvp.md) |
