@@ -829,6 +829,24 @@ function MeetRoom() {
     // LiveKitRoom will reconnect if it can, or stay disconnected.
   }, [navigate, code])
 
+  // STABLE onError — MUST be memoised. <LiveKitRoom>'s internal connect effect
+  // lists `onError` in its dependency array, so an inline arrow (new identity
+  // every render) made LiveKit re-run `room.connect()` on EVERY re-render of
+  // this component. MeetRoom re-renders constantly (chat/timer/waiting-room/
+  // reactions), so that produced a flood of "already connected to room" and
+  // churned the peer connection — leaving the data transport in a "PC manager
+  // is closed" state that broke caption publishData. Memoising it lets the room
+  // connect once and stay stable.
+  const handleError = useCallback((e) => {
+    // Recoverable device/permission errors → brief toast, not the fatal
+    // banner. The user keeps the call; they just have no camera/mic.
+    if (isDeviceError(e)) {
+      setToast({ kind: 'error', text: 'Camera or microphone not available — check your device and browser permissions.' })
+      return
+    }
+    setError(e?.message || String(e))
+  }, [setToast])
+
   const isHostOrCohost = isHost || myRole === 'co_host'
 
   // ── Render gates ─────────────────────────────────────────────────────────
@@ -861,15 +879,7 @@ function MeetRoom() {
       audio={audioOn}
       video={videoOn}
       onDisconnected={handleDisconnected}
-      onError={(e) => {
-        // Recoverable device/permission errors → brief toast, not the fatal
-        // banner. The user keeps the call; they just have no camera/mic.
-        if (isDeviceError(e)) {
-          setToast({ kind: 'error', text: 'Camera or microphone not available — check your device and browser permissions.' })
-          return
-        }
-        setError(e?.message || String(e))
-      }}
+      onError={handleError}
       className="zk-room-bg flex h-dvh w-screen flex-col overflow-hidden overscroll-none text-white"
       style={{ background: CANVAS }}
     >
