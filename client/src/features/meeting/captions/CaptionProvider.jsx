@@ -7,7 +7,7 @@ import { resolveIdentity } from './captionIdentity'
 import { getCaptionSource } from './sources'
 import useCaptionPresence from './captionPresence'
 import useCaptionTransport from './captionTransport'
-import { clog } from './captionDebug'
+import { clog, ctrace, traceEnabled } from './captionDebug'
 import { CaptionsControlContext, CaptionsLiveContext } from './useCaptions'
 
 // Constrained devices (phones/tablets) only RENDER captions by default; they
@@ -94,7 +94,23 @@ export default function CaptionProvider({ children }) {
   // React state, so only the overlay (via useSyncExternalStore) re-renders.
   const storeRef = useRef(null)
   if (!storeRef.current) {
-    storeRef.current = createCaptionStore({ config: CAPTION_CONFIG, onEvent: clog })
+    // Route store lifecycle events through BOTH the dev logger and the packet
+    // tracer. This is STAGE 9's outcome: 'transcript-partial'/'transcript-final'
+    // = accepted; 'caption-dropped' = rejected by the seq/dedup guard (carries
+    // seq + lastSeq so stale/duplicate rejections are visible, not silent).
+    storeRef.current = createCaptionStore({
+      config: CAPTION_CONFIG,
+      onEvent: (kind, data) => {
+        clog(kind, data)
+        if (kind === 'caption-dropped') {
+          ctrace('9-store-DROPPED', { from: data?.speakerId, seq: data?.seq, lastSeq: data?.lastSeq, reason: 'seq<=lastSeq (stale/dup)' })
+        } else if (kind === 'transcript-partial' || kind === 'transcript-final') {
+          ctrace(`9-store-ACCEPTED-${kind === 'transcript-final' ? 'final' : 'partial'}`, {
+            from: data?.speakerId, seq: data?.seq, uid: data?.utteranceId,
+          })
+        }
+      },
+    })
   }
   const store = storeRef.current
 
@@ -127,6 +143,22 @@ export default function CaptionProvider({ children }) {
       // noise has neither. Requiring letters alone silently dropped every
       // number-only fragment a speaker said, which reads as missing words.
       if (!/[\p{L}\p{N}]/u.test(clean)) return
+      // STAGE 9 (entry): the SINGLE ingest path for local echo AND remote
+      // frames. `isSelf` proves whether the store treats a frame as our own or
+      // a peer's — directly answering "is a caption being ignored because
+      // senderId is wrongly compared to the local identity?" (it isn't: both
+      // are ingested; only the speakerId key differs).
+      if (traceEnabled()) {
+        const selfId = localParticipant?.identity
+        ctrace('9-ingest-entry', {
+          from: frame.speakerId,
+          self: selfId,
+          isSelf: frame.speakerId === selfId,
+          seq: frame.seq,
+          uid: frame.utteranceId,
+          final: !!frame.isFinal,
+        })
+      }
       store.ingest({ ...frame, text: clean })
       if (frame.isFinal) {
         setTranscript((lines) => {
@@ -150,7 +182,7 @@ export default function CaptionProvider({ children }) {
         })
       }
     },
-    [store],
+    [store, localParticipant],
   )
 
   const { publish } = useCaptionTransport({ onCaption: ingest })
@@ -159,9 +191,19 @@ export default function CaptionProvider({ children }) {
   const lastInterimRef = useRef(0)
   const onLocalResult = useCallback(
     ({ text, isFinal, confidence, seq, utteranceId }) => {
-      if (!isMicrophoneEnabled) return // hard guard: never emit while muted
+      // ── STAGE 2: CaptionProvider received a local transcript ──────────────
+      ctrace('2-provider-local', {
+        self: localParticipant?.identity, seq, uid: utteranceId, final: !!isFinal, mic: !!isMicrophoneEnabled,
+      })
+      if (!isMicrophoneEnabled) {
+        ctrace('2-DROP-mic-muted', { self: localParticipant?.identity, seq })
+        return // hard guard: never emit while muted
+      }
       const now = Date.now()
-      if (!isFinal && now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) return
+      if (!isFinal && now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) {
+        ctrace('2-DROP-interim-throttled', { self: localParticipant?.identity, seq })
+        return
+      }
       lastInterimRef.current = now
       const identity = resolveIdentity(localParticipant)
       ingest({ speakerId: identity.speakerId, identity, text, isFinal, confidence, seq, utteranceId, lang: CAPTION_CONFIG.lang })

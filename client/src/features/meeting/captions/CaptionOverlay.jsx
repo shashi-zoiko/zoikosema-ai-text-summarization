@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CAPTION_CONFIG } from './config'
 import { useCaptionControls, useLiveCaptions } from './useCaptions'
 import CaptionBubble from './CaptionBubble'
 import { useRoomStore } from '../state/roomStore.js'
+import { ctrace, traceEnabled } from './captionDebug'
 
 /**
  * Bottom-centre caption stack, above the toolbar (Meet placement). Shows one
@@ -33,6 +34,20 @@ export default function CaptionOverlay() {
         .slice(-CAPTION_CONFIG.maxSpeakers),
     [bySpeaker],
   )
+
+  // ── STAGE 10: what the overlay is about to render (and why nothing shows) ──
+  useEffect(() => {
+    if (!traceEnabled()) return
+    const allSpeakers = Object.keys(bySpeaker)
+    ctrace('10-overlay-render', {
+      enabled: !!enabled,
+      inStore: allSpeakers.length,
+      storeKeys: allSpeakers.join('|') || '(empty)',
+      visible: visible.length,
+      willRender: !!enabled && visible.length > 0,
+      speakers: visible.map((c) => `${c.speakerId}:${JSON.stringify((c.text || '').slice(0, 16))}`).join(' , ') || '(none)',
+    })
+  }, [bySpeaker, visible, enabled])
 
   // Captions RENDER only when the local user has CC on. Capture may still be
   // running for other viewers (see CaptionProvider) — that's independent.

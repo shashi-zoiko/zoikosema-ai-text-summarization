@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useLocalParticipant, useSpeakingParticipants } from '@livekit/components-react'
 import useSpeechRecognition, { speechRecognitionSupported } from '../useSpeechRecognition'
 import { CAPTION_CONFIG } from '../config'
-import { clog } from '../captionDebug'
+import { clog, ctrace } from '../captionDebug'
 
 export const supported = speechRecognitionSupported
 
@@ -71,7 +71,10 @@ export default function useWebSpeechSource({ active, onResult, onError }) {
 
   const handle = useCallback(({ text, isFinal, confidence }) => {
     // Gate: drop anything captured while we're not the one speaking.
-    if (CAPTION_CONFIG.speakingGateEnabled && !gateOpenRef.current) return
+    if (CAPTION_CONFIG.speakingGateEnabled && !gateOpenRef.current) {
+      ctrace('1-speech-GATED', { self: localId, final: !!isFinal, len: text?.length || 0 })
+      return
+    }
 
     // With the gate off, fall back to gap-based segmentation so a new sentence
     // after a pause still starts a fresh line.
@@ -82,6 +85,14 @@ export default function useWebSpeechSource({ active, onResult, onError }) {
     }
 
     seqRef.current += 1
+    // ── STAGE 1: SpeechRecognition emitted a (gated) transcript fragment ────
+    ctrace('1-speech-emitted', {
+      self: localId,
+      seq: seqRef.current,
+      uid: utteranceRef.current,
+      final: !!isFinal,
+      len: text?.length || 0,
+    })
     onResultRef.current?.({
       text,
       isFinal,
@@ -89,7 +100,7 @@ export default function useWebSpeechSource({ active, onResult, onError }) {
       seq: seqRef.current,
       utteranceId: utteranceRef.current,
     })
-  }, [])
+  }, [localId])
 
   useSpeechRecognition(active, {
     lang: CAPTION_CONFIG.lang,
