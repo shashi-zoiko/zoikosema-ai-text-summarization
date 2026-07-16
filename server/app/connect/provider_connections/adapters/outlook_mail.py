@@ -28,8 +28,10 @@ from urllib.parse import urlencode
 import httpx
 
 from app.connect.provider_connections.adapters.shared import (
+    AttachmentMeta,
     ExchangedTokens,
     RawMessage,
+    RawMessageBody,
     RefreshedAccessToken,
 )
 from app.connect.shared.errors import Invalid
@@ -233,3 +235,44 @@ async def list_messages(
             items.extend(more_items)
 
     return [_item_to_raw_message(item, delta_link=delta_link) for item in items]
+
+
+async def get_message_body(access_token: str, message_id: str) -> RawMessageBody:
+    """Single-message full-body fetch (Phase 3 slice 4). Unlike Gmail, Graph
+    normalizes the body server-side — `body.contentType` is always "html" or
+    "text", no MIME tree to walk. Attachment metadata is a separate call
+    ($select excludes contentBytes so bytes are never pulled into memory
+    server-side — metadata-only is this slice's whole point)."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        msg_resp = await client.get(
+            f"{_GRAPH}/me/messages/{message_id}",
+            params={"$select": "body"},
+            headers=headers,
+        )
+        if msg_resp.status_code != 200:
+            raise Invalid(f"Graph get message body failed: {msg_resp.text}")
+        body = msg_resp.json().get("body") or {}
+        content_type = (body.get("contentType") or "").lower()
+        content = body.get("content")
+
+        att_resp = await client.get(
+            f"{_GRAPH}/me/messages/{message_id}/attachments",
+            params={"$select": "id,name,size,contentType"},
+            headers=headers,
+        )
+        if att_resp.status_code != 200:
+            raise Invalid(f"Graph list attachments failed: {att_resp.text}")
+        attachments = [
+            AttachmentMeta(
+                provider_attachment_id=a["id"],
+                filename=a.get("name", ""),
+                size_bytes=int(a.get("size", 0)),
+                content_type=a.get("contentType", ""),
+            )
+            for a in att_resp.json().get("value", [])
+        ]
+
+    html = content if content_type == "html" else None
+    text = content if content_type == "text" else None
+    return RawMessageBody(html=html, text=text, attachments=attachments)

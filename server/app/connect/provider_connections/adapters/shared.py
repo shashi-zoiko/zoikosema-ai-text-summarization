@@ -56,3 +56,26 @@ class RawMessage:
     received_at: datetime
     history_id: str | None
     label_ids: list[str]
+
+
+@dataclass(frozen=True)
+class AttachmentMeta:
+    """Metadata only — no bytes. Phase 3 slice 4 surfaces this so the client
+    can show what's attached; download/preview is explicitly deferred to a
+    later slice pending malware-scanning integration (spec's Build/Integrate
+    table treats scanning as an Integrate-a-vendor item, not build-here)."""
+    provider_attachment_id: str
+    filename: str
+    size_bytes: int
+    content_type: str
+
+
+@dataclass(frozen=True)
+class RawMessageBody:
+    """Phase 3 slice 4 — a single message's body, provider-normalized but
+    NOT YET sanitized: `html` here is raw provider output. mail_service is
+    the one place that sanitizes it (nh3) before it ever leaves the server —
+    adapters and this dataclass only handle provider wire-format mapping."""
+    html: str | None
+    text: str | None
+    attachments: list[AttachmentMeta]

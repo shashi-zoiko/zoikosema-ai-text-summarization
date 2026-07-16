@@ -6,6 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi import HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
@@ -34,6 +35,19 @@ class MailMessageOut(BaseModel):
     sender_domain: str
     received_at: datetime
     label_ids: list[str]
+
+
+class MailAttachmentOut(BaseModel):
+    provider_attachment_id: str
+    filename: str
+    size_bytes: int
+    content_type: str
+
+
+class MailMessageBodyOut(BaseModel):
+    html: str | None
+    text: str | None
+    attachments: list[MailAttachmentOut]
 
 
 def _to_out(m) -> MailMessageOut:
@@ -71,3 +85,30 @@ def list_mail_messages(
     ctx: TenantContext = Depends(_ctx),
 ):
     return [_to_out(m) for m in service.list_mail_messages(db, ctx, time_min=time_min)]
+
+
+@router.get("/messages/{message_id}/body", response_model=MailMessageBodyOut)
+async def get_mail_message_body(
+    message_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        return await service.get_message_body(db, ctx, message_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+@router.get("/image-proxy")
+async def image_proxy(
+    url: str = Query(...),
+    # Auth-gated (not a public open proxy) — same _ctx dependency as every
+    # other mail endpoint, even though the response doesn't depend on tenant
+    # data, to avoid this becoming an anonymous SSRF/abuse relay.
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        content, content_type = await service.fetch_proxied_image(url)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
