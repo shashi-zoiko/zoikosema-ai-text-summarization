@@ -35,6 +35,8 @@ from app.connect.shared.errors import Invalid, NotFound
 from app.connect.shared.ids import uuid7_str
 from app.connect.shared.telemetry import get_correlation_id
 from app.connect.shared.tenant import TenantContext
+from app.connect.work_graph import service as work_graph
+from app.models.user import User
 
 DEFAULT_SYNC_WINDOW_PAST = timedelta(days=30)
 
@@ -81,6 +83,23 @@ def _sanitize_mail_html(html: str) -> str:
         filter_style_properties=_MAIL_HTML_STYLE_PROPERTIES,
         url_schemes=_MAIL_HTML_URL_SCHEMES,
         link_rel=None,  # we allowlist "rel" on <a> ourselves; don't let nh3 also manage it
+    )
+
+
+def _link_sender_to_work_graph(db: DbSession, ctx: TenantContext, *, message_id: str, from_email: str) -> None:
+    """Work Graph sent_by edge (Email->Person, spec §3.2), Phase 3 slice 7.
+    Only registered users resolve to a Person node — an external sender has
+    no Person node to link to yet (spec's node table has no "external
+    contact" node type), so this is silently a no-op for them, not an
+    error. No per-edge audit/event — see work_graph/service.py's module
+    docstring for why."""
+    sender = db.query(User).filter(User.email == from_email).first()
+    if sender is None:
+        return
+    work_graph.create_edge(
+        db, ctx, edge_type="sent_by",
+        from_node_type="email", from_node_id=message_id,
+        to_node_type="person", to_node_id=str(sender.id),
     )
 
 
@@ -152,9 +171,11 @@ async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict
             existing.history_id = raw.history_id
             existing.label_ids = raw.label_ids
             updated += 1
+            message_id = existing.id
         else:
+            message_id = uuid7_str()
             db.add(MailMessage(
-                id=uuid7_str(),
+                id=message_id,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 provider_connection_id=connection.id,
@@ -172,6 +193,8 @@ async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict
                 correlation_id=get_correlation_id(),
             ))
             created += 1
+
+        _link_sender_to_work_graph(db, ctx, message_id=message_id, from_email=raw.from_email)
 
         if raw.history_id and (next_history_id is None or raw.history_id > next_history_id):
             next_history_id = raw.history_id

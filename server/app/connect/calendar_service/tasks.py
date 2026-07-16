@@ -36,6 +36,23 @@ def create_task(
         correlation_id=get_correlation_id(),
     )
     db.add(task)
+    db.flush()
+
+    if source_event_id:
+        # Work Graph derived_from edge (Task->CalendarEvent, spec §3.2),
+        # Phase 3 slice 7 — written at creation time now that Work Graph
+        # exists, so this task never needs the backfill that covers tasks
+        # created before this slice (see work_graph/service.py's
+        # backfill_task_derived_from_edges). Local import: work_graph/
+        # service.py imports this module at top level to resolve task
+        # nodes, so importing it back at module scope here would cycle.
+        from app.connect.work_graph import service as work_graph
+        work_graph.create_edge(
+            db, ctx, edge_type="derived_from",
+            from_node_type="task", from_node_id=task.id,
+            to_node_type="calendar_event", to_node_id=source_event_id,
+        )
+
     db.commit()
     return task
 

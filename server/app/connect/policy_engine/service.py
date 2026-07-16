@@ -1,10 +1,13 @@
 """Policy Engine MVP — autonomy ceiling versioning + effective-autonomy resolution.
 
 Spec §4.1: effective autonomy is the minimum of every applicable input,
-computed deterministically with the resolved inputs logged. This MVP scopes
-to the Calendar category only (Mail's DLP/recipient-risk inputs have no real
-signal source until Mail Connect exists — Phase 3, see spec §1.3 doctrine
-test and architecture/SEMA_CALENDAR_MAIL_CONTEXT.md §4).
+computed deterministically with the resolved inputs logged. Originally
+scoped to the Calendar category only; "mail" joined in Phase 3 slice 9
+(mail send, L3) once that had a real mutation to govern. Mail's DLP input
+still has no real signal source (Phase 3 slice 6, DLP MVP, isn't built
+yet — see spec §1.3 doctrine test and architecture/
+SEMA_CALENDAR_MAIL_CONTEXT.md §4), so it stays in `_UNIMPLEMENTED_INPUTS`
+below regardless of category.
 
 Inputs with a real signal today: tenant category ceiling (this module's own
 versioned table) and workspace policy (same table — no separate

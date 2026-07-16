@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timedelta, timezone
+from email.mime.text import MIMEText
 from urllib.parse import urlencode
 
 import httpx
@@ -308,3 +309,40 @@ async def get_message_body(access_token: str, message_id: str) -> RawMessageBody
     payload = resp.json().get("payload", {})
     html, text, attachments = _walk_mime_parts(payload)
     return RawMessageBody(html=html, text=text, attachments=attachments)
+
+
+async def send_message(
+    access_token: str, *, to_emails: list[str], subject: str, body_text: str,
+    thread_id: str | None = None, in_reply_to_message_id: str | None = None,
+) -> str:
+    """Gmail messages.send (Phase 3 slice 9) — the first WRITE this adapter
+    makes; every function above is read-only per slice 1's own scope. This
+    is a real, external, non-code dependency (spec §7.3): the gmail.send
+    scope is a widening beyond _SCOPE above, and Google requires a fresh
+    consent grant per connection — an existing gmail.readonly connection's
+    stored access_token will 403 here until the user reconnects with the
+    wider scope. That reconnect flow (adding gmail.send to
+    build_authorization_url) is a deliberate follow-up, not built here, so
+    existing read-only connections aren't silently re-scoped without the
+    user's own re-consent.
+    """
+    mime = MIMEText(body_text)
+    mime["To"] = ", ".join(to_emails)
+    mime["Subject"] = subject
+    if in_reply_to_message_id:
+        mime["In-Reply-To"] = in_reply_to_message_id
+        mime["References"] = in_reply_to_message_id
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii").rstrip("=")
+
+    body: dict = {"raw": raw}
+    if thread_id:
+        body["threadId"] = thread_id
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            f"{_GMAIL_API}/messages/send", json=body,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if resp.status_code not in (200, 202):
+        raise Invalid(f"Gmail send failed: {resp.text}")
+    return resp.json().get("id", "")
