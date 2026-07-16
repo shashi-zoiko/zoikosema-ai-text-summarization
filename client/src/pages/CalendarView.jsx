@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Search, Trash2, Users2, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import {
+  AlertTriangle, ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Search, Trash2, Users2, Video, X,
+} from 'lucide-react'
 import { api } from '../api/client'
+import { meetingPath, meetingUrl } from '../lib/meetingUrls.js'
 import { cn } from '../lib/cn'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
@@ -221,6 +225,18 @@ function loadEventColors() {
 function colorStyleFor(colorId) {
   const c = EVENT_COLORS.find((x) => x.id === colorId)
   return c ? { background: c.bg, color: c.hex } : null
+}
+
+// "Add Zoiko Meet video call" stores the real meeting's join link in the
+// event's location field — there's no dedicated column for it (calendar
+// events and scheduled meetings are separate systems), and the location
+// field is free text anyway, so a join link found there is enough to treat
+// this event as having a video call attached. Meeting codes are always
+// xxx-xxxx-xxx (see server/app/api/meetings.py's _generate_code).
+const MEETING_CODE_RE = /\b([a-z]{3}-[a-z]{4}-[a-z]{3})\b/
+
+function extractMeetingCode(location) {
+  return location?.match(MEETING_CODE_RE)?.[1] || null
 }
 
 // Shared by the main view-range fetch and search's wider one-off fetch —
@@ -813,7 +829,9 @@ function SearchBox({ query, setQuery, results, loading, onFocus, onPick }) {
 }
 
 function EventDetailModal({ event, colorId, onColorChange, onClose, onEdit, onDelete }) {
+  const navigate = useNavigate()
   const editable = event?.source === 'native'
+  const meetingCode = extractMeetingCode(event?.location)
   return (
     <Modal open={!!event} onClose={onClose} title={event?.title} size="sm">
       {event && (
@@ -825,6 +843,11 @@ function EventDetailModal({ event, colorId, onColorChange, onClose, onEdit, onDe
               {event.start.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
             </span>
           </div>
+          {meetingCode && (
+            <Button variant="primary" onClick={() => navigate(meetingPath(meetingCode))} className="w-full">
+              <Video className="h-4 w-4" /> Join Zoiko Meet
+            </Button>
+          )}
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
@@ -896,6 +919,7 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
   const [endTime, setEndTime] = useState('09:30')
   const [location, setLocation] = useState('')
   const [attendees, setAttendees] = useState([])
+  const [addVideoCall, setAddVideoCall] = useState(false)
   const [repeat, setRepeat] = useState('none')
   const [endType, setEndType] = useState('never')
   const [endDate, setEndDate] = useState('')
@@ -914,6 +938,7 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
       setTitle('')
       setLocation('')
       setAttendees([])
+      setAddVideoCall(false)
       setRepeat('none')
       setEndType('never')
       setEndDate('')
@@ -930,13 +955,28 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
     try {
       const start_at = new Date(`${date}T${startTime}`).toISOString()
       const end_at = new Date(`${date}T${endTime}`).toISOString()
+
+      let finalLocation = location.trim() || null
+      if (addVideoCall) {
+        const meeting = await api('/api/meetings', {
+          method: 'POST',
+          body: {
+            title: title.trim(),
+            scheduled_at: start_at,
+            timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          },
+        })
+        const joinUrl = meetingUrl(meeting.code)
+        finalLocation = finalLocation ? `${finalLocation} — ${joinUrl}` : joinUrl
+      }
+
       const result = await api('/api/connect/calendar/native-events', {
         method: 'POST',
         body: {
           title: title.trim(),
           start_at,
           end_at,
-          location: location.trim() || null,
+          location: finalLocation,
           attendees,
           timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
           rrule: buildRRule({ repeat, date, endType, endDate }),
@@ -1007,6 +1047,16 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
             placeholder="Room 4 / video link"
           />
         </LabeledInput>
+        <label className="flex items-center gap-2 text-[13px] text-[var(--c-fg)]">
+          <input
+            type="checkbox"
+            checked={addVideoCall}
+            onChange={(e) => setAddVideoCall(e.target.checked)}
+            className="h-4 w-4 accent-[var(--c-accent)]"
+          />
+          <Video className="h-4 w-4 text-[var(--c-fg-muted)]" />
+          Add Zoiko Meet video call
+        </label>
         <AttendeesInput attendees={attendees} setAttendees={setAttendees} />
         <RepeatPicker
           repeat={repeat} setRepeat={setRepeat}
@@ -1126,12 +1176,15 @@ function EditEventModal({ event, events, onClose, onSaved, toast }) {
   const [endTime, setEndTime] = useState('09:30')
   const [location, setLocation] = useState('')
   const [attendees, setAttendees] = useState([])
+  const [addVideoCall, setAddVideoCall] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const conflicts = useMemo(
     () => findConflicts(events, { date, startTime, endTime, excludeKey: event?.key }),
     [events, date, startTime, endTime, event],
   )
+
+  const hasVideoCall = !!extractMeetingCode(event?.location)
 
   useEffect(() => {
     if (event) {
@@ -1141,6 +1194,7 @@ function EditEventModal({ event, events, onClose, onSaved, toast }) {
       setEndTime(hhmm(event.end.getHours(), event.end.getMinutes()))
       setLocation(event.location || '')
       setAttendees((event.attendees || []).filter((a) => a.email))
+      setAddVideoCall(false)
     }
   }, [event])
 
@@ -1151,13 +1205,28 @@ function EditEventModal({ event, events, onClose, onSaved, toast }) {
     try {
       const start_at = new Date(`${date}T${startTime}`).toISOString()
       const end_at = new Date(`${date}T${endTime}`).toISOString()
+
+      let finalLocation = location.trim() || null
+      if (addVideoCall && !hasVideoCall) {
+        const meeting = await api('/api/meetings', {
+          method: 'POST',
+          body: {
+            title: title.trim(),
+            scheduled_at: start_at,
+            timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          },
+        })
+        const joinUrl = meetingUrl(meeting.code)
+        finalLocation = finalLocation ? `${finalLocation} — ${joinUrl}` : joinUrl
+      }
+
       await api(nativeEventPath(event), {
         method: 'PATCH',
         body: {
           title: title.trim(),
           start_at,
           end_at,
-          location: location.trim() || null,
+          location: finalLocation,
           attendees,
           timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
@@ -1226,6 +1295,22 @@ function EditEventModal({ event, events, onClose, onSaved, toast }) {
             placeholder="Room 4 / video link"
           />
         </LabeledInput>
+        {hasVideoCall ? (
+          <p className="flex items-center gap-1.5 text-[12px] text-[var(--c-fg-muted)]">
+            <Video className="h-3.5 w-3.5" /> Video call already attached — join it from the calendar view.
+          </p>
+        ) : (
+          <label className="flex items-center gap-2 text-[13px] text-[var(--c-fg)]">
+            <input
+              type="checkbox"
+              checked={addVideoCall}
+              onChange={(e) => setAddVideoCall(e.target.checked)}
+              className="h-4 w-4 accent-[var(--c-accent)]"
+            />
+            <Video className="h-4 w-4 text-[var(--c-fg-muted)]" />
+            Add Zoiko Meet video call
+          </label>
+        )}
         <AttendeesInput attendees={attendees} setAttendees={setAttendees} />
         <ConflictWarning conflicts={conflicts} />
         <div className="flex justify-end gap-2 pt-2">
