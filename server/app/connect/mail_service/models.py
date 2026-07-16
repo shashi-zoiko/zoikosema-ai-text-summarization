@@ -66,3 +66,45 @@ class MailSend(ConnectBase):
     correlation_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+
+ASSIGNMENT_STATUSES = ("open", "done")
+
+
+class MailAssignment(ConnectBase):
+    """connect_mail_assignments — DDL is migrations/connect_v3_019_mail_assignments.sql.
+
+    Phase 4 slice 2. Exactly one current assignment per message (reassigned
+    in place, not versioned) — see assignments.py's module docstring for
+    the spec §1.2 non-goal boundary this table must stay inside.
+    """
+    __tablename__ = "connect_mail_assignments"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(UUID(as_uuid=False), primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    message_id = Column(UUID(as_uuid=False), nullable=False)
+    assigned_to_user_id = Column(BigInteger, nullable=False)
+    assigned_by_user_id = Column(BigInteger, nullable=False)
+    status = Column(String, nullable=False, default="open")
+    correlation_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class MailNote(ConnectBase):
+    """connect_mail_notes — DDL is migrations/connect_v3_020_mail_notes.sql.
+
+    Phase 4 slice 2. Append-only — a note is never edited/deleted, a
+    correction is a new note.
+    """
+    __tablename__ = "connect_mail_notes"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(UUID(as_uuid=False), primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    message_id = Column(UUID(as_uuid=False), nullable=False)
+    author_user_id = Column(BigInteger, nullable=False)
+    body = Column(String, nullable=False)
+    correlation_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))

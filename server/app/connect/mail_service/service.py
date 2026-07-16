@@ -36,6 +36,7 @@ from app.connect.shared.errors import Invalid, NotFound
 from app.connect.shared.ids import uuid7_str
 from app.connect.shared.telemetry import get_correlation_id
 from app.connect.shared.tenant import TenantContext
+from app.connect.shared_mailboxes import service as shared_mailboxes
 from app.connect.work_graph import service as work_graph
 from app.models.user import User
 
@@ -228,8 +229,16 @@ async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict
 def list_mail_messages(
     db: DbSession, ctx: TenantContext, *, time_min: datetime | None = None,
 ) -> list[MailMessage]:
+    """Scoped by accessible_connection_ids (Phase 4 slice 1), not a strict
+    user_id match — MailMessage.user_id is whoever's connection synced the
+    row (the mailbox owner), so a delegate reading a shared mailbox's mail
+    is a different person than that column. Every read path below (list,
+    search, get body) uses the same scoping for the same reason."""
+    ids = shared_mailboxes.accessible_connection_ids(db, ctx)
+    if not ids:
+        return []
     q = db.query(MailMessage).filter(
-        MailMessage.tenant_id == ctx.tenant_id, MailMessage.user_id == ctx.user_id,
+        MailMessage.tenant_id == ctx.tenant_id, MailMessage.provider_connection_id.in_(ids),
     )
     if time_min is not None:
         q = q.filter(MailMessage.received_at >= time_min)
@@ -247,11 +256,14 @@ def search_messages(db: DbSession, ctx: TenantContext, *, query: str) -> list[Ma
     the same metadata every inbox row already renders, nothing deeper."""
     if not query or not query.strip():
         return []
+    ids = shared_mailboxes.accessible_connection_ids(db, ctx)
+    if not ids:
+        return []
     like = f"%{query.strip()}%"
     return (
         db.query(MailMessage)
         .filter(
-            MailMessage.tenant_id == ctx.tenant_id, MailMessage.user_id == ctx.user_id,
+            MailMessage.tenant_id == ctx.tenant_id, MailMessage.provider_connection_id.in_(ids),
             or_(
                 MailMessage.subject.ilike(like),
                 MailMessage.from_email.ilike(like),
@@ -270,14 +282,16 @@ async def get_message_body(db: DbSession, ctx: TenantContext, message_id: str) -
     "object-storage-references-only" discipline as the rest of Connect
     (spec §9.3) — there's no reference to store here since we don't store
     the body at all."""
+    ids = shared_mailboxes.accessible_connection_ids(db, ctx)
     message = (
         db.query(MailMessage)
         .filter(
             MailMessage.tenant_id == ctx.tenant_id,
-            MailMessage.user_id == ctx.user_id,
+            MailMessage.provider_connection_id.in_(ids),
             MailMessage.id == message_id,
         )
         .first()
+        if ids else None
     )
     if message is None:
         raise NotFound("Mail message not found")

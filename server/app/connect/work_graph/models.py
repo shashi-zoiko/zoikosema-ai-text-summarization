@@ -13,17 +13,22 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from app.connect.shared.base import ConnectBase
 
-# MVP edge set (spec §3.2), sequenced to exactly what Phase 3 slices 1-6 have
-# produced real data for by the time this slice lands: Email rows (mail sync,
-# slices 2-3), NativeCalendarEvent rows (Phase 2 slice 3), Task rows (Phase 2
-# slice 8), and User rows (pre-existing). Any other edge type from spec's
-# fuller table has no real producer yet — add it when one arrives.
-EDGE_TYPES = ("sent_by", "attendee_of", "derived_from")
+# MVP edge set (spec §3.2), grown as each edge type gets a real producer:
+# sent_by/attendee_of/derived_from from Phase 3 slice 7 (Email, Calendar
+# Event, Task rows already existed by then); delegated_access from Phase 4
+# slice 1 (spec §10.1: "Delegated access is represented as graph edges and
+# audit events, not hidden provider-only state") — a durable VISIBILITY
+# record that a grant once existed, not the authorization source of truth
+# (that's connect_mailbox_delegates.status; edges here are append-only and
+# can't be revoked in place).
+EDGE_TYPES = ("sent_by", "attendee_of", "derived_from", "delegated_access")
 
-# Node types with a real consumer today. `Organisation`, `Message` (chat),
+# Node types with a real consumer today. `mailbox` (Phase 4 slice 1) is a
+# connect_provider_connections row, not a new entity — see
+# shared_mailboxes/service.py. `Organisation`, `Message` (chat),
 # `AISummary`, `File`, `AgentAction`, `PolicyVersion` all exist in spec's
 # full node table (§3.1) but have no real Work Graph traversal need yet.
-NODE_TYPES = ("person", "email", "calendar_event", "task")
+NODE_TYPES = ("person", "email", "calendar_event", "task", "mailbox")
 
 
 class WorkGraphEdge(ConnectBase):
