@@ -27,6 +27,7 @@ import SettingsDrawer from './components/SettingsDrawer.jsx'
 import MeetingInfoDrawer from './components/MeetingInfoDrawer.jsx'
 import CaptionProvider from './captions/CaptionProvider.jsx'
 import CaptionOverlay from './captions/CaptionOverlay.jsx'
+import LiveKitDiagnostics from './captions/lkProbe.jsx'
 import { useCaptionControls, useLiveCaptions } from './captions/useCaptions.js'
 import { backgroundEffectsSupported } from './backgroundEngine.js'
 import { getPreset, NONE_EFFECT } from './backgroundPresets.js'
@@ -878,6 +879,11 @@ function MeetRoom() {
       {/* Measures the camera's actual delivered resolution/fps and stores it for
           honest quality reporting (never the requested value). */}
       <CameraQualityProbe />
+      {/* TEMPORARY: SDK-level observation layer (connection/data-channel/stats/
+          participant/browser diagnostics) feeding the shared caption trace ring
+          for one unified timeline. No-op unless caption debug is enabled. Remove
+          with the caption instrumentation once root cause is found. */}
+      <LiveKitDiagnostics />
       {/* MeetingCryptoProvider shares the text-channel key with captions (deep
           in the tree). CaptionProvider must live inside <LiveKitRoom> (it uses
           the local participant + data channel). Both only render context
