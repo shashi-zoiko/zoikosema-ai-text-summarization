@@ -4,30 +4,31 @@ Spec §4.1: effective autonomy is the minimum of every applicable input,
 computed deterministically with the resolved inputs logged. Originally
 scoped to the Calendar category only; "mail" joined in Phase 3 slice 9
 (mail send, L3) once that had a real mutation to govern. Mail's DLP input
-still has no real signal source (Phase 3 slice 6, DLP MVP, isn't built
-yet — see spec §1.3 doctrine test and architecture/
-SEMA_CALENDAR_MAIL_CONTEXT.md §4), so it stays in `_UNIMPLEMENTED_INPUTS`
-below regardless of category.
+was a static stub until Phase 3 slice 6 (DLP MVP) replaced it below with a
+real per-call scan — see `dlp_scan_input` on `resolve_effective_autonomy`.
 
 Inputs with a real signal today: tenant category ceiling (this module's own
-versioned table) and workspace policy (same table — no separate
+versioned table), workspace policy (same table — no separate
 workspace-override table exists yet, so workspace policy == tenant ceiling
-until one is built). User preference has no per-user override storage yet
+until one is built), user preference (no per-user override storage yet
 either, so it also equals the tenant ceiling — per spec §4 users may only
 *lower*, never raise, so "no override set" correctly means "inherit the
-ceiling," not "unrestricted." Sensitivity class, recipient/domain risk, DLP
-verdict, MCP server ceiling, and incident brake are stubbed as always-pass
-(4 = no restriction) since none of those features exist yet to produce a
-real verdict — building a real check against a nonexistent signal source
-would just be guessing.
+ceiling," not "unrestricted"), and now `dlp_verdict` for mail calls that
+pass `dlp_scan_input` (Phase 3 slice 6). Sensitivity class, recipient/
+domain risk, MCP server ceiling, and incident brake are still stubbed as
+always-pass (4 = no restriction) since none of those features exist yet to
+produce a real verdict — building a real check against a nonexistent
+signal source would just be guessing.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy.orm import Session as DbSession
 
 from app.connect.audit import service as audit
+from app.connect.dlp import service as dlp
 from app.connect.events import types as etypes
 from app.connect.events.bus import publish
 from app.connect.events.outbox import enqueue
@@ -46,22 +47,37 @@ from app.connect.shared.tenant import TenantContext
 DEFAULT_AUTONOMY_CEILING = 1
 MAX_AUTONOMY_LEVEL = 4
 
-# Stubbed inputs with no real signal source yet (§4.1's list minus the two
-# this MVP actually implements) — always resolve to "no restriction" until
-# the feature that produces a real verdict exists.
+# Stubbed inputs with no real signal source yet — always resolve to "no
+# restriction" until the feature that produces a real verdict exists.
+# dlp_verdict is NOT here anymore (Phase 3 slice 6 gave it a real signal,
+# see resolve_effective_autonomy's dlp_scan_input handling below) — it only
+# falls back to this stub value when no scan input is provided.
 _UNIMPLEMENTED_INPUTS = {
     "sensitivity_class_limit": MAX_AUTONOMY_LEVEL,
     "recipient_domain_risk": MAX_AUTONOMY_LEVEL,
-    "dlp_verdict": MAX_AUTONOMY_LEVEL,
     "mcp_server_ceiling": MAX_AUTONOMY_LEVEL,
     "incident_brake": MAX_AUTONOMY_LEVEL,
 }
+
+# DLP verdict -> autonomy level (Phase 3 slice 6). "fail" drops effective
+# autonomy to 0 (Observe) regardless of tenant ceiling — a hard leakage
+# signal must not be overridable by a high configured ceiling, matching
+# spec §4.1's "minimum of every input" model. "warn" caps at L2 (Prepare) —
+# still stageable for human review, not a silent direct execute. "pass" is
+# unrestricted, same value the old static stub always returned.
+_DLP_VERDICT_LEVELS: dict[str, int] = {"pass": MAX_AUTONOMY_LEVEL, "warn": 2, "fail": 0}
 
 
 @dataclass(frozen=True)
 class ResolvedAutonomy:
     level: int
     inputs: dict[str, int] = field(default_factory=dict)
+    # Raw DLP verdict (verdict + matched rule names, never matched
+    # content), populated only when the caller passed dlp_scan_input.
+    # Callers needing to hard-gate on a "fail" specifically (rather than
+    # just noticing effective level dropped) read this instead of
+    # re-deriving it from inputs["dlp_verdict"].
+    dlp_verdict: dlp.DlpVerdict | None = None
 
 
 def _validate_category(category: str) -> None:
@@ -140,7 +156,9 @@ async def set_autonomy_ceiling(
     return row
 
 
-def resolve_effective_autonomy(db: DbSession, ctx: TenantContext, *, category: str) -> ResolvedAutonomy:
+def resolve_effective_autonomy(
+    db: DbSession, ctx: TenantContext, *, category: str, dlp_scan_input: dict[str, Any] | None = None,
+) -> ResolvedAutonomy:
     """Deterministic minimum-of-inputs resolution (spec §4.1).
 
     Every call is itself an audited `policy.evaluated` event with the
@@ -151,6 +169,15 @@ def resolve_effective_autonomy(db: DbSession, ctx: TenantContext, *, category: s
     is the only way the audit trail isn't silently dropped on such a call.
     Creates no PolicyVersion row; the audit event's own transaction is
     independent of whatever mutation a caller evaluates this ahead of.
+
+    `dlp_scan_input` (Phase 3 slice 6): pass `{"body_text": ..., "attachments": ...}`
+    for a mail-category call that has real outbound content to scan — the
+    dlp_verdict input then reflects a real `dlp.service.scan()` result
+    instead of the always-pass stub. Omit for calendar calls (DLP is scoped
+    to mail only) or a mail call with no content yet (e.g. a bare ceiling
+    check). Spec §10.2: "DLP unavailability fails closed for governed
+    sends" — if the scan itself errors, dlp_verdict resolves to 0 (fail),
+    never silently falls back to pass.
     """
     _validate_category(category)
     tenant_ceiling = get_current_ceiling(db, ctx, category=category)
@@ -166,12 +193,29 @@ def resolve_effective_autonomy(db: DbSession, ctx: TenantContext, *, category: s
         "user_preference": tenant_ceiling,
         **_UNIMPLEMENTED_INPUTS,
     }
+
+    dlp_verdict: dlp.DlpVerdict | None = None
+    if category == "mail" and dlp_scan_input is not None:
+        try:
+            dlp_verdict = dlp.scan(
+                body_text=dlp_scan_input.get("body_text", ""),
+                attachments=dlp_scan_input.get("attachments"),
+            )
+        except Exception:  # noqa: BLE001 — "DLP unavailability fails closed", never silently pass
+            dlp_verdict = dlp.DlpVerdict(verdict="fail", matched_rules=["dlp_scan_error"])
+        inputs["dlp_verdict"] = _DLP_VERDICT_LEVELS[dlp_verdict.verdict]
+    else:
+        inputs["dlp_verdict"] = MAX_AUTONOMY_LEVEL
+
     effective = min(inputs.values())
 
     audit.log(
         db, type="policy.evaluated", tenant_id=ctx.tenant_id,
         actor_user_id=ctx.user_id, resource_type="policy_evaluation", resource_id=category,
-        metadata={"category": category, "effective_level": effective, "inputs": inputs},
+        metadata={
+            "category": category, "effective_level": effective, "inputs": inputs,
+            "dlp_matched_rules": dlp_verdict.matched_rules if dlp_verdict else None,
+        },
     )
     db.commit()
-    return ResolvedAutonomy(level=effective, inputs=inputs)
+    return ResolvedAutonomy(level=effective, inputs=inputs, dlp_verdict=dlp_verdict)
