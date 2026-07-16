@@ -80,3 +80,12 @@ MAIL_SEND_FAILED = "mail.send.failed.v1"
 # whenever a reply draft is prepared (L1 direct-return or L2 staged) — spec
 # names this event explicitly; this is its first real producer.
 MAIL_DRAFT_PREPARED = "mail.draft.prepared.v1"
+
+# Shared mailbox / delegated access plane (spec §10.1 — Phase 4 slice 1).
+MAILBOX_DELEGATE_GRANTED = "mailbox_delegate.granted.v1"
+MAILBOX_DELEGATE_REVOKED = "mailbox_delegate.revoked.v1"
+
+# Mail assignment / internal notes plane (spec §1.2 — Phase 4 slice 2).
+MAIL_ASSIGNMENT_CREATED = "mail.assignment.created.v1"
+MAIL_ASSIGNMENT_STATUS_CHANGED = "mail.assignment.status_changed.v1"
+MAIL_NOTE_ADDED = "mail.note.added.v1"

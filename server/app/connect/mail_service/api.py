@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
+from app.connect.mail_service import assignments
 from app.connect.mail_service import conversion
 from app.connect.mail_service import mail_ai
 from app.connect.mail_service import send as send_service
@@ -154,6 +155,101 @@ def convert_message_to_task(
         return conversion.convert_to_task(db, ctx, message_id=message_id, **data.model_dump())
     except DomainError as e:
         raise _to_http(e) from e
+
+
+class AssignMessageIn(BaseModel):
+    assigned_to_user_id: int
+
+
+class AssignmentStatusIn(BaseModel):
+    status: str
+
+
+class AssignmentOut(BaseModel):
+    id: str
+    message_id: str
+    assigned_to_user_id: int
+    assigned_by_user_id: int
+    status: str
+    created_at: datetime | None
+
+
+class AddNoteIn(BaseModel):
+    body: str
+
+
+class NoteOut(BaseModel):
+    id: str
+    message_id: str
+    author_user_id: int
+    body: str
+    created_at: datetime | None
+
+
+@router.post("/messages/{message_id}/assign", status_code=201, response_model=AssignmentOut)
+async def assign_message(
+    message_id: str,
+    data: AssignMessageIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        result = await assignments.assign_message(db, ctx, message_id=message_id, assigned_to_user_id=data.assigned_to_user_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return AssignmentOut(**result)
+
+
+@router.post("/messages/{message_id}/assignment/status", response_model=AssignmentOut)
+async def set_assignment_status(
+    message_id: str,
+    data: AssignmentStatusIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        result = await assignments.update_assignment_status(db, ctx, message_id=message_id, status=data.status)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return AssignmentOut(**result)
+
+
+@router.get("/assignments", response_model=list[AssignmentOut])
+def get_assignments(
+    assigned_to_user_id: int | None = Query(default=None),
+    status: str | None = Query(default=None),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    rows = assignments.list_assignments(db, ctx, assigned_to_user_id=assigned_to_user_id, status=status)
+    return [AssignmentOut(**assignments.to_dict(r)) for r in rows]
+
+
+@router.post("/messages/{message_id}/notes", status_code=201, response_model=NoteOut)
+async def add_note(
+    message_id: str,
+    data: AddNoteIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        result = await assignments.add_note(db, ctx, message_id=message_id, body=data.body)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return NoteOut(**result)
+
+
+@router.get("/messages/{message_id}/notes", response_model=list[NoteOut])
+def get_notes(
+    message_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        rows = assignments.list_notes(db, ctx, message_id=message_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return [NoteOut(**assignments.note_to_dict(r)) for r in rows]
 
 
 class DraftReplyIn(BaseModel):

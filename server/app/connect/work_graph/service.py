@@ -16,12 +16,12 @@ sync_mail already established for per-item fanout during a bulk sync; an
 edge is a synced-data-shaped side effect of an already-audited mutation
 (mail sync, event create, task create), not a governed action of its own.
 
-The only real POLICY signal available to filter on today is
-NativeCalendarEvent.confidentiality_class (Phase 2 slice 7) — DLP-based
-mail filtering (Phase 3 slice 6) doesn't exist yet, so an Email node is
-never excluded by this MVP's filter. That's a real, honest gap, not a
-stub: don't backfill a fake mail policy check with nothing to verify it
-against.
+The only real POLICY signal available to filter calendar_event nodes on
+is NativeCalendarEvent.confidentiality_class (Phase 2 slice 7) — DLP
+(Phase 3 slice 6) governs outbound mail SENDS, not inbox-read visibility,
+so it has no equivalent read-side filter for Email nodes here; that's a
+deliberate scope boundary, not a gap (see dev-split-two-devs.md's own
+note on this when slice 7 shipped ahead of slice 6).
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ from app.connect.calendar_service import tasks as tasks_service
 from app.connect.calendar_service import native_events
 from app.connect.calendar_service.models import NativeCalendarEvent, Task
 from app.connect.mail_service.models import MailMessage
+from app.connect.provider_connections.models import ProviderConnection
 from app.connect.shared.errors import Invalid, NotFound
 from app.connect.shared.ids import uuid7_str
 from app.connect.shared.telemetry import get_correlation_id
@@ -159,11 +160,29 @@ def _resolve_task(db: DbSession, ctx: TenantContext, node_id: str) -> dict[str, 
     return tasks_service.to_dict(task)
 
 
+def _resolve_mailbox(db: DbSession, ctx: TenantContext, node_id: str) -> dict[str, Any] | None:
+    """A 'mailbox' node (Phase 4 slice 1) IS a connect_provider_connections
+    row, not a new entity — see shared_mailboxes/service.py. Any tenant
+    member can resolve it (delegated_access edges are what make a mailbox
+    show up in someone else's subgraph in the first place); this doesn't
+    itself check who currently has read access to the mailbox's mail."""
+    conn = db.query(ProviderConnection).filter(
+        ProviderConnection.tenant_id == ctx.tenant_id, ProviderConnection.id == node_id,
+    ).first()
+    if conn is None:
+        return None
+    return {
+        "node_type": "mailbox", "node_id": conn.id, "provider": conn.provider,
+        "provider_account_email": conn.provider_account_email, "status": conn.status,
+    }
+
+
 _RESOLVERS = {
     "person": _resolve_person,
     "email": _resolve_email,
     "calendar_event": _resolve_calendar_event,
     "task": _resolve_task,
+    "mailbox": _resolve_mailbox,
 }
 
 

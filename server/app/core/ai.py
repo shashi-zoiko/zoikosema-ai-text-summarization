@@ -500,6 +500,40 @@ def ai_draft_reply(thread_context: str, instruction: str) -> dict:
     return _call_structured_ai(system, user_prompt, default, max_tokens=800)
 
 
+# ── Sema Calendar & Mail — executive briefing across Work Graph (Phase 4
+# slice 4) ───────────────────────────────────────────────────────────────
+# Spec §13.1 Phase 4 AI workflow row. The first AI feature reading a
+# cross-category context (calendar + tasks + mail) assembled by the Work
+# Graph rather than one node type at a time — see app/connect/briefing/
+# service.py for the assembly; this stays "call Claude, get structured
+# output back," same as every function above.
+
+def ai_generate_executive_briefing(context: str) -> dict:
+    """context: pre-assembled free text describing upcoming events, open
+    tasks, and mail assigned to the user, each annotated with its real
+    Work Graph provenance where one exists.
+    {"headline", "priorities": [...], "at_risk_items": [...]} + metadata."""
+    default = {"headline": "", "priorities": [], "at_risk_items": []}
+    system = (
+        "You are Zoiko Sema's executive briefing assistant. Given a user's "
+        "upcoming calendar events, open tasks, and mail items assigned to "
+        "them (with cross-references where one item was derived from "
+        "another), produce a short briefing in pure JSON.\n"
+        "Rules: Output JSON ONLY, no prose, no markdown fences. Match the "
+        "schema exactly. headline is one sentence. priorities are the 3-5 "
+        "most time-sensitive items, referencing their real titles/subjects "
+        "from the context. at_risk_items are things with no clear owner or "
+        "next step, or empty if none. Do not invent items not present in "
+        "the context."
+    )
+    user_prompt = (
+        f"Context:\n{context}\n\n"
+        '\nSchema:\n{"headline": "string", "priorities": ["string"], "at_risk_items": ["string"]}\n'
+        "Return the JSON object now."
+    )
+    return _call_structured_ai(system, user_prompt, default, max_tokens=800)
+
+
 def ai_generate_intelligence(
     chat_log: list[dict],
     meeting_title: str = "Meeting",
