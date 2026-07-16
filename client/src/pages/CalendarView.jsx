@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, MapPin, Plus, Users2 } from 'lucide-react'
 import { api } from '../api/client'
 import { cn } from '../lib/cn'
@@ -12,13 +12,32 @@ import { useToast } from '../components/ui/Toast'
  * native calendar view. The original 8 Phase 2 slices built the backend
  * (native CalendarEvent CRUD/versioning, recurrence, Policy Engine,
  * Scheduling Engine, Action Review Queue) but never a page to look at it;
- * this is that page. Read-only sync'd events (Google/Outlook, via
- * GET /calendar/events) and Sema-native events (GET /calendar/native-events,
+ * this is that page. Read-only sync'd events (Google, via GET
+ * /calendar/events) and Sema-native events (GET /calendar/native-events,
  * with recurring series expanded via .../occurrences for the visible range)
- * are merged into one month grid. Creating an event goes through the same
- * governed path everything else in Connect uses — POST can come back
- * `{staged: true}` at L2+ autonomy ceilings, in which case it shows up in
- * /review-queue instead of the calendar until approved. */
+ * are merged into one grid — Week (hour-by-hour, the default, like most
+ * calendar apps' primary view) or Month. Not a clone of any one product,
+ * but the click-a-slot-to-schedule interaction is table stakes for a
+ * calendar: clicking an empty time slot (week view) or an empty day
+ * (month view) opens the create form with that date/time already filled
+ * in — still fully editable, just not blank by default. Creating an event
+ * goes through the same governed path everything else in Connect uses —
+ * POST can come back `{staged: true}` at L2+ autonomy ceilings, in which
+ * case it shows up in /review-queue instead of the calendar until approved. */
+
+const HOUR_H = 48 // px per hour row in week view
+
+function addDays(d, n) {
+  const r = new Date(d)
+  r.setDate(r.getDate() + n)
+  return r
+}
+
+function startOfWeek(d) {
+  const r = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  r.setDate(r.getDate() - r.getDay())
+  return r
+}
 
 function startOfMonthGrid(year, month) {
   const first = new Date(year, month, 1)
@@ -35,28 +54,65 @@ function fmtTime(d) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
+function fmtHourLabel(h) {
+  return new Date(2000, 0, 1, h, 0).toLocaleTimeString([], { hour: 'numeric' })
+}
+
+function pad(n) {
+  return String(n).padStart(2, '0')
+}
+
+function isoDateLocal(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+function hhmm(hour, minute) {
+  return `${pad(hour)}:${pad(minute)}`
+}
+
+// 30-minute default duration, clamped so a 23:xx slot doesn't roll into
+// tomorrow's date field.
+function plusThirtyMin(hour, minute) {
+  const total = Math.min(hour * 60 + minute + 30, 23 * 60 + 59)
+  return hhmm(Math.floor(total / 60), total % 60)
+}
+
+function weekLabel(days) {
+  const start = days[0], end = days[days.length - 1]
+  if (start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear()) {
+    return start.toLocaleDateString([], { month: 'long', year: 'numeric' })
+  }
+  const startStr = start.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  const endStr = end.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+  return `${startStr} – ${endStr}`
+}
+
 export default function CalendarView() {
   const { toast } = useToast()
-  const [cursor, setCursor] = useState(() => {
-    const now = new Date()
-    return new Date(now.getFullYear(), now.getMonth(), 1)
-  })
+  const [mode, setMode] = useState('week') // 'week' | 'month'
+  const [cursor, setCursor] = useState(() => new Date())
+  const [now, setNow] = useState(() => new Date()) // ticks so the current-time line stays fresh
   const [events, setEvents] = useState(null) // null = loading
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState(null)
-  const [showCreate, setShowCreate] = useState(false)
+  const [showCreate, setShowCreate] = useState(null) // null | { date, startTime, endTime }
 
-  const gridDays = useMemo(() => {
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const viewDays = useMemo(() => {
+    if (mode === 'week') {
+      const start = startOfWeek(cursor)
+      return Array.from({ length: 7 }, (_, i) => addDays(start, i))
+    }
     const gridStart = startOfMonthGrid(cursor.getFullYear(), cursor.getMonth())
-    return Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(gridStart)
-      d.setDate(gridStart.getDate() + i)
-      return d
-    })
-  }, [cursor])
+    return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
+  }, [mode, cursor])
 
-  const rangeStart = gridDays[0]
-  const rangeEnd = gridDays[gridDays.length - 1]
+  const rangeStart = viewDays[0]
+  const rangeEnd = viewDays[viewDays.length - 1]
 
   useEffect(() => {
     let cancelled = false
@@ -79,7 +135,7 @@ export default function CalendarView() {
             api(
               `/api/connect/calendar/native-events/${encodeURIComponent(e.version_chain_id)}/occurrences` +
               `?range_start=${encodeURIComponent(timeMin)}&range_end=${encodeURIComponent(timeMax)}`,
-            ).catch(() => []), // one bad series shouldn't blank the whole month
+            ).catch(() => []), // one bad series shouldn't blank the whole view
           ),
         )
 
@@ -139,7 +195,7 @@ export default function CalendarView() {
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursor])
+  }, [mode, cursor])
 
   const eventsByDay = useMemo(() => {
     const map = new Map()
@@ -154,15 +210,30 @@ export default function CalendarView() {
   }, [events])
 
   const today = new Date()
-  const monthLabel = cursor.toLocaleDateString([], { month: 'long', year: 'numeric' })
+  const headerLabel = mode === 'week' ? weekLabel(viewDays) : cursor.toLocaleDateString([], { month: 'long', year: 'numeric' })
+
+  const goPrev = () => setCursor((c) => (mode === 'week' ? addDays(c, -7) : new Date(c.getFullYear(), c.getMonth() - 1, 1)))
+  const goNext = () => setCursor((c) => (mode === 'week' ? addDays(c, 7) : new Date(c.getFullYear(), c.getMonth() + 1, 1)))
+  const goToday = () => setCursor(new Date())
+
+  const openCreateBlank = () => {
+    const d = new Date()
+    setShowCreate({ date: isoDateLocal(d), startTime: '09:00', endTime: '09:30' })
+  }
+  const openCreateForSlot = (day, hour, minute) => {
+    setShowCreate({ date: isoDateLocal(day), startTime: hhmm(hour, minute), endTime: plusThirtyMin(hour, minute) })
+  }
+  const openCreateForDay = (day) => {
+    setShowCreate({ date: isoDateLocal(day), startTime: '09:00', endTime: '09:30' })
+  }
 
   const onCreated = () => {
-    setShowCreate(false)
+    setShowCreate(null)
     setCursor((c) => new Date(c)) // trigger refetch of current range
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1100px] px-6 py-10 sm:px-10">
+    <div className="mx-auto w-full max-w-[1200px] px-6 py-10 sm:px-10">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-[26px] font-bold tracking-[-0.03em] text-[var(--c-fg)]">Calendar</h1>
@@ -170,24 +241,36 @@ export default function CalendarView() {
             Your Sema calendar — native events plus anything synced from Google Calendar.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setShowCreate(true)}>
+        <Button variant="primary" onClick={openCreateBlank}>
           <Plus className="h-4 w-4" /> New event
         </Button>
       </header>
 
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={() => setCursor((c) => new Date(c.getFullYear(), c.getMonth() - 1, 1))}>
+          <Button variant="secondary" onClick={goPrev}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button variant="secondary" onClick={() => setCursor((c) => new Date(c.getFullYear(), c.getMonth() + 1, 1))}>
+          <Button variant="secondary" onClick={goNext}>
             <ChevronRight className="h-4 w-4" />
           </Button>
-          <Button variant="outline" onClick={() => setCursor(new Date(today.getFullYear(), today.getMonth(), 1))}>
-            Today
-          </Button>
+          <Button variant="outline" onClick={goToday}>Today</Button>
+          <div className="ml-1 text-[15px] font-semibold text-[var(--c-fg)]">{headerLabel}</div>
         </div>
-        <div className="text-[15px] font-semibold text-[var(--c-fg)]">{monthLabel}</div>
+        <div className="flex gap-1 rounded-[10px] border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] p-1">
+          {['week', 'month'].map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={cn(
+                'rounded-[7px] px-3 py-1 text-[12.5px] font-medium capitalize',
+                mode === m ? 'bg-[var(--c-accent-soft)] text-[var(--c-accent)]' : 'text-[var(--c-fg-muted)] hover:text-[var(--c-fg)]',
+              )}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && (
@@ -196,61 +279,214 @@ export default function CalendarView() {
         </div>
       )}
 
-      <div className="grid grid-cols-7 gap-px overflow-hidden rounded-[14px] border border-[var(--c-line)] bg-[var(--c-line)] shadow-sm">
-        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-          <div key={d} className="bg-[var(--c-bg-2)] px-2 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">
-            {d}
-          </div>
-        ))}
-        {gridDays.map((day) => {
-          const inMonth = day.getMonth() === cursor.getMonth()
-          const isToday = sameDay(day, today)
-          const dayEvents = eventsByDay.get(day.toDateString()) || []
-          return (
-            <div
-              key={day.toISOString()}
-              className={cn(
-                'min-h-[104px] bg-[var(--c-bg-1)] p-1.5 align-top',
-                !inMonth && 'opacity-45',
-              )}
-            >
-              <div className={cn(
-                'mb-1 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11.5px] font-medium',
-                isToday ? 'bg-[var(--c-accent)] text-white' : 'text-[var(--c-fg-muted)]',
-              )}>
-                {day.getDate()}
-              </div>
-              {events === null && inMonth && day.getDate() === 1 && (
-                <div className="text-[11px] text-[var(--c-fg-muted)]"><Spinner size="sm" /></div>
-              )}
-              <div className="space-y-1">
-                {dayEvents.slice(0, 3).map((ev) => (
-                  <button
-                    key={ev.key}
-                    onClick={() => setSelected(ev)}
-                    className={cn(
-                      'block w-full truncate rounded-[6px] px-1.5 py-0.5 text-left text-[11px] font-medium',
-                      ev.source === 'native'
-                        ? 'bg-[var(--c-accent-soft)] text-[var(--c-accent)]'
-                        : 'bg-[var(--c-bg-3)] text-[var(--c-fg-dim)]',
-                    )}
-                    title={ev.title}
-                  >
-                    {!ev.allDay && <span className="opacity-70">{fmtTime(ev.start)} </span>}
-                    {ev.title}
-                  </button>
-                ))}
-                {dayEvents.length > 3 && (
-                  <div className="px-1.5 text-[10.5px] text-[var(--c-fg-muted)]">+{dayEvents.length - 3} more</div>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+      {events === null ? (
+        <div className="flex items-center justify-center rounded-[14px] border border-[var(--c-line)] bg-[var(--c-bg-1)] py-16">
+          <Spinner size="lg" />
+        </div>
+      ) : mode === 'week' ? (
+        <WeekGrid
+          days={viewDays}
+          eventsByDay={eventsByDay}
+          today={today}
+          now={now}
+          onSlotClick={openCreateForSlot}
+          onEventClick={setSelected}
+        />
+      ) : (
+        <MonthGrid
+          days={viewDays}
+          cursor={cursor}
+          eventsByDay={eventsByDay}
+          today={today}
+          onDayClick={openCreateForDay}
+          onEventClick={setSelected}
+        />
+      )}
 
       <EventDetailModal event={selected} onClose={() => setSelected(null)} />
-      <CreateEventModal open={showCreate} onClose={() => setShowCreate(false)} onCreated={onCreated} toast={toast} />
+      <CreateEventModal
+        open={!!showCreate}
+        initial={showCreate}
+        onClose={() => setShowCreate(null)}
+        onCreated={onCreated}
+        toast={toast}
+      />
+    </div>
+  )
+}
+
+function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) {
+  const scrollRef = useRef(null)
+  const hours = useMemo(() => Array.from({ length: 24 }, (_, i) => i), [])
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 7 * HOUR_H }) // open scrolled to ~7 AM, like most calendar apps
+  }, [])
+
+  const hasAllDay = days.some((d) => (eventsByDay.get(d.toDateString()) || []).some((e) => e.allDay))
+
+  return (
+    <div className="overflow-hidden rounded-[14px] border border-[var(--c-line)] bg-[var(--c-bg-1)] shadow-sm">
+      <div className="grid grid-cols-[52px_repeat(7,1fr)] border-b border-[var(--c-line)]">
+        <div className="flex items-end justify-center pb-1 text-[9.5px] text-[var(--c-fg-muted)]">
+          GMT{now.toLocaleTimeString([], { timeZoneName: 'shortOffset' }).split(' ').pop()?.replace('GMT', '') || ''}
+        </div>
+        {days.map((d) => (
+          <div key={d.toISOString()} className="border-l border-[var(--c-line)] px-2 py-1.5 text-center">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">
+              {d.toLocaleDateString([], { weekday: 'short' })}
+            </div>
+            <div className={cn(
+              'mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-[13px] font-medium',
+              sameDay(d, today) ? 'bg-[var(--c-accent)] text-white' : 'text-[var(--c-fg)]',
+            )}>
+              {d.getDate()}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {hasAllDay && (
+        <div className="grid grid-cols-[52px_repeat(7,1fr)] border-b border-[var(--c-line)]">
+          <div className="px-1 py-1 text-[9.5px] text-[var(--c-fg-muted)]">All day</div>
+          {days.map((d) => (
+            <div key={d.toISOString()} className="space-y-1 border-l border-[var(--c-line)] p-1">
+              {(eventsByDay.get(d.toDateString()) || []).filter((e) => e.allDay).map((ev) => (
+                <button
+                  key={ev.key}
+                  onClick={() => onEventClick(ev)}
+                  className="block w-full truncate rounded-[6px] bg-[var(--c-bg-3)] px-1.5 py-0.5 text-left text-[11px] font-medium text-[var(--c-fg-dim)]"
+                >
+                  {ev.title}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div ref={scrollRef} className="max-h-[600px] overflow-y-auto">
+        <div className="grid grid-cols-[52px_repeat(7,1fr)]">
+          <div>
+            {hours.map((h) => (
+              <div key={h} style={{ height: HOUR_H }} className="relative">
+                {h > 0 && (
+                  <span className="absolute -top-2 right-1.5 text-[10px] text-[var(--c-fg-muted)]">{fmtHourLabel(h)}</span>
+                )}
+              </div>
+            ))}
+          </div>
+          {days.map((d) => {
+            const dayEvents = (eventsByDay.get(d.toDateString()) || []).filter((e) => !e.allDay)
+            const isToday = sameDay(d, today)
+            const nowMinutes = now.getHours() * 60 + now.getMinutes()
+            return (
+              <div key={d.toISOString()} className="relative border-l border-[var(--c-line)]">
+                {hours.map((h) => (
+                  <button
+                    key={h}
+                    type="button"
+                    onClick={() => onSlotClick(d, h, 0)}
+                    style={{ height: HOUR_H }}
+                    className="block w-full border-t border-[var(--c-line)] first:border-t-0 hover:bg-[var(--c-bg-2)]"
+                  />
+                ))}
+                {isToday && (
+                  <div
+                    className="pointer-events-none absolute inset-x-0 z-10 flex items-center"
+                    style={{ top: (nowMinutes / 60) * HOUR_H }}
+                  >
+                    <div className="h-2 w-2 -translate-x-1/2 rounded-full bg-[var(--c-danger)]" />
+                    <div className="h-px flex-1 bg-[var(--c-danger)]" />
+                  </div>
+                )}
+                {dayEvents.map((ev) => {
+                  const startMin = ev.start.getHours() * 60 + ev.start.getMinutes()
+                  const endMin = Math.max(startMin + 20, ev.end.getHours() * 60 + ev.end.getMinutes())
+                  const top = (startMin / 60) * HOUR_H
+                  const height = ((endMin - startMin) / 60) * HOUR_H
+                  return (
+                    <button
+                      key={ev.key}
+                      onClick={() => onEventClick(ev)}
+                      style={{ top, height }}
+                      className={cn(
+                        'absolute inset-x-0.5 z-20 overflow-hidden rounded-[6px] px-1.5 py-0.5 text-left text-[11px] font-medium leading-tight',
+                        ev.source === 'native'
+                          ? 'bg-[var(--c-accent-soft)] text-[var(--c-accent)]'
+                          : 'bg-[var(--c-bg-3)] text-[var(--c-fg-dim)]',
+                      )}
+                      title={ev.title}
+                    >
+                      <span className="block truncate">{ev.title}</span>
+                      <span className="block truncate opacity-70">{fmtTime(ev.start)}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MonthGrid({ days, cursor, eventsByDay, today, onDayClick, onEventClick }) {
+  return (
+    <div className="grid grid-cols-7 gap-px overflow-hidden rounded-[14px] border border-[var(--c-line)] bg-[var(--c-line)] shadow-sm">
+      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+        <div key={d} className="bg-[var(--c-bg-2)] px-2 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">
+          {d}
+        </div>
+      ))}
+      {days.map((day) => {
+        const inMonth = day.getMonth() === cursor.getMonth()
+        const isToday = sameDay(day, today)
+        const dayEvents = eventsByDay.get(day.toDateString()) || []
+        return (
+          <button
+            key={day.toISOString()}
+            type="button"
+            onClick={() => onDayClick(day)}
+            className={cn(
+              'min-h-[104px] bg-[var(--c-bg-1)] p-1.5 text-left align-top hover:bg-[var(--c-bg-2)]',
+              !inMonth && 'opacity-45',
+            )}
+          >
+            <div className={cn(
+              'mb-1 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11.5px] font-medium',
+              isToday ? 'bg-[var(--c-accent)] text-white' : 'text-[var(--c-fg-muted)]',
+            )}>
+              {day.getDate()}
+            </div>
+            <div className="space-y-1">
+              {dayEvents.slice(0, 3).map((ev) => (
+                <span
+                  key={ev.key}
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => { e.stopPropagation(); onEventClick(ev) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onEventClick(ev) } }}
+                  className={cn(
+                    'block w-full truncate rounded-[6px] px-1.5 py-0.5 text-[11px] font-medium',
+                    ev.source === 'native'
+                      ? 'bg-[var(--c-accent-soft)] text-[var(--c-accent)]'
+                      : 'bg-[var(--c-bg-3)] text-[var(--c-fg-dim)]',
+                  )}
+                  title={ev.title}
+                >
+                  {!ev.allDay && <span className="opacity-70">{fmtTime(ev.start)} </span>}
+                  {ev.title}
+                </span>
+              ))}
+              {dayEvents.length > 3 && (
+                <div className="px-1.5 text-[10.5px] text-[var(--c-fg-muted)]">+{dayEvents.length - 3} more</div>
+              )}
+            </div>
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -292,7 +528,7 @@ function EventDetailModal({ event, onClose }) {
   )
 }
 
-function CreateEventModal({ open, onClose, onCreated, toast }) {
+function CreateEventModal({ open, initial, onClose, onCreated, toast }) {
   const [title, setTitle] = useState('')
   const [date, setDate] = useState('')
   const [startTime, setStartTime] = useState('09:00')
@@ -302,11 +538,15 @@ function CreateEventModal({ open, onClose, onCreated, toast }) {
 
   useEffect(() => {
     if (open) {
-      const now = new Date()
-      setDate(now.toISOString().slice(0, 10))
+      setDate(initial?.date || isoDateLocal(new Date()))
+      setStartTime(initial?.startTime || '09:00')
+      setEndTime(initial?.endTime || '09:30')
       setTitle('')
       setLocation('')
     }
+    // Only re-sync when the modal opens — initial is a fresh object every
+    // open, so it's read once here rather than kept as a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const submit = async (e) => {
