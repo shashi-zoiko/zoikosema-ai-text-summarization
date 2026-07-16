@@ -16,12 +16,12 @@ ceiling below L3 in this MVP — spec's own scope note ("MVP always uses the
 buffer") extends to "MVP only ships the L3 path"; add an L2 mail-drafting
 fallback if a real caller needs sends gated lower.
 
-DLP preflight is stubbed as always-pass, same precedent as policy_engine's
-own `_UNIMPLEMENTED_INPUTS` (see policy_engine/service.py) — Phase 3 slice 6
-(DLP MVP) doesn't exist yet, so there is no real verdict to compute.
-`check_outbound_dlp` here is a placeholder for that slice's real scanner;
-building a fake check with nothing real to verify it against would be
-guessing, exactly what policy_engine's own docstring warns against.
+DLP preflight is real as of Phase 3 slice 6 (`app/connect/dlp/service.py`,
+wired through `policy_engine.resolve_effective_autonomy`'s
+`dlp_scan_input` — see that function's docstring). A "fail" verdict is a
+hard block regardless of autonomy ceiling (spec §10.2: "DLP unavailability
+fails closed for governed sends" extends to "a real leak signal is not
+overridable by a high ceiling").
 """
 from __future__ import annotations
 
@@ -53,14 +53,6 @@ MAX_BUFFER_MINUTES = 30
 _REQUIRED_AUTONOMY = 3
 
 
-def check_outbound_dlp(*, body_text: str) -> dict[str, Any]:
-    """Stub — see module docstring. Always 'pass' until Phase 3 slice 6
-    (DLP MVP) replaces this with a real rule-based scan. Kept as a function
-    (not an inline constant) so slice 6 can swap the implementation without
-    changing this module's call site."""
-    return {"verdict": "pass", "matched_rules": [], "note": "dlp_mvp_not_yet_built"}
-
-
 def _validate_buffer(buffer_minutes: int) -> None:
     if not (MIN_BUFFER_MINUTES <= buffer_minutes <= MAX_BUFFER_MINUTES):
         raise Invalid(f"buffer_minutes must be between {MIN_BUFFER_MINUTES} and {MAX_BUFFER_MINUTES}")
@@ -78,16 +70,25 @@ async def stage_send(
         raise Invalid("body_text is required")
     _validate_buffer(buffer_minutes)
 
-    resolved = policy_engine.resolve_effective_autonomy(db, ctx, category="mail")
+    resolved = policy_engine.resolve_effective_autonomy(
+        db, ctx, category="mail", dlp_scan_input={"body_text": body_text},
+    )
+    if resolved.dlp_verdict is not None and resolved.dlp_verdict.verdict == "fail":
+        raise Invalid(
+            "Outbound message failed DLP preflight",
+            details={"matched_rules": resolved.dlp_verdict.matched_rules},
+        )
     if resolved.level < _REQUIRED_AUTONOMY:
+        # Name the lowest-scoring input so a DLP "warn" reads differently
+        # from "your tenant ceiling is too low" — spec §4.1's transparency
+        # requirement ("log the resolved inputs") extends to surfacing
+        # which one actually blocked the send, not just the final number.
+        blocking_input = min(resolved.inputs, key=resolved.inputs.get)
         raise Forbidden(
             f"Mail send at L3 requires an autonomy ceiling >= {_REQUIRED_AUTONOMY} "
-            f"(currently {resolved.level}) — ask a workspace admin to raise the mail policy ceiling",
+            f"(currently {resolved.level}, limited by '{blocking_input}') — "
+            "ask a workspace admin to raise the mail policy ceiling",
         )
-
-    dlp = check_outbound_dlp(body_text=body_text)
-    if dlp["verdict"] == "fail":
-        raise Invalid("Outbound message failed DLP preflight", details={"dlp": dlp})
 
     connection = (
         db.query(ProviderConnection)
@@ -107,10 +108,14 @@ async def stage_send(
         "to_emails": to_emails, "subject": subject, "body_text": body_text,
         "thread_id": thread_id, "in_reply_to_message_id": in_reply_to_message_id,
     }
+    dlp_verdict_dict = (
+        {"verdict": resolved.dlp_verdict.verdict, "matched_rules": resolved.dlp_verdict.matched_rules}
+        if resolved.dlp_verdict is not None else {}
+    )
     send = MailSend(
         id=uuid7_str(), tenant_id=ctx.tenant_id, user_id=ctx.user_id,
         provider_connection_id=connection.id, provider=provider,
-        draft_payload=draft_payload, dlp_verdict=dlp,
+        draft_payload=draft_payload, dlp_verdict=dlp_verdict_dict,
         scheduled_release_at=scheduled_release_at, status="buffered",
         correlation_id=get_correlation_id(),
     )
@@ -122,7 +127,7 @@ async def stage_send(
         resource_type="mail_send", resource_id=send.id,
         metadata={
             "provider": provider, "scheduled_release_at": scheduled_release_at.isoformat(),
-            "dlp_verdict": dlp["verdict"], "autonomy": resolved.level,
+            "dlp_verdict": dlp_verdict_dict.get("verdict"), "autonomy": resolved.level,
         },
     )
     env = EventEnvelope(
