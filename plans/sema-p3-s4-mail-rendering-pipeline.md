@@ -1,7 +1,7 @@
 # Phase 3 · Slice 4 — Mail Rendering / Sanitization Pipeline
 
 **Branch:** `sema/mail-rendering-pipeline`, cut from `feature/sema-calendar-mail`
-**Status:** planned
+**Status:** in progress — backend (body fetch, nh3 sanitize, SSRF-guarded image proxy) and client (MailBodyView, DOMPurify pass) built; wired into a temporary QA surface (`MailPreview.jsx`, not the real inbox); nh3 install + unit tests for sanitize/SSRF logic verified passing. Still open: the plan's actual "Done when" acceptance run (real malicious-HTML test corpus against a live synced message, manually observed in-browser), attachment preview stays out of scope per plan.
 **Depends on:** Phase 3 slices 2-3 (synced mail metadata exists to attach body-fetch to)
 **Spec refs:** §10.2 (Mail Threat Surface), §19.2 (Security Testing)
 
