@@ -16,6 +16,7 @@ All entries below are **Not started** — files in this repo are placeholders. E
 | Meetings / Voice / Video Specification | Media Engineering Lead | SPEC §13 | Not started |
 | AI Signal Layer Specification | Head of AI | SPEC §14 | Not started |
 | ZoikoTime Integration Specification | Sema Lead + ZoikoTime Lead | SPEC §15 | Not started |
+| Sema Calendar & Mail — Governed Agentic Communications | Platform Engineering Lead | `SEMA_CALENDAR_MAIL_SPEC.md` v1.1 | **Drafted** — build in progress on `feature/sema-calendar-mail`, Phase 1 (Calendar Integration MVP) |
 | Billing and Monetization Specification | Billing Engineering Lead | SPEC §16 | Not started |
 | Global Infrastructure and DevOps Blueprint | Head of SRE | SPEC §19 | Not started |
 | Mobile / Desktop Specification | Client Engineering Lead | SPEC §18 | Not started |

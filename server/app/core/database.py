@@ -192,6 +192,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("meetings", "summarizer_on", "BOOLEAN DEFAULT FALSE NOT NULL"),
     # Billing plan for AI gateway rate limiting and feature gating
     ("users", "plan", "VARCHAR(32) DEFAULT 'free' NOT NULL"),
+    # Saved "raw conversation log" file URL — the (possibly narrower) slice
+    # shown on the summary page, separate from transcript_file_url which
+    # always feeds the AI summary itself. See models/meeting.py for why.
+    ("meeting_intelligence", "raw_conversation_file_url", "VARCHAR(500)"),
 ]
 
 # (table, column) pairs whose NOT NULL constraint must be dropped so guest rows

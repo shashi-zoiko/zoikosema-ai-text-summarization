@@ -151,6 +151,14 @@ class IntelligenceGenerateIn(BaseModel):
     # stored with source=INTEL_SOURCE_TRANSCRIPT. Host/admin-only — see
     # generate_intelligence().
     transcript: list[dict] | None = None
+    # The (possibly narrower) slice of `transcript` that was actually visible
+    # in the in-meeting Conversations panel — narrower when the host clicked
+    # "stop transcribing" mid-meeting, in which case capture kept going for
+    # `transcript` but this stops at that point. Stored separately
+    # (raw_conversation_file_url) and shown as the summary page's raw
+    # conversation log, while `transcript` still drives the AI summary itself.
+    # Same shape as `transcript`; falls back to it server-side when omitted.
+    visible_transcript: list[dict] | None = None
     # Target language for the summary output (e.g. "english", "spanish",
     # "hindi", "french", "german", "chinese", "japanese"). Defaults to english.
     language: str = "english"

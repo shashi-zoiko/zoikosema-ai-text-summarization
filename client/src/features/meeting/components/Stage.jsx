@@ -169,12 +169,23 @@ function Stage({ layout = 'grid', onOpenPeople }) {
     if (!present) setPinned(null)
   }, [pinnedIdentity, cams, screen, setPinned])
 
-  // ── Per-subscriber video quality ────────────────────────────────────────────
-  // Hero stays sharp; tiny tiles don't burn bandwidth on 720p. In a pure gallery
-  // we scale quality by how big the tiles actually are (i.e. how many there are).
+  // ── Per-subscriber video quality (Meet/Teams-style tiering) ─────────────────
+  // We set a CEILING per tile; adaptiveStream then picks the smaller of {this
+  // ceiling, the layer that matches the tile's on-screen pixel size}, and
+  // dynacast pauses layers nobody is viewing. So these are maximums, not forced
+  // downgrades — that's what stops desktop galleries being locked to a low rung.
+  //
+  // VideoQuality is a LAYER INDEX, so the pixels it resolves to depend on the
+  // PUBLISHER's ladder:
+  //   HD publisher   [h360,h720,h1080]:  LOW=360p  MEDIUM=720p  HIGH=1080p
+  //   fallback pub.  [h180,h360,h720] :  LOW=180p  MEDIUM=360p  HIGH=720p
   useEffect(() => {
     const heroId = hero?.participant.identity
-    const galleryQ = cams.length <= 4 ? VideoQuality.MEDIUM : VideoQuality.LOW
+    const count = cams.length
+    const galleryQ =
+      count <= 4 ? VideoQuality.HIGH      // 1–4: big tiles → allow top layer (up to 1080p)
+        : count <= 9 ? VideoQuality.MEDIUM // 5–9: mid layer (720p HD / 360p fallback)
+          : VideoQuality.LOW               // very large calls: bottom layer, protect bandwidth
     for (const t of cams) {
       const pub = t.publication
       if (!pub?.setVideoQuality) continue
@@ -182,8 +193,8 @@ function Stage({ layout = 'grid', onOpenPeople }) {
         pub.setVideoQuality(
           heroId
             ? t.participant.identity === heroId
-              ? VideoQuality.HIGH
-              : VideoQuality.LOW
+              ? VideoQuality.HIGH           // hero: allow top layer (up to 1080p)
+              : VideoQuality.MEDIUM         // filmstrip beside hero: mid layer (720p HD / 360p fallback)
             : galleryQ,
         )
       } catch {

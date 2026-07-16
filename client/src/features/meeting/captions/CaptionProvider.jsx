@@ -1,23 +1,31 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { useLocalParticipant } from '@livekit/components-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocalParticipant, useRemoteParticipants, useRoomContext } from '@livekit/components-react'
+import { RoomEvent } from 'livekit-client'
 import { CAPTION_CONFIG } from './config'
-import { speakerColor } from './speakerColor'
-import useSpeechRecognition, { speechRecognitionSupported } from './useSpeechRecognition'
+import { createCaptionStore } from './captionStore'
+import { resolveIdentity } from './captionIdentity'
+import { getCaptionSource } from './sources'
+import useCaptionPresence from './captionPresence'
 import useCaptionTransport from './captionTransport'
+import { clog } from './captionDebug'
 import { CaptionsControlContext, CaptionsLiveContext } from './useCaptions'
+
+// Constrained devices (phones/tablets) only RENDER captions by default; they
+// don't run the recogniser unless explicitly enabled, to save battery/CPU and
+// avoid iOS Safari's flaky Web Speech engine. Desktop always captures.
+const IS_MOBILE =
+  typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+const MOBILE_CAPTURE_OK = !IS_MOBILE || CAPTION_CONFIG.mobileCaptureEnabled
 
 // Sanitise a caption: replace control characters with spaces (defence against
 // malformed/hostile payloads) and cap the length. Done as a codepoint scan to
 // keep the source ASCII-clean. React escapes the text on render too, so this is
 // belt-and-braces against injection.
 //
-// Default cap is `maxLineChars`, NOT the old single-fragment `maxChars` —
-// Chrome's recognizer doesn't reliably finalize every few words; a single
-// `isFinal` result from one continuous, unbroken sentence can easily run past
-// 300 characters. Truncating at that point (as this used to do by default)
-// silently dropped the tail of the sentence before the fragment even reached
-// the merge-stitching logic in `ingest`, which only guards the MERGED line —
-// too late if the incoming single fragment was already cut short.
+// Takes an explicit `maxLen` (defaulting to `maxLineChars`) because `ingest`
+// below re-sanitizes a MERGED line — a single fragment and the merged line it
+// becomes part of are each within the cap individually, but concatenated they
+// could exceed it, so the same cap gets re-applied to the combined text.
 function sanitize(text, maxLen = CAPTION_CONFIG.maxLineChars) {
   const s = String(text || '')
   let out = ''
@@ -34,185 +42,168 @@ function capitalize(text) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text
 }
 
-// Flat map: speakerId -> { name, color, text, isFinal, ts }. One live caption
-// bubble per speaker — old text is replaced here. The full-meeting log lives
-// separately in `transcript` state (see CaptionProvider), appended to on
-// every final result rather than replaced.
-function reducer(state, action) {
-  switch (action.type) {
-    case 'upsert': {
-      const { speakerId, name, color, text, isFinal, ts } = action
-      return { ...state, [speakerId]: { name, color, text, isFinal, ts } }
-    }
-    case 'expire': {
-      if (!state[action.speakerId]) return state
-      const next = { ...state }
-      delete next[action.speakerId]
-      return next
-    }
-    default:
-      return state
-  }
-}
-
 // Hard cap on accumulated transcript lines — a many-hour meeting shouldn't
 // grow this array unboundedly in memory. Oldest lines drop off the front.
 const MAX_TRANSCRIPT_LINES = 4000
 
-// Consecutive finals from the same speaker within this gap are one
-// continuous thought (a mid-sentence recognizer pause), not a new line.
-const FRAGMENT_MERGE_GAP_MS = 2000
-
 /**
- * Owns the entire caption lifecycle and exposes it through two contexts.
- * Must render inside <LiveKitRoom> (uses LiveKit hooks for the local
- * participant and the data channel).
+ * Owns the caption lifecycle and exposes it through two contexts. Must render
+ * inside <LiveKitRoom> (uses LiveKit hooks + the data channel).
  *
- * Flow: local mic → SpeechRecognition → throttle/sanitize → broadcast over the
- * LiveKit data channel + echo locally → per-speaker state with a silence timer.
+ * Pipeline (each stage isolated, see the caption folder):
+ *   CaptionSource → speaking gate → sanitize → transport (E2EE) →
+ *   per-speaker buffer (captionStore) → renderer.
+ * A second, independent tap on the same sanitized frames accumulates
+ * `transcript` — the finals-only, full-meeting log — never rendered
+ * in-meeting; only sent to the backend at host-leave to generate the AI
+ * summary and the post-meeting raw conversation log.
  *
- * There are TWO independent reasons speech recognition might be running,
- * and they must stay independent:
- *   - `enabled` — the visible "CC" toggle (toolbar button, C/Shift+C
- *     shortcut, persisted to localStorage). Drives the on-screen caption
- *     bubble overlay (CaptionOverlay gates on this directly).
- *   - `summarizerCapturing` — toggled on/off from the Meet Summarizer
- *     popover, via `capturing`/`setCapturing` on the control context
- *     (MeetingHeader renders inside this provider, so its SummarizerButton
- *     reads/drives it directly — no prop drilling needed). Feeds the
- *     Conversations transcript. Never touches `enabled`, never persisted,
- *     and never makes the bubble overlay appear — that stays keyed to
- *     `enabled` alone.
- * Recognition itself runs whenever EITHER is true (one shared mic tap), but
- * only `enabled` decides what's shown on screen.
+ * Capture is DECOUPLED from the local CC toggle: as long as captions are
+ * wanted anywhere in the room — either a participant's own CC toggle
+ * (`enabled`) OR Meet Summarizer being on (`summarizerCapturing`, toggled via
+ * the Meet Summarizer popover, never persisted) — every unmuted participant's
+ * client transcribes its own mic and broadcasts, via the same presence gossip
+ * (see captionPresence.js — both flags feed the same "wants captions" signal).
+ * The local `enabled` toggle only controls whether captions are RENDERED
+ * here; `summarizerCapturing` never touches `enabled`/localStorage, and never
+ * makes the bubble overlay appear on its own.
  */
 export default function CaptionProvider({ children }) {
-  // `isMicrophoneEnabled` is reactive — it flips the instant the participant
-  // mutes/unmutes in the meeting. We gate capture on it so a muted mic never
-  // produces captions (the Web Speech engine taps the system mic on its own,
-  // independent of LiveKit, so without this it would keep transcribing — and
-  // broadcasting — while muted).
+  const room = useRoomContext()
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant()
-  const supported = speechRecognitionSupported
+  const remotes = useRemoteParticipants()
 
+  const { useSource, supported } = getCaptionSource()
+
+  // Local CC on/off (render toggle), persisted per-device.
   const [enabled, setEnabled] = useState(() => {
-    try {
-      return localStorage.getItem(CAPTION_CONFIG.storageKey) === '1'
-    } catch {
-      return false
-    }
+    try { return localStorage.getItem(CAPTION_CONFIG.storageKey) === '1' } catch { return false }
   })
   // Independent of `enabled` — see the class doc comment above. Toggled
   // on/off from the Meet Summarizer panel, not persisted.
   const [summarizerCapturing, setSummarizerCapturing] = useState(false)
   const [micError, setMicError] = useState(false)
-  const [bySpeaker, dispatch] = useReducer(reducer, {})
   // Full-meeting transcript — every FINAL caption, in order, across all
   // speakers. Interims never land here (they're corrections-in-progress);
-  // only `bySpeaker` shows those, live. Consumed by the Conversations panel.
+  // only the live buffer store shows those. Captured silently — never
+  // rendered in-meeting — and read via transcriptRef in MeetRoomLivekit at
+  // host-leave.
   const [transcript, setTranscript] = useState([])
 
-  const timersRef = useRef({}) // speakerId -> silence timeout
-  const lastInterimRef = useRef(0)
+  // One buffer store for the whole meeting. Frame-rate updates live here, NOT in
+  // React state, so only the overlay (via useSyncExternalStore) re-renders.
+  const storeRef = useRef(null)
+  if (!storeRef.current) {
+    storeRef.current = createCaptionStore({ config: CAPTION_CONFIG, onEvent: clog })
+  }
+  const store = storeRef.current
 
-  // (Re)arm a speaker's silence expiry so stale captions fade after a pause.
-  const armExpiry = useCallback((speakerId) => {
-    clearTimeout(timersRef.current[speakerId])
-    timersRef.current[speakerId] = setTimeout(() => {
-      dispatch({ type: 'expire', speakerId })
-      delete timersRef.current[speakerId]
-    }, CAPTION_CONFIG.silenceTimeoutMs)
-  }, [])
+  // Stable list of remote identities (only changes on join/leave).
+  const remoteIdKey = useMemo(
+    () => remotes.map((p) => p.identity).sort().join(','),
+    [remotes],
+  )
+  const remoteIdentities = useMemo(
+    () => (remoteIdKey ? remoteIdKey.split(',') : []),
+    [remoteIdKey],
+  )
 
-  // Single ingest path for both local echo and remote captions.
+  // Meet Summarizer demand feeds the SAME "wants captions" presence signal as
+  // the personal CC toggle — so starting it makes every participant's client
+  // start transcribing too, not just whoever clicked the button.
+  const roomWantsCaptions = useCaptionPresence({ enabled: enabled || summarizerCapturing, remoteIdentities })
+
+  // Single ingest path for local echo AND remote captions: sanitize, drop STT
+  // noise, hand to the live buffer, and — for finals — append to the
+  // accumulated transcript used for the post-meeting AI summary.
   const ingest = useCallback(
-    ({ speakerId, name, text, isFinal }) => {
-      const clean = sanitize(text)
-      if (!clean || !speakerId) return
-      // Drop meaningless STT artifacts — fragments with no letter in any script
-      // (e.g. "1.00", ".", "- -"). Real speech always has letters; these are
-      // recogniser noise that otherwise flashes on screen as a stray caption.
-      if (!/\p{L}/u.test(clean)) return
-      dispatch({
-        type: 'upsert',
-        speakerId,
-        name: name || 'Guest',
-        color: speakerColor(speakerId),
-        text: clean,
-        isFinal,
-        ts: Date.now(),
-      })
-      armExpiry(speakerId)
-      if (isFinal) {
+    (frame) => {
+      const clean = sanitize(frame.text)
+      if (!clean || !frame.speakerId) return
+      // Drop meaningless STT artifacts — fragments with no letter OR digit in
+      // any script (e.g. ".", "- -", pure punctuation noise). Real speech —
+      // including spoken numbers the recognizer transcribed as digits, e.g.
+      // "50" for "fifty" — always has letters or digits; only punctuation-only
+      // noise has neither. Requiring letters alone silently dropped every
+      // number-only fragment a speaker said, which reads as missing words.
+      if (!/[\p{L}\p{N}]/u.test(clean)) return
+      store.ingest({ ...frame, text: clean })
+      if (frame.isFinal) {
         setTranscript((lines) => {
-          const now = Date.now()
           const prev = lines[lines.length - 1]
-          // Chrome's recognizer finalizes continuous speech into many short
-          // fragments, often mid-sentence on a barely-there pause. Stitching
-          // consecutive finals from the SAME speaker back into one line (when
-          // they land close together) turns "shredded" fragments back into
-          // readable sentences instead of one choppy line per fragment.
-          // Re-sanitize the merged result — `prev.text` and `clean` were each
-          // already within `maxLineChars` individually, but concatenated they
-          // could exceed it, so re-apply the cap to the combined line.
-          const merge = prev && prev.speakerId === speakerId && now - prev.ts < FRAGMENT_MERGE_GAP_MS
+          // Same-utterance finals — per the source's own segmentation, a new
+          // speaking turn gets a fresh utteranceId — are one continuous
+          // thought; stitch them into one line instead of one choppy line
+          // per fragment. Re-sanitize the merged result since the cap
+          // applies per LINE, not per fragment.
+          const merge = prev && prev.speakerId === frame.speakerId && prev.utteranceId === frame.utteranceId
           const next = merge
-            ? [...lines.slice(0, -1), { ...prev, text: sanitize(`${prev.text} ${clean}`, CAPTION_CONFIG.maxLineChars), ts: now }]
-            : [...lines, { speakerId, name: name || 'Guest', text: capitalize(clean), ts: now }]
+            ? [...lines.slice(0, -1), { ...prev, text: sanitize(`${prev.text} ${clean}`, CAPTION_CONFIG.maxLineChars), ts: Date.now() }]
+            : [...lines, {
+                speakerId: frame.speakerId,
+                utteranceId: frame.utteranceId,
+                name: frame.identity?.name || 'Guest',
+                text: capitalize(clean),
+                ts: Date.now(),
+              }]
           return next.length > MAX_TRANSCRIPT_LINES ? next.slice(next.length - MAX_TRANSCRIPT_LINES) : next
         })
       }
     },
-    [armExpiry],
+    [store],
   )
 
   const { publish } = useCaptionTransport({ onCaption: ingest })
 
-  // Local recognition result → echo locally at full engine speed, broadcast
-  // interims throttled (finals always go out immediately either way).
-  const handleResult = useCallback(
-    ({ text, isFinal }) => {
-      // Hard guard: never emit while muted. Catches the trailing final result
-      // some browsers fire immediately after the engine is stopped on mute.
-      if (!isMicrophoneEnabled) return
-      const clean = sanitize(text)
-      if (!clean) return
-      const id = localParticipant?.identity || 'me'
-      // Local echo is our own state update, not network traffic — showing it
-      // the instant the engine emits it (rather than capped to the broadcast
-      // throttle) is what makes your own caption bubble feel responsive.
-      ingest({ speakerId: id, name: localParticipant?.name || 'You', text: clean, isFinal })
-
-      if (!isFinal) {
-        const now = Date.now()
-        if (now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) return
-        lastInterimRef.current = now
-      }
-      publish({ text: clean, isFinal })
+  // Local recognition result → throttle interims, echo locally, broadcast.
+  const lastInterimRef = useRef(0)
+  const onLocalResult = useCallback(
+    ({ text, isFinal, confidence, seq, utteranceId }) => {
+      if (!isMicrophoneEnabled) return // hard guard: never emit while muted
+      const now = Date.now()
+      if (!isFinal && now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) return
+      lastInterimRef.current = now
+      const identity = resolveIdentity(localParticipant)
+      ingest({ speakerId: identity.speakerId, identity, text, isFinal, confidence, seq, utteranceId, lang: CAPTION_CONFIG.lang })
+      publish({ text, isFinal, seq, utteranceId, confidence })
     },
     [ingest, publish, localParticipant, isMicrophoneEnabled],
   )
 
-  // Capture runs if EITHER the visible CC toggle OR the summarizer wants it
-  // (see the class doc comment) — one shared mic tap, two independent
-  // reasons to use it — as long as the API is supported, the mic wasn't
-  // denied, AND the participant's meeting mic is live. Muting in the meeting
-  // stops recognition immediately — no captions are generated or broadcast
-  // while muted.
-  useSpeechRecognition((enabled || summarizerCapturing) && supported && !micError && isMicrophoneEnabled, {
-    lang: CAPTION_CONFIG.lang,
-    onResult: handleResult,
-    onError: () => setMicError(true),
-  })
+  // Capture runs while captions are wanted in the room (personal toggle OR
+  // Meet Summarizer — see roomWantsCaptions above), the engine is supported,
+  // the mic wasn't denied, this device is allowed to capture, and the mic is
+  // live. Note: NOT gated on the local `enabled` — that's a render choice.
+  const captureActive =
+    supported && !micError && isMicrophoneEnabled && roomWantsCaptions && MOBILE_CAPTURE_OK
+  useSource({ active: captureActive, onResult: onLocalResult, onError: () => setMicError(true) })
+
+  // ── LiveKit participant-event sync ──────────────────────────────────────────
+  // Keep the buffer in lockstep with room membership/identity so captions never
+  // linger on a departed speaker or show a stale name after a rename.
+  useEffect(() => {
+    if (!room) return undefined
+    const onLeft = (p) => { store.remove(p.identity, 'disconnect') }
+    const onIdentity = (_prevOrMeta, p) => {
+      const participant = p || _prevOrMeta
+      if (participant?.identity) store.refreshIdentity(participant.identity, resolveIdentity(participant))
+    }
+    room.on(RoomEvent.ParticipantDisconnected, onLeft)
+    room.on(RoomEvent.ParticipantNameChanged, onIdentity)
+    room.on(RoomEvent.ParticipantMetadataChanged, onIdentity)
+    return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onLeft)
+      room.off(RoomEvent.ParticipantNameChanged, onIdentity)
+      room.off(RoomEvent.ParticipantMetadataChanged, onIdentity)
+    }
+  }, [room, store])
 
   const toggle = useCallback(() => {
     if (!supported) return
     setMicError(false)
     setEnabled((v) => {
       const next = !v
-      try {
-        localStorage.setItem(CAPTION_CONFIG.storageKey, next ? '1' : '0')
-      } catch { /* storage blocked — in-memory state still works */ }
+      try { localStorage.setItem(CAPTION_CONFIG.storageKey, next ? '1' : '0') } catch { /* storage blocked */ }
       return next
     })
   }, [supported])
@@ -244,20 +235,19 @@ export default function CaptionProvider({ children }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [toggle])
 
-  // Clear all silence timers on unmount.
-  useEffect(() => () => {
-    Object.values(timersRef.current).forEach(clearTimeout)
-    timersRef.current = {}
-  }, [])
+  // Tear the buffer down on unmount (leaving the meeting).
+  useEffect(() => () => store.purgeAll(), [store])
 
   // Control value: stable except on rare toggles → consumers barely re-render.
   const control = useMemo(
     () => ({ enabled, supported, micError, toggle, capturing: summarizerCapturing, setCapturing }),
     [enabled, supported, micError, toggle, summarizerCapturing, setCapturing],
   )
-  // Live value: changes per frame, consumed only by the overlay + the
-  // Conversations panel.
-  const live = useMemo(() => ({ bySpeaker, transcript }), [bySpeaker, transcript])
+  // Live value: the store handle (stable) + transcript (changes once per
+  // finalized line). The overlay subscribes to the store directly via
+  // useSyncExternalStore, so per-frame caption updates never re-render this
+  // provider — only a new finalized transcript line does.
+  const live = useMemo(() => ({ store, transcript }), [store, transcript])
 
   return (
     <CaptionsControlContext.Provider value={control}>

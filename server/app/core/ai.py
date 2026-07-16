@@ -364,6 +364,13 @@ def _auto_table(result: dict):
     in the schema, so a missing/empty result for it is left as an empty
     table (a correct, expected outcome when the meeting never discussed
     budget/staffing) rather than invented.
+
+    `key_takeaways` (present on the transcript-summary schema, which has no
+    `action_items`/`risks` fields at all) is a second fallback source for
+    task_tracker, used only when action_items didn't already supply rows —
+    the transcript prompt requires every takeaway to carry a real assignee,
+    so a takeaway with both `text` and `assignee` is exactly as grounded as
+    an action item and safe to reuse the same way.
     """
     by_type = {}
     existing = result.get("tables")
@@ -374,11 +381,16 @@ def _auto_table(result: dict):
 
     items = result.get("action_items") or []
     risks = result.get("risks") or []
+    takeaways = result.get("key_takeaways") or []
+    task_tracker_rows = [
+        {"task": i.get("task", ""), "assignee": i.get("owner", ""), "deadline": i.get("due", "")}
+        for i in items if i.get("task")
+    ] or [
+        {"task": t.get("text", ""), "assignee": t.get("assignee", ""), "deadline": ""}
+        for t in takeaways if t.get("text") and t.get("assignee")
+    ]
     fallback_rows = {
-        "task_tracker": [
-            {"task": i.get("task", ""), "assignee": i.get("owner", ""), "deadline": i.get("due", "")}
-            for i in items if i.get("task")
-        ],
+        "task_tracker": task_tracker_rows,
         "resource_allocation": [],
         "risk_matrix": [
             {"risk": r.get("title", ""), "impact": r.get("severity", ""), "solution": r.get("rationale", "")}
@@ -393,6 +405,134 @@ def _auto_table(result: dict):
         columns = found.get("columns") if isinstance(found, dict) and found.get("columns") else cols
         tables.append({"type": ttype, "type_label": label, "columns": columns, "rows": rows})
     result["tables"] = tables
+
+
+def _call_structured_ai(system: str, user_prompt: str, default_shape: dict, *, max_tokens: int = 1024) -> dict:
+    """Shared "call Claude, expect JSON back" core — extracted here because
+    ai_generate_agenda/_meeting_brief/_followup_tasks (Sema Calendar Phase 2
+    slice 8) would otherwise each repeat the same client/timing/usage/
+    JSON-merge boilerplate ai_generate_intelligence already has inline
+    below. ai_generate_intelligence itself is left as-is rather than
+    retrofitted onto this helper — it's shipped, tested, unrelated to this
+    slice, and refactoring it isn't necessary to add the three new
+    functions cleanly.
+
+    Returns default_shape merged with whatever keys the model returned,
+    plus _model/_input_tokens/_output_tokens/_latency_ms/_error metadata —
+    same contract as ai_generate_intelligence, just factored out.
+    """
+    client = _get_client()
+    started = time.monotonic()
+    result = dict(default_shape)
+    meta = {"_model": None, "_input_tokens": None, "_output_tokens": None, "_latency_ms": None, "_error": None}
+
+    if not client:
+        meta["_error"] = "Anthropic API key not configured."
+        result.update(meta)
+        return result
+
+    settings = get_settings()
+    try:
+        response = client.messages.create(
+            model=settings.ai_model, max_tokens=max_tokens, system=system,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        meta["_model"] = settings.ai_model
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            meta["_input_tokens"] = getattr(usage, "input_tokens", None)
+            meta["_output_tokens"] = getattr(usage, "output_tokens", None)
+        text = response.content[0].text if response.content else ""
+        parsed = _extract_json(text)
+        if parsed is None:
+            meta["_error"] = "Model did not return parseable JSON."
+        else:
+            base = dict(default_shape)
+            for k, v in parsed.items():
+                base[k] = v
+            result = base
+    except Exception as e:
+        log.exception("AI structured call failed")
+        meta["_error"] = f"AI request failed: {e}"
+
+    meta["_latency_ms"] = int((time.monotonic() - started) * 1000)
+    result.update(meta)
+    return result
+
+
+# ── Sema Calendar & Mail — agenda / brief / follow-up (Phase 2 slice 8) ─────
+# Spec §13.1 Phase 2 AI workflow row. All three are pure generation — no DB
+# access, no governance decisions here; app/connect/calendar_service/
+# ai_workflows.py is what resolves autonomy, stages L2 proposals, and
+# persists Task rows. Kept that way so this file stays "call Claude, get
+# structured output back," matching the existing ai_generate_intelligence
+# shape, not a second place governance logic could leak into.
+
+def ai_generate_agenda(meeting_title: str, attendee_names: list[str], context_notes: str | None = None) -> dict:
+    """{"agenda_items": [{"topic", "duration_minutes", "owner"}]} + metadata."""
+    default = {"agenda_items": []}
+    roster = ", ".join(attendee_names) if attendee_names else "(no attendees listed)"
+    system = (
+        "You are Zoiko Sema's meeting agenda assistant. Given a meeting title and "
+        "attendees, propose a focused, time-boxed agenda in pure JSON.\n"
+        "Rules: Output JSON ONLY, no prose, no markdown fences. Match the schema "
+        "exactly. duration_minutes are integers summing to a reasonable total "
+        "(<= 60 unless the title implies a longer session). owner is an attendee "
+        "name from the roster or null if unclear."
+    )
+    user_prompt = (
+        f"Meeting title: {meeting_title}\nAttendees: {roster}\n"
+        + (f"Context notes: {context_notes}\n" if context_notes else "")
+        + '\nSchema:\n{"agenda_items": [{"topic": "string", "duration_minutes": 0, "owner": "string or null"}]}\n'
+        "Return the JSON object now."
+    )
+    return _call_structured_ai(system, user_prompt, default, max_tokens=800)
+
+
+def ai_generate_meeting_brief(
+    meeting_title: str, attendee_names: list[str], prior_meeting_titles: list[str] | None = None,
+) -> dict:
+    """{"summary", "key_points": [...], "suggested_talking_points": [...]} + metadata."""
+    default = {"summary": "", "key_points": [], "suggested_talking_points": []}
+    roster = ", ".join(attendee_names) if attendee_names else "(no attendees listed)"
+    history = "\n".join(f"- {t}" for t in (prior_meeting_titles or [])) or "(no prior related meetings found)"
+    system = (
+        "You are Zoiko Sema's pre-meeting brief assistant. Given a meeting title, "
+        "its attendees, and titles of prior related meetings with the same people, "
+        "produce a short prep brief in pure JSON.\n"
+        "Rules: Output JSON ONLY, no prose, no markdown fences. Match the schema "
+        "exactly. Do not invent facts not implied by the titles given — if there's "
+        "not enough signal, say so plainly in summary rather than fabricating detail."
+    )
+    user_prompt = (
+        f"Meeting title: {meeting_title}\nAttendees: {roster}\n"
+        f"Prior related meetings:\n{history}\n\n"
+        '\nSchema:\n{"summary": "string", "key_points": ["string"], "suggested_talking_points": ["string"]}\n'
+        "Return the JSON object now."
+    )
+    return _call_structured_ai(system, user_prompt, default, max_tokens=800)
+
+
+def ai_generate_followup_tasks(meeting_title: str, context_notes: str) -> dict:
+    """{"tasks": [{"title", "assignee_email", "priority"}]} + metadata.
+    context_notes is caller-supplied free text (manual notes today; a
+    natural future source is MeetingIntelligence's own summary once that
+    integration exists — not built here, no real caller for it yet)."""
+    default = {"tasks": []}
+    system = (
+        "You are Zoiko Sema's follow-up task assistant. Given a meeting title and "
+        "notes from that meeting, extract concrete follow-up tasks in pure JSON.\n"
+        "Rules: Output JSON ONLY, no prose, no markdown fences. Match the schema "
+        "exactly. priority is one of low/med/high. assignee_email is an email "
+        "address ONLY if the notes name one explicitly; otherwise null — never "
+        "invent an email address."
+    )
+    user_prompt = (
+        f"Meeting title: {meeting_title}\nNotes:\n{context_notes}\n\n"
+        '\nSchema:\n{"tasks": [{"title": "string", "assignee_email": "string or null", "priority": "low|med|high"}]}\n'
+        "Return the JSON object now."
+    )
+    return _call_structured_ai(system, user_prompt, default, max_tokens=800)
 
 
 def ai_generate_intelligence(
@@ -711,7 +851,12 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=1024,
+            # 1024 was tight enough that a meeting with several speakers (each
+            # requiring an assignee-tagged key takeaway) could burn the whole
+            # budget before ever reaching the tables section, leaving
+            # task_tracker/risk_matrix empty even when the transcript had
+            # clearly actionable content. 2048 gives both room to complete.
+            max_tokens=2048,
             response_format={"type": "json_object"},
         )
         meta["_model"] = model

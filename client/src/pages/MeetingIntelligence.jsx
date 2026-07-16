@@ -759,7 +759,7 @@ export default function MeetingIntelligence() {
       >
         <motion.div variants={fadeUp} className="flex items-center gap-2">
           <button
-            onClick={() => navigate('/dashboard')}
+            onClick={() => navigate('/ai-summaries')}
             className="flex items-center gap-1 text-[12px] text-[var(--c-fg-muted)] hover:text-[var(--c-fg)]"
           >
             <ArrowLeft className="h-3.5 w-3.5" /> Back to dashboard
@@ -1029,7 +1029,7 @@ export default function MeetingIntelligence() {
               </motion.section>
               {!editing && (
                 <section className="mb-8">
-                  <ConversationLog conversation={payload.conversation} />
+                  <ConversationLog conversation={intel.conversation} />
                 </section>
               )}
             </>
@@ -1344,7 +1344,7 @@ export default function MeetingIntelligence() {
 
           {/* ============ Conversation ============ */}
           <section className="mb-8">
-            <ConversationLog conversation={payload.conversation} />
+            <ConversationLog conversation={intel.conversation} />
           </section>
         </>
         )

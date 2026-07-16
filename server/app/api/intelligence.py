@@ -32,6 +32,9 @@ from app.models.meeting import (
     INTEL_SOURCE_TRANSCRIPT,
     ROLE_HOST,
     ROLE_COHOST,
+    STATUS_ADMITTED,
+    STATUS_DISCONNECTED,
+    STATUS_LEFT,
 )
 from app.models.user import User
 from app.schemas.meeting import IntelligenceEditIn, IntelligenceGenerateIn, MeetingIntelligenceOut
@@ -50,13 +53,22 @@ _CACHE_SECONDS = 60
 
 
 def _has_access(meeting: Meeting, user: User, db: Session) -> bool:
-    """Anyone who hosted or participated in the meeting can read intelligence."""
+    """Anyone who hosted or actually ATTENDED the meeting can read intelligence
+    — not merely anyone with a MeetingParticipant row. A row is created the
+    moment someone requests to join (STATUS_PENDING, before the host admits
+    them from the waiting room), so without this status filter someone who
+    was denied entry, kicked before ever being admitted, or left pending when
+    the meeting ended would incorrectly pass. Only ADMITTED / DISCONNECTED
+    (admitted, WS dropped) / LEFT (admitted, then left) count as attended —
+    same org membership is NOT sufficient on its own.
+    """
     if meeting.host_id == user.id:
         return True
     row = db.scalar(
         select(MeetingParticipant).where(
             MeetingParticipant.meeting_id == meeting.id,
             MeetingParticipant.user_id == user.id,
+            MeetingParticipant.status.in_([STATUS_ADMITTED, STATUS_DISCONNECTED, STATUS_LEFT]),
         )
     )
     return row is not None
@@ -137,6 +149,8 @@ def run_generation(
     transcript: list[dict] | None = None,
     language: str = "english",
     transcript_file_url: str | None = None,
+    visible_transcript: list[dict] | None = None,
+    raw_conversation_file_url: str | None = None,
 ) -> MeetingIntelligence:
     """Core generation pipeline used by both the API endpoint and the
     auto-trigger after recording upload.
@@ -149,6 +163,15 @@ def run_generation(
     `groq_summarize_transcript` and stores `{title, summary, key_takeaways}`
     with `source=INTEL_SOURCE_TRANSCRIPT`. Otherwise runs the existing
     chat-log → Claude path with `source=INTEL_SOURCE_CHAT`, unchanged.
+
+    `visible_transcript` / `raw_conversation_file_url` (transcript path only):
+    the summary itself always generates from the FULL `transcript`, but the
+    raw conversation log shown on the summary page can be a narrower slice —
+    what was actually visible before the host clicked "stop transcribing".
+    Pass `visible_transcript` to save it fresh (a new POST), or
+    `raw_conversation_file_url` directly to reuse an already-saved slice (the
+    language-regeneration reuse path, which resaves nothing). If neither is
+    given, the raw log falls back to the full transcript file.
     """
     is_transcript = bool(transcript)
 
@@ -167,6 +190,12 @@ def run_generation(
 
     duration_seconds = recording.duration if recording else None
 
+    resolved_raw_conversation_file_url = raw_conversation_file_url
+    if is_transcript and resolved_raw_conversation_file_url is None and visible_transcript:
+        resolved_raw_conversation_file_url = _save_transcript_file(visible_transcript)
+    if is_transcript and resolved_raw_conversation_file_url is None:
+        resolved_raw_conversation_file_url = transcript_file_url
+
     intel = MeetingIntelligence(
         meeting_id=meeting.id,
         recording_id=recording.id if recording else None,
@@ -174,6 +203,7 @@ def run_generation(
         status=INTEL_STATUS_GENERATING,
         source=INTEL_SOURCE_TRANSCRIPT if is_transcript else INTEL_SOURCE_CHAT,
         transcript_file_url=transcript_file_url,
+        raw_conversation_file_url=resolved_raw_conversation_file_url,
     )
     db.add(intel)
     db.commit()
@@ -379,13 +409,18 @@ def _normalize_conversation(msgs: list[dict] | None) -> list[dict] | None:
 
 
 def _load_conversation(rec: MeetingIntelligence, meeting: Meeting, db: Session) -> list[dict] | None:
-    """Load the raw message-by-message log this intelligence row was
-    generated from (the spoken transcript or the text chat log), so the
-    summary page can show the actual conversation underneath the AI's
-    synthesized analysis — not just its extracted highlights.
+    """Load the raw message-by-message log shown on the summary page.
+
+    For transcript-sourced rows this is `raw_conversation_file_url` — the
+    slice actually visible in the Conversations panel, which can be narrower
+    than what the summary above it was generated from if the host stopped
+    transcribing mid-meeting (see run_generation) — falling back to the full
+    `transcript_file_url` for older rows that predate this column.
     """
     if rec.source == INTEL_SOURCE_TRANSCRIPT:
-        return _normalize_conversation(_load_transcript_from_url(rec.transcript_file_url))
+        return _normalize_conversation(
+            _load_transcript_from_url(rec.raw_conversation_file_url or rec.transcript_file_url)
+        )
 
     recording = db.get(MeetingRecording, rec.recording_id) if rec.recording_id else None
     if not recording:
@@ -439,6 +474,7 @@ def generate_intelligence(
             transcript=data.transcript,
             language=data.language,
             transcript_file_url=transcript_url,
+            visible_transcript=data.visible_transcript,
         )
         return _intel_to_out(intel, meeting, user, conversation=_load_conversation(intel, meeting, db))
 
@@ -474,6 +510,7 @@ def generate_intelligence(
                 transcript=stored,
                 language=data.language,
                 transcript_file_url=transcript_with_file.transcript_file_url,
+                raw_conversation_file_url=transcript_with_file.raw_conversation_file_url,
             )
             return _intel_to_out(intel, meeting, user, conversation=_load_conversation(intel, meeting, db))
 

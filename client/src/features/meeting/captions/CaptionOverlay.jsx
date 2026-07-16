@@ -6,33 +6,36 @@ import CaptionBubble from './CaptionBubble'
 import { useRoomStore } from '../state/roomStore.js'
 
 /**
- * Bottom-centre caption stack, above the toolbar (Google-Meet placement). Shows
- * only the latest live caption per speaker (no scrolling transcript), capped to
- * the most recent N speakers, with smooth fade in/out as speakers change.
+ * Bottom-centre caption stack, above the toolbar (Meet placement). Shows one
+ * live caption per speaker (no scrolling transcript), capped to the most recent
+ * N speakers, with smooth FLIP fade as speakers change.
  *
- * Reads the live-caption context exclusively, so frequent caption updates never
- * touch the participant grid. The whole stack is pointer-events-none and sits in
- * normal flow at the bottom of the stage column, so it can never overlap the
- * dock controls (which render below this column).
+ * Subscribes ONLY to the caption buffer store (via useLiveCaptions), so caption
+ * frames never touch the participant grid. Each bubble is keyed by the stable
+ * speaker identity and memoised, so an update to one speaker leaves the others'
+ * DOM untouched — incremental updates, no full-stack re-render, no flicker.
+ *
+ * The stack is pointer-events-none and sits in normal flow at the bottom of the
+ * stage column, so it can never overlap the dock controls.
  */
 export default function CaptionOverlay() {
   const { enabled } = useCaptionControls()
   const { bySpeaker } = useLiveCaptions()
   // In hero mode (screen share / speaker view) phones & portrait tablets show a
-  // horizontal participant carousel pinned to the BOTTOM of the stage column. The
-  // caption stack must clear it instead of painting over faces (Phase 8). On
+  // bottom participant carousel; lift the caption stack so it clears faces. On
   // desktop the strip sits on the right, so captions stay at the normal bottom.
   const heroActive = useRoomStore((s) => s.heroActive)
 
   const visible = useMemo(
     () =>
-      Object.entries(bySpeaker)
-        .map(([speakerId, c]) => ({ speakerId, ...c }))
+      Object.values(bySpeaker)
         .sort((a, b) => a.ts - b.ts)
         .slice(-CAPTION_CONFIG.maxSpeakers),
     [bySpeaker],
   )
 
+  // Captions RENDER only when the local user has CC on. Capture may still be
+  // running for other viewers (see CaptionProvider) — that's independent.
   if (!enabled || visible.length === 0) return null
 
   return (
@@ -42,10 +45,11 @@ export default function CaptionOverlay() {
         'transition-[bottom] duration-300 ' +
         (heroActive ? 'bottom-38 sm:bottom-42 lg:bottom-3' : 'bottom-3')
       }
-      role="region"
+      role="log"
       aria-label="Live captions"
       aria-live="polite"
       aria-atomic="false"
+      aria-relevant="additions text"
     >
       <AnimatePresence initial={false}>
         {visible.map((c) => (
@@ -57,7 +61,16 @@ export default function CaptionOverlay() {
             exit={{ opacity: 0, y: 4 }}
             transition={{ duration: 0.18, ease: 'easeOut' }}
           >
-            <CaptionBubble name={c.name} color={c.color} text={c.text} />
+            <CaptionBubble
+              name={c.name}
+              color={c.color}
+              initials={c.initials}
+              isGuest={c.isGuest}
+              finalText={c.finalText}
+              partial={c.partial}
+              ts={c.ts}
+              speaking={!!c.partial}
+            />
           </motion.div>
         ))}
       </AnimatePresence>

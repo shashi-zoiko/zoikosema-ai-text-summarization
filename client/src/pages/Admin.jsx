@@ -53,12 +53,14 @@ export default function Admin() {
   }
 
   const deleteUser = async (userId) => {
-    if (!window.confirm('Permanently delete this user?')) return
+    if (!window.confirm('Permanently delete this user? This removes their meetings, chat activity and other data.')) return
     try {
       await api(`/api/admin/users/${userId}`, { method: 'DELETE' })
       setUsers(prev => prev.filter(u => u.id !== userId))
     } catch (e) {
-      setErr(e.message)
+      // Surface the reason (e.g. the org-ownership guard) — a silent failure is
+      // exactly what read as "delete does nothing" during QA.
+      window.alert(`Could not delete user: ${e.message}`)
     }
   }
 

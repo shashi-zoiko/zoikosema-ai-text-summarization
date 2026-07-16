@@ -41,6 +41,18 @@ function formatTime(iso) {
   if (!iso) return ''
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
+/**
+ * Where a history/recent row should go when clicked. A live meeting opens its
+ * pre-join lobby so you can (re)join; a concluded meeting opens its AI summary /
+ * transcript instead of dropping you into a dead room. Fixes rows that showed
+ * "Ended" yet still routed into the meeting interface.
+ */
+function openPathFor(meeting) {
+  return meeting.is_active
+    ? meetingPath(meeting.code)
+    : meetingIntelligencePath(meeting.code)
+}
+
 function relativeDay(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -404,7 +416,7 @@ export default function Dashboard() {
                     key={m.id}
                     meeting={m}
                     delay={i * 0.05}
-                    onClick={() => navigate(meetingPath(m.code))}
+                    onClick={() => navigate(openPathFor(m))}
                     onIntel={() => navigate(meetingIntelligencePath(m.code))}
                   />
                 ))}
@@ -505,7 +517,7 @@ export default function Dashboard() {
                       className="group relative"
                     >
                       <button
-                        onClick={() => navigate(meetingPath(m.code))}
+                        onClick={() => navigate(openPathFor(m))}
                         className="grid w-full grid-cols-1 gap-1 px-5 py-3 text-left transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)] md:grid-cols-[1fr_180px_120px_120px_140px_100px] md:items-center md:gap-4"
                       >
                         <span className="flex items-center gap-3">

@@ -6,6 +6,7 @@ import {
   Check, Copy, FileText, Globe, Info, Lock, Mail, MessagesSquare, Pause, Pencil, Sparkles, Star, UserPlus,
 } from 'lucide-react'
 import HostMenu from './HostMenu.jsx'
+import TranscribingCard from './TranscribingNotice.jsx'
 import { useRoomStore } from '../state/roomStore.js'
 import { useCaptionControls } from '../captions/useCaptions.js'
 import { meetingShareText } from '../../../lib/meetingUrls.js'
@@ -33,7 +34,9 @@ export default function MeetingHeader({
   onOpenPeople,
   onSetSummarizer = () => {},
   onStartSummarizing = () => {},
-  onOpenConversations = () => {},
+  showConversationsButton = false,
+  transcribingPaused = false,
+  onToggleTranscribing = () => {},
 }) {
   const state = useConnectionState()
   const reconnecting = state === ConnectionState.Reconnecting
@@ -119,15 +122,13 @@ export default function MeetingHeader({
           />
         )}
 
-        <button
-          type="button"
-          onClick={onOpenConversations}
-          aria-label="Conversations"
-          title="Conversations"
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[#263244] bg-[#111827] text-[#94A3B8] transition hover:bg-[#1E293B] hover:text-white"
-        >
-          <MessagesSquare className="h-4 w-4" />
-        </button>
+        {showConversationsButton && (
+          <ConversationsButton
+            isHostOrCohost={isHostOrCohost}
+            paused={transcribingPaused}
+            onToggle={onToggleTranscribing}
+          />
+        )}
 
         <SummarizerButton
           isHostOrCohost={isHostOrCohost}
@@ -137,6 +138,77 @@ export default function MeetingHeader({
         />
       </div>
     </header>
+  )
+}
+
+/**
+ * Conversations header button — only rendered while Meet Summarizer itself
+ * is on (see `showConversationsButton` in MeetingHeader's props, driven by
+ * `meeting.summarizer_on`). Hovering OR clicking opens an anchored
+ * "Transcribing" status popover (TranscribingCard): what's happening, the
+ * language, and a pause/resume toggle (`paused`/`onToggle`) — a genuine
+ * toggle, not a one-way stop, so it can be flipped back and forth as many
+ * times as needed while Meet Summarizer stays on. The conversation itself is
+ * never shown here or anywhere in-meeting — capture happens silently in the
+ * background regardless of pause state, and the only place it ever surfaces
+ * is the raw conversation log on the post-meeting summary page. This button
+ * only disappears — resetting back to its initial state — when Meet
+ * Summarizer is turned off entirely (MeetRoomLivekit's 'summarizer-changed'
+ * handler), not when paused.
+ */
+function ConversationsButton({ isHostOrCohost, paused, onToggle }) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDocClick = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDocClick)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <div
+      ref={wrapRef}
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Conversations"
+        title="Conversations"
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[#263244] bg-[#111827] text-[#94A3B8] transition hover:bg-[#1E293B] hover:text-white"
+      >
+        <MessagesSquare className="h-4 w-4" />
+      </button>
+
+      {open && (
+        // Flush against the button (top-full, no gap) with the visual gap
+        // moved to inner padding instead — a real gap here would be a dead
+        // zone the pointer has to cross with nothing under it, firing
+        // mouseleave on `wrapRef` before it ever reaches the card below,
+        // which is exactly what made the card unclickable.
+        <div className="absolute right-0 top-full z-30 pt-2.5">
+          <div className="zk-glass zk-pop-in w-80 max-w-[88vw] origin-top-right overflow-hidden rounded-xl border border-[#263244] bg-[#1F2937] text-left shadow-2xl">
+            <TranscribingCard
+              isHostOrCohost={isHostOrCohost}
+              paused={paused}
+              onToggle={onToggle}
+              onClose={() => setOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -156,9 +228,14 @@ export default function MeetingHeader({
  *   - everyone else, on: the SAME status card, but the toggle renders
  *     disabled — they can see it's running, not stop it.
  *   - everyone else, off: a locked "you don't have permission" card.
- * `setCapturing` (local, off CaptionsControlContext) still separately gates
- * the HOST's OWN mic recognition — only the toggling host's speech feeds the
- * transcript this way, same as before; non-hosts merely see the status.
+ * `setCapturing` (local, off CaptionsControlContext) is kept in sync with
+ * `summarizerOn` for EVERY participant via the effect below, not just the
+ * toggling host's own click — `summarizerOn` is room-wide, so this makes
+ * every participant's own mic recognition follow it too. Without this, only
+ * whoever physically clicked "Start Summarizing" (or anyone who separately
+ * happened to have their own personal CC toggle on) ever gets captured, and
+ * everyone else's contribution is silently absent from the transcript no
+ * matter what they said — a real bug this used to have, not a design choice.
  * `onStartSummarizing` stamps the Conversations panel's session zero point
  * the first time capture turns on (idempotent there). Closes on outside
  * click or Escape, same pattern as HostMenu.
@@ -167,6 +244,16 @@ function SummarizerButton({ isHostOrCohost, summarizerOn, onSetSummarizer, onSta
   const { setCapturing } = useCaptionControls()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
+
+  // Synchronizing local capture state with an external system (starting/
+  // stopping this participant's own speech-recognition engine, inside
+  // CaptionProvider) in response to room-wide state that changes for
+  // reasons outside this component's control (another participant, usually
+  // the host, toggling it) — the textbook case an effect is for, not the
+  // "derive during render" anti-pattern.
+  useEffect(() => {
+    setCapturing(summarizerOn)
+  }, [summarizerOn, setCapturing])
 
   useEffect(() => {
     if (!open) return undefined
@@ -185,7 +272,6 @@ function SummarizerButton({ isHostOrCohost, summarizerOn, onSetSummarizer, onSta
   const toggleCapturing = () => {
     const next = !summarizerOn
     onSetSummarizer(next)
-    setCapturing(next)
     if (next) onStartSummarizing?.()
     setOpen(false)
   }

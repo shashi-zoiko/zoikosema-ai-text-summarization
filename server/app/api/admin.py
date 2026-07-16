@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, update, delete
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -11,8 +11,17 @@ from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.recording_cleanup import purge_expired_recordings
 from app.models.user import User
-from app.models.meeting import Meeting, MeetingParticipant, MeetingRecording
-from app.models.organization import Organization, Notification
+from app.models.meeting import (
+    Meeting, MeetingParticipant, MeetingRecording, MeetingIntelligence,
+)
+from app.models.organization import (
+    Organization, OrganizationMember, MeetingInvite, Notification,
+)
+from app.models.chat import (
+    Channel, ChannelMember, Message, MessageReaction, MessageReadReceipt,
+)
+from app.models.private_note import PrivateNote
+from app.models.support import SupportCase
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -152,14 +161,108 @@ def delete_user(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Permanently delete a user and the content they own.
+
+    Most tables reference ``users.id`` with the default ``ON DELETE`` (RESTRICT),
+    so a bare ``db.delete(user)`` raised an IntegrityError for any user who had
+    ever hosted a meeting or sent a message — the delete silently failed and the
+    row stayed (the reported "Delete User does nothing" bug). We instead unwind
+    the dependents explicitly, in FK-safe order, inside one transaction:
+
+      • their hosted meetings (cascades participants/recordings/intel/invites/
+        notes via ``meetings.id`` ON DELETE CASCADE),
+      • their participation, recordings, invites, chat activity, memberships and
+        notifications elsewhere,
+      • channels they created are reassigned to the acting admin rather than
+        deleted, so shared team channels survive.
+
+    If the user OWNS an organization we refuse (400) and ask for ownership to be
+    transferred first — deleting an org here would silently wipe every member and
+    invite under it, which is never what a single-user delete should do.
+    """
     _require_admin(user)
     if user_id == user.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
     target = db.get(User, user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    db.delete(target)
-    db.commit()
+
+    # Guard: block if the user still owns organizations (destructive blast radius).
+    owned_orgs = db.scalars(
+        select(Organization.name).where(Organization.owner_id == user_id)
+    ).all()
+    if owned_orgs:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This user owns "
+                + (", ".join(f'"{n}"' for n in owned_orgs))
+                + ". Transfer organization ownership before deleting them."
+            ),
+        )
+
+    try:
+        # 1. Meetings they hosted — deleting the meeting cascades its participants,
+        #    recordings, intelligence, invites and private notes (all keyed on
+        #    meetings.id ON DELETE CASCADE).
+        db.execute(delete(Meeting).where(Meeting.host_id == user_id))
+
+        # 2. Their footprint in *other* people's meetings.
+        db.execute(delete(MeetingParticipant).where(MeetingParticipant.user_id == user_id))
+        db.execute(delete(MeetingRecording).where(MeetingRecording.user_id == user_id))
+        db.execute(
+            delete(MeetingInvite).where(
+                (MeetingInvite.inviter_id == user_id)
+                | (MeetingInvite.invitee_user_id == user_id)
+            )
+        )
+        # Intelligence they requested elsewhere: detach (column is nullable).
+        db.execute(
+            update(MeetingIntelligence)
+            .where(MeetingIntelligence.requested_by_id == user_id)
+            .values(requested_by_id=None)
+        )
+
+        # 3. Chat. Order matters: clear references to their messages before the
+        #    messages themselves (reply pointers + read receipts are RESTRICT).
+        db.execute(delete(MessageReaction).where(MessageReaction.user_id == user_id))
+        db.execute(delete(MessageReadReceipt).where(MessageReadReceipt.user_id == user_id))
+        their_msg_ids = db.scalars(
+            select(Message.id).where(Message.sender_id == user_id)
+        ).all()
+        if their_msg_ids:
+            db.execute(
+                delete(MessageReadReceipt).where(
+                    MessageReadReceipt.last_read_message_id.in_(their_msg_ids)
+                )
+            )
+            db.execute(
+                update(Message)
+                .where(Message.reply_to_id.in_(their_msg_ids))
+                .values(reply_to_id=None)
+            )
+            # Reactions on their messages cascade via messages.id ON DELETE CASCADE.
+            db.execute(delete(Message).where(Message.sender_id == user_id))
+        db.execute(delete(ChannelMember).where(ChannelMember.user_id == user_id))
+        # Reassign (don't delete) channels they created — keeps shared channels alive.
+        db.execute(
+            update(Channel).where(Channel.created_by == user_id).values(created_by=user.id)
+        )
+
+        # 4. Org memberships + notifications.
+        db.execute(delete(OrganizationMember).where(OrganizationMember.user_id == user_id))
+        db.execute(delete(Notification).where(Notification.user_id == user_id))
+
+        # 5. Per-user side tables (also ON DELETE CASCADE, deleted explicitly so a
+        #    stale prod constraint can't turn the final delete into a 500).
+        db.execute(delete(PrivateNote).where(PrivateNote.user_id == user_id))
+        db.execute(delete(SupportCase).where(SupportCase.user_id == user_id))
+
+        db.delete(target)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 # ── Recent meetings (system-wide) ────────────────────────────────────────
