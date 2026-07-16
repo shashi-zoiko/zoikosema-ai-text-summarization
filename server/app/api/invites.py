@@ -1,5 +1,6 @@
 import json
 import secrets
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -45,7 +46,10 @@ def invite_to_meeting(
 
     scheduled_str = None
     if meeting.scheduled_at:
-        scheduled_str = meeting.scheduled_at.strftime("%b %d, %Y at %I:%M %p")
+        local_scheduled_at = meeting.scheduled_at
+        if meeting.timezone_name:
+            local_scheduled_at = local_scheduled_at.astimezone(ZoneInfo(meeting.timezone_name))
+        scheduled_str = local_scheduled_at.strftime("%b %d, %Y at %I:%M %p")
         if meeting.timezone_name:
             scheduled_str += f" ({meeting.timezone_name})"
 

@@ -562,7 +562,8 @@ def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str)
     organizer_email = organizer.email or get_settings().mail_from_email
     join_url = f"{get_settings().frontend_url.rstrip('/')}/calendar/{event.version_chain_id}"
     duration_minutes = max(1, int((event.end_at - event.start_at).total_seconds() // 60))
-    scheduled_str = event.start_at.strftime("%b %d, %Y at %I:%M %p") + f" ({event.timezone})"
+    local_start_at = event.start_at.astimezone(ZoneInfo(event.timezone))
+    scheduled_str = local_start_at.strftime("%b %d, %Y at %I:%M %p") + f" ({event.timezone})"
     is_confidential = event.confidentiality_class == "confidential"
 
     for email in emails:
