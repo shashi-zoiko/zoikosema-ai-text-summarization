@@ -58,7 +58,7 @@ const WORKSPACE_NAV = [
   { key: 'meetings',   label: 'Meetings',    icon: Video,             to: '/scheduled' },
   { key: 'chat',       label: 'Chat',        icon: MessageSquareText, to: '/chat', countTone: 'danger' },
   { key: 'calendar',   label: 'Calendar',    icon: Calendar,          go: '/scheduled' },
-  { key: 'summaries',  label: 'AI Summaries', icon: Sparkles,         to: '/ai-summaries', badge: { text: 'Soon' } },
+  { key: 'summaries',  label: 'AI Summaries', icon: Sparkles,         to: '/ai-summaries' },
   { key: 'actions',    label: 'Actions',     icon: CheckCircle2,      to: '/actions' },
   { key: 'review-queue', label: 'Review Queue', icon: ClipboardCheck, to: '/review-queue' },
   { key: 'recordings', label: 'Recordings',  icon: PlayCircle,        to: '/recordings', badge: { text: 'Soon' } },
