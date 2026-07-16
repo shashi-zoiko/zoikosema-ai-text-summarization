@@ -84,14 +84,22 @@ Detailed now that Phase 2's actual shape (Policy Engine, Action Review Queue, na
 
 **Provider-connect callback bug fix (2026-07-15):** found while doing slice 3's real validation — `/callback` required `provider` as a query param, but Google/Microsoft's real OAuth redirect never sends one, so every real provider connect was 422ing (a pre-existing bug from Phase 1 slice 6, only caught now because this was the first real-browser test). Fixed by recovering `provider` from the signed `state` token instead. Detail in slice 3's plan file.
 
-## Phase 4 — Shared Inboxes & L4 (spec §18 row 4) — sequencing only
+## Phase 4 — Shared Inboxes & L4 (spec §18 row 4)
 
-1. Shared/group mailboxes + delegated access model.
-2. Assignment + internal notes on shared inbox items.
-3. L4 bounded autonomy (calendar + mail) with incident brake.
-4. Executive briefing across Work Graph.
+Detailed now (2026-07-16) that Phase 3 is code-complete — see per-slice plan files below, mirroring how Phase 3 got detailed once Phase 2's shape was known.
 
-**Phase 4 exit gate**: L4 incident-free 60 days on design-partner tenants; audit-ledger export accepted by enterprise compliance reviewer.
+| # | Slice | Branch | Status | Plan file |
+|---|---|---|---|---|
+| 1 | Shared/group mailboxes + delegated access | `sema/shared-mailboxes-assignments-briefing` | done — merged 2026-07-16, verified end-to-end against real Postgres (bundled with slices 2/4, see note below) | [sema-p4-s1-shared-mailboxes-delegated-access.md](./sema-p4-s1-shared-mailboxes-delegated-access.md) |
+| 2 | Assignment + internal notes on mail items | `sema/shared-mailboxes-assignments-briefing` | done — merged 2026-07-16, verified end-to-end (bundled with slices 1/4) | [sema-p4-s2-assignment-internal-notes.md](./sema-p4-s2-assignment-internal-notes.md) |
+| 3 | L4 bounded autonomy (calendar + mail) with incident brake | none | **not started — blocked, do not start**: this slice's own gate requires real production DLP usage data to tune incident-brake thresholds against; DLP (Phase 3 slice 6) has zero real traffic as of this writing. Building it now would be guessing at thresholds, not engineering them. | (no plan file yet — write one when the gate clears) |
+| 4 | Executive briefing across Work Graph | `sema/shared-mailboxes-assignments-briefing` | done — merged 2026-07-16, verified end-to-end (bundled with slices 1/2); context assembly proven to include real Work Graph provenance, not just parallel list calls | [sema-p4-s4-executive-briefing.md](./sema-p4-s4-executive-briefing.md) |
+
+**Slices 1/2/4 bundled into one commit/branch (2026-07-16),** same reasoning as Phase 3 slices 5/8/10: `mail_service/api.py` grew endpoints for all three in the same working session, making a clean per-slice split impractical without risky manual patch surgery.
+
+**No client UI built for slices 1/2/4** — a real, disclosed gap, not silently skipped. All three are backend-complete and verified against real Postgres; a shared-mailbox delegate management screen, an assignment/notes UI in the Inbox reading pane, and an executive-briefing card (e.g. on the dashboard) are the natural next additions whenever client work on this phase is prioritized.
+
+**Phase 4 exit gate**: L4 incident-free 60 days on design-partner tenants; audit-ledger export accepted by enterprise compliance reviewer. Slice 3 (L4 itself) isn't built yet, so this gate can't start clocking regardless of the other three slices being done.
 
 ## Phase 5 — Hosted Zoiko Mail — entry-gate only, no build plan
 
