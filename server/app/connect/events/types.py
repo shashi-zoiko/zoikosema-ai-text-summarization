@@ -68,3 +68,10 @@ ACTION_REVIEW_APPROVED = "action_review.approved.v1"
 ACTION_REVIEW_REJECTED = "action_review.rejected.v1"
 ACTION_REVIEW_REDRAFT_REQUESTED = "action_review.redraft_requested.v1"
 ACTION_REVIEW_ESCALATED = "action_review.escalated.v1"
+
+# Mail send plane (Sema Calendar & Mail, spec §12.2 — Phase 3 slice 9, the
+# first L3 feature: agent/human sends within a cancellable delay window).
+MAIL_SEND_BUFFERED = "mail.send.buffered.v1"
+MAIL_SEND_CANCELLED = "mail.send.cancelled.v1"
+MAIL_SEND_RELEASED = "mail.send.released.v1"
+MAIL_SEND_FAILED = "mail.send.failed.v1"

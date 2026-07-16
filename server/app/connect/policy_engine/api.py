@@ -24,7 +24,7 @@ from app.models.user import User
 
 router = APIRouter(prefix="/policy", tags=["connect.policy_engine"])
 
-_CATEGORY = Literal["calendar"]
+_CATEGORY = Literal["calendar", "mail"]
 # "personal" (no org membership, see resolve_tenant()) is included: a solo
 # tenant has exactly one member, who is definitionally its own admin — this
 # is not a privilege escalation, it's the only way a personal tenant could

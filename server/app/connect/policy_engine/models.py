@@ -12,10 +12,13 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from app.connect.shared.base import ConnectBase
 
-# Only "calendar" has a real consumer today (Phase 2 native events). "mail"
-# joins in Phase 3 — see migration CHECK constraint, which must be extended
-# alongside this tuple when that lands.
-CATEGORIES = ("calendar",)
+# "calendar" has had a real consumer since Phase 2 native events. "mail"
+# joins here in Phase 3 slice 9 (mail send, L3) — the first real
+# mail-category policy consumer; see migrations/
+# connect_v3_016_policy_versions_mail_category.sql for the accompanying
+# CHECK constraint extension (connect_v3_004's original constraint is left
+# unedited since it may already be applied to a real database).
+CATEGORIES = ("calendar", "mail")
 
 
 class PolicyVersion(ConnectBase):
