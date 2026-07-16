@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { CalendarPlus, ListChecks, Send, Sparkles } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { CalendarPlus, ListChecks, MessageSquarePlus, Send, Sparkles, UserCheck } from 'lucide-react'
 import { api } from '../api/client'
 import Button from './ui/Button'
 import Modal from './ui/Modal'
@@ -8,13 +8,14 @@ import Badge from './ui/Badge'
 import Spinner from './ui/Spinner'
 import { useToast } from './ui/Toast'
 
-/* Phase 3 slice 8 (AI thread summaries + reply drafts, L1-L2) and slice 10
- * (email-to-meeting/task governed conversions) — the action bar under a
- * read message in the Inbox reading pane. Read-only rendering itself is
- * MailBodyView's job (slice 4); everything here calls a real, governed
- * backend endpoint — summarize is a pure read, drafting/sending/converting
- * all go through the same autonomy/DLP/Work-Graph wiring the backend
- * enforces regardless of what this UI does. */
+/* Phase 3 slice 8 (AI thread summaries + reply drafts, L1-L2), slice 10
+ * (email-to-meeting/task governed conversions), and Phase 4 slice 2
+ * (assignment + internal notes) — the action bar under a read message in
+ * the Inbox reading pane. Read-only rendering itself is MailBodyView's job
+ * (slice 4); everything here calls a real, governed backend endpoint —
+ * summarize is a pure read, drafting/sending/converting all go through the
+ * same autonomy/DLP/Work-Graph wiring the backend enforces regardless of
+ * what this UI does. */
 
 function DlpBadge({ verdict }) {
   if (!verdict) return null
@@ -247,8 +248,126 @@ function ConvertToMeetingModal({ message, open, onClose }) {
   )
 }
 
+/* Phase 4 slice 2 — assignment + internal notes. Deliberately no priority/
+ * due-date/SLA fields anywhere in this modal — status is exactly
+ * open/done, matching the backend's own non-goal boundary (spec §1.2). */
+function AssignAndNotesModal({ message, open, onClose }) {
+  const { toast } = useToast()
+  const [assigneeId, setAssigneeId] = useState('')
+  const [assignment, setAssignment] = useState(null)
+  const [notes, setNotes] = useState(null)
+  const [noteBody, setNoteBody] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  const loadNotes = () => {
+    api(`/api/connect/mail/messages/${encodeURIComponent(message.id)}/notes`)
+      .then(setNotes)
+      .catch((err) => { setError(err.message); setNotes([]) })
+  }
+
+  useEffect(() => { if (open) loadNotes() }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const assign = async () => {
+    const id = parseInt(assigneeId, 10)
+    if (!id) return
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await api(`/api/connect/mail/messages/${encodeURIComponent(message.id)}/assign`, {
+        method: 'POST', body: { assigned_to_user_id: id },
+      })
+      setAssignment(result)
+      toast(`Assigned to user #${id}`)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const markDone = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await api(`/api/connect/mail/messages/${encodeURIComponent(message.id)}/assignment/status`, {
+        method: 'POST', body: { status: 'done' },
+      })
+      setAssignment(result)
+      toast('Marked done')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const addNote = async () => {
+    if (!noteBody.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api(`/api/connect/mail/messages/${encodeURIComponent(message.id)}/notes`, {
+        method: 'POST', body: { body: noteBody },
+      })
+      setNoteBody('')
+      loadNotes()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Assign & notes" size="md">
+      <div className="space-y-4">
+        <div>
+          <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">Assignment</div>
+          <div className="flex items-end gap-2">
+            <Field label="Assign to user ID" hint="Numeric user ID">
+              <Input value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} placeholder="e.g. 42" />
+            </Field>
+            <Button variant="outline" size="sm" disabled={busy || !assigneeId} onClick={assign}>Assign</Button>
+          </div>
+          {assignment && (
+            <div className="mt-2 flex items-center justify-between rounded-lg border border-[var(--c-line)] px-3 py-2 text-[12.5px]">
+              <span>Assigned to #{assignment.assigned_to_user_id} — {assignment.status}</span>
+              {assignment.status === 'open' && (
+                <Button variant="ghost" size="xs" disabled={busy} onClick={markDone}>Mark done</Button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {error && <p className="text-[12.5px] text-[var(--c-danger)]">{error}</p>}
+
+        <div>
+          <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">Internal notes</div>
+          <div className="mb-2 max-h-[180px] space-y-2 overflow-y-auto">
+            {notes === null && <p className="text-[12.5px] text-[var(--c-fg-muted)]">Loading…</p>}
+            {notes?.length === 0 && <p className="text-[12.5px] text-[var(--c-fg-muted)]">No notes yet.</p>}
+            {notes?.map((n) => (
+              <div key={n.id} className="rounded-lg border border-[var(--c-line)] bg-[var(--c-bg-2)] p-2.5 text-[12.5px]">
+                <p className="text-[var(--c-fg)]">{n.body}</p>
+                <p className="mt-1 text-[11px] text-[var(--c-fg-muted)]">User #{n.author_user_id}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-end gap-2">
+            <Field label="Add a note">
+              <Input value={noteBody} onChange={(e) => setNoteBody(e.target.value)} placeholder="Internal only — never sent" />
+            </Field>
+            <Button variant="outline" size="sm" disabled={busy || !noteBody.trim()} onClick={addNote}>Add</Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function MailMessageActions({ message }) {
-  const [openModal, setOpenModal] = useState(null) // 'reply' | 'task' | 'meeting' | null
+  const [openModal, setOpenModal] = useState(null) // 'reply' | 'task' | 'meeting' | 'assign' | null
 
   return (
     <div className="mt-4 border-t border-[var(--c-line)] pt-3">
@@ -256,6 +375,7 @@ export default function MailMessageActions({ message }) {
         <Button variant="outline" size="sm" leftIcon={<Send className="h-3.5 w-3.5" />} onClick={() => setOpenModal('reply')}>Draft reply</Button>
         <Button variant="outline" size="sm" leftIcon={<ListChecks className="h-3.5 w-3.5" />} onClick={() => setOpenModal('task')}>Convert to task</Button>
         <Button variant="outline" size="sm" leftIcon={<CalendarPlus className="h-3.5 w-3.5" />} onClick={() => setOpenModal('meeting')}>Convert to meeting</Button>
+        <Button variant="outline" size="sm" leftIcon={<UserCheck className="h-3.5 w-3.5" />} onClick={() => setOpenModal('assign')}>Assign & notes</Button>
       </div>
 
       <SummaryPanel message={message} />
@@ -263,6 +383,7 @@ export default function MailMessageActions({ message }) {
       {openModal === 'reply' && <DraftReplyModal message={message} open onClose={() => setOpenModal(null)} />}
       {openModal === 'task' && <ConvertToTaskModal message={message} open onClose={() => setOpenModal(null)} />}
       {openModal === 'meeting' && <ConvertToMeetingModal message={message} open onClose={() => setOpenModal(null)} />}
+      {openModal === 'assign' && <AssignAndNotesModal message={message} open onClose={() => setOpenModal(null)} />}
     </div>
   )
 }
