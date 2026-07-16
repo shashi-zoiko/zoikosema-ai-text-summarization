@@ -319,6 +319,22 @@ function WorkspaceSection() {
         </button>
       </Card>
 
+      <Card title="Mail" desc="Preview the mail rendering pipeline (internal QA — full inbox coming later).">
+        <button
+          onClick={() => navigate('/settings/mail-preview')}
+          className="flex w-full items-center gap-3 !rounded-[10px] !border-[var(--c-line-strong)] !bg-[var(--c-bg-1)] px-4 py-3 text-left"
+        >
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--c-accent-soft)] text-[var(--c-accent)]">
+            <Mail className="h-4.5 w-4.5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13.5px] font-semibold text-[var(--c-fg)]">Synced mail (preview)</span>
+            <span className="block text-[12px] text-[var(--c-fg-muted)]">View rendered messages from connected Gmail/Outlook</span>
+          </span>
+          <ChevronRight className="h-4.5 w-4.5 text-[var(--c-fg-muted)]" />
+        </button>
+      </Card>
+
       {cropFile && (
         <AvatarCropModal file={cropFile} onCancel={() => setCropFile(null)} onDone={onCropDone} />
       )}
