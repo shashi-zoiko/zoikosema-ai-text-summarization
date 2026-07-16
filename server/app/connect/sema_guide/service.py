@@ -124,10 +124,19 @@ def chat(
             "has_sources": len(ctx.sources) > 0,
         })
 
-        sources = [
-            Source(label=s["label"], url=s.get("url"))
-            for s in ctx.sources
-        ]
+        seen = set()
+        unique_sources = []
+        for s in ctx.sources:
+            key = s.get("title") or s.get("label", "")
+            if key not in seen:
+                seen.add(key)
+                unique_sources.append(Source(
+                    label=s["label"],
+                    url=s.get("url"),
+                    title=s.get("title", ""),
+                ))
+
+        sources = unique_sources
 
         span.success = is_valid
         span.duration_ms = round((time.time() - started_at) * 1000, 1)

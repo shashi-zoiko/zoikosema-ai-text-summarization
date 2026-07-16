@@ -230,6 +230,18 @@ export const useSemaGuide = create((set, get) => ({
     }
   },
 
+  appendStreamChunk: (chunk) => {
+    const { loading, messages } = get()
+    if (!loading) return
+    const last = messages[messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    const updated = { ...last, content: (last.content || '') + (chunk.content || '') }
+    if (chunk.sources) {
+      return
+    }
+    set({ messages: [...messages.slice(0, -1), updated] })
+  },
+
   setProcessing: (processing) => set({ processing }),
   clearProcessing: () => set({ processing: null }),
 
