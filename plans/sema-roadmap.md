@@ -108,3 +108,11 @@ Per spec §18 and DR-10, this phase is evaluated against its entry gate, not pre
 ## Cross-cutting, not its own phase
 
 `plans/zoikotime-workforce-signal-integration.md` (ZoikoTime → Sema workforce signal webhook) is a separate, parallel plan spanning both repos. It feeds Phase 2 slice 6 (Scheduling Engine) and Phase 1 slice 7 (availability stub) but is sequenced and branched independently — see that file directly.
+
+## Client-UI audit (2026-07-16) — which backend surfaces have no UI yet
+
+A background audit of every `/api/connect/*` prefix against `client/src` turned up gaps that had gone unnoticed because each slice's own "Done when" criteria only asked for backend verification against real Postgres, not a client surface. Findings and what was done about them:
+
+- **Policy Engine (`/api/connect/policy/*`) — had ZERO client UI**, despite gating every L2/L3/L4 feature built across this whole session (Action Review staging, mail send/delayed-buffer, DLP-driven autonomy). Autonomy ceilings were settable only via raw API. **Fixed** (`sema/policy-governance-admin-ui`, merged): a real `Governance.jsx` admin page wiring `resolve`/`history`/`ceiling`. Note: `Settings.jsx`'s pre-existing "Agentic Governance" cards look like this feature but are mock data against a different, older endpoint (`/api/settings/overview`) — left untouched rather than risk a large unrelated refactor; the two should eventually be reconciled by whoever owns Settings.jsx.
+- **Work Graph (`/api/connect/work-graph/*`) — no client UI**, and none is planned: its own slice 7 plan file only asked for a query endpoint (an internal substrate other features consume), not an end-user surface. Not treated as a gap.
+- **Calendar Service's native REST endpoints (`/api/connect/calendar/*`: native-events, resources, team-calendar, tasks, ai/agenda, ai/brief, ai/followup-tasks) — no client caller on this branch.** Phase 2's own slice 9 (native calendar view UI, `sema/native-calendar-ui`) was branched directly off `main` and already merged there (see Phase 2's slice 9 note above) — whether that UI calls these exact endpoints or a different path hasn't been re-verified from this branch; flagging as an open question for whoever next touches Calendar UI, not re-litigating it here.
