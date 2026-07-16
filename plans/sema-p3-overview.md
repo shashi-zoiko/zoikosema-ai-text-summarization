@@ -1,0 +1,3 @@
+# Phase 3 — Mail Connect: superseded
+
+This sequencing sketch was written before Phase 2 existed, when Mail Connect's actual reusable shape (Policy Engine, Action Review Queue, native events) was still speculative. Phase 2 is now done — see [sema-roadmap.md](./sema-roadmap.md) for the full, detailed, slice-by-slice Phase 3 plan (11 slices, each with its own plan file), including one resequencing this overview got wrong: Work Graph moved from slice 1 to slice 7, since building it before any real Email data existed would have violated the same "don't build infrastructure before a real consumer needs it" doctrine every other phase boundary in this build has followed.
