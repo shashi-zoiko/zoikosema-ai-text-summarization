@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Trash2, Users2 } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Trash2, Users2 } from 'lucide-react'
 import { api } from '../api/client'
 import { cn } from '../lib/cn'
 import Button from '../components/ui/Button'
@@ -128,6 +128,23 @@ function layoutDayEvents(sortedEvents) {
     for (const ev of cluster) layout.set(ev.key, { col: colOf.get(ev.key), colCount })
   }
   return layout
+}
+
+// Warn, don't block: overlap is a legitimate thing to want (a quick call
+// during a longer block, a double-booked room you're aware of) — this just
+// surfaces it before you confirm, same spirit as the week view now showing
+// overlaps side by side instead of hiding them. Only checks against events
+// already loaded for the visible range, so an edit/create for a date well
+// outside the current view won't catch a conflict there — an acceptable
+// gap for a warn-only check, not a hard guarantee.
+function findConflicts(events, { date, startTime, endTime, excludeKey }) {
+  if (!date || !startTime || !endTime) return []
+  const start = new Date(`${date}T${startTime}`)
+  const end = new Date(`${date}T${endTime}`)
+  if (end <= start) return []
+  return events.filter((ev) =>
+    ev.key !== excludeKey && !ev.allDay && ev.status !== 'cancelled' && ev.start < end && ev.end > start,
+  )
 }
 
 function weekLabel(days) {
@@ -384,12 +401,14 @@ export default function CalendarView() {
       <CreateEventModal
         open={!!showCreate}
         initial={showCreate}
+        events={events || []}
         onClose={() => setShowCreate(null)}
         onCreated={onCreated}
         toast={toast}
       />
       <EditEventModal
         event={editing}
+        events={events || []}
         onClose={() => setEditing(null)}
         onSaved={onSaved}
         toast={toast}
@@ -635,13 +654,18 @@ function EventDetailModal({ event, onClose, onEdit, onDelete }) {
   )
 }
 
-function CreateEventModal({ open, initial, onClose, onCreated, toast }) {
+function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) {
   const [title, setTitle] = useState('')
   const [date, setDate] = useState('')
   const [startTime, setStartTime] = useState('09:00')
   const [endTime, setEndTime] = useState('09:30')
   const [location, setLocation] = useState('')
   const [saving, setSaving] = useState(false)
+
+  const conflicts = useMemo(
+    () => findConflicts(events, { date, startTime, endTime, excludeKey: null }),
+    [events, date, startTime, endTime],
+  )
 
   useEffect(() => {
     if (open) {
@@ -738,6 +762,7 @@ function CreateEventModal({ open, initial, onClose, onCreated, toast }) {
             placeholder="Room 4 / video link"
           />
         </LabeledInput>
+        <ConflictWarning conflicts={conflicts} />
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="primary" disabled={saving}>{saving ? 'Creating…' : 'Create'}</Button>
@@ -747,13 +772,18 @@ function CreateEventModal({ open, initial, onClose, onCreated, toast }) {
   )
 }
 
-function EditEventModal({ event, onClose, onSaved, toast }) {
+function EditEventModal({ event, events, onClose, onSaved, toast }) {
   const [title, setTitle] = useState('')
   const [date, setDate] = useState('')
   const [startTime, setStartTime] = useState('09:00')
   const [endTime, setEndTime] = useState('09:30')
   const [location, setLocation] = useState('')
   const [saving, setSaving] = useState(false)
+
+  const conflicts = useMemo(
+    () => findConflicts(events, { date, startTime, endTime, excludeKey: event?.key }),
+    [events, date, startTime, endTime, event],
+  )
 
   useEffect(() => {
     if (event) {
@@ -846,12 +876,30 @@ function EditEventModal({ event, onClose, onSaved, toast }) {
             placeholder="Room 4 / video link"
           />
         </LabeledInput>
+        <ConflictWarning conflicts={conflicts} />
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
         </div>
       </form>
     </Modal>
+  )
+}
+
+function ConflictWarning({ conflicts }) {
+  if (!conflicts.length) return null
+  return (
+    <div className="rounded-[8px] border border-[color-mix(in_srgb,var(--c-warn)_30%,var(--c-line))] bg-[var(--c-warn-soft,transparent)] px-3 py-2 text-[12.5px] text-[var(--c-warn)]">
+      <div className="flex items-center gap-1.5 font-medium">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Overlaps {conflicts.length} other event{conflicts.length > 1 ? 's' : ''} — you can still save
+      </div>
+      <ul className="mt-1 space-y-0.5 pl-5 opacity-90">
+        {conflicts.map((c) => (
+          <li key={c.key} className="list-disc truncate">{c.title} · {fmtTime(c.start)}–{fmtTime(c.end)}</li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
