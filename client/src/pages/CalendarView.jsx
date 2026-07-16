@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Trash2, Users2, X } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Search, Trash2, Users2, X } from 'lucide-react'
 import { api } from '../api/client'
 import { cn } from '../lib/cn'
 import Button from '../components/ui/Button'
@@ -185,6 +185,79 @@ function findConflicts(events, { date, startTime, endTime, excludeKey }) {
   )
 }
 
+// Shared by the main view-range fetch and search's wider one-off fetch —
+// same merge (external sync + native events + recurring-series expansion)
+// either way, just a different [rangeStart, rangeEnd] window.
+async function fetchMergedEvents(rangeStart, rangeEnd) {
+  const timeMin = rangeStart.toISOString()
+  const timeMax = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate(), 23, 59, 59).toISOString()
+
+  const [external, native] = await Promise.all([
+    api(`/api/connect/calendar/events?time_min=${encodeURIComponent(timeMin)}&time_max=${encodeURIComponent(timeMax)}`),
+    api(`/api/connect/calendar/native-events?time_min=${encodeURIComponent(timeMin)}&time_max=${encodeURIComponent(timeMax)}`),
+  ])
+
+  const recurring = native.filter((e) => e.rrule)
+  const nonRecurring = native.filter((e) => !e.rrule)
+
+  const occurrenceLists = await Promise.all(
+    recurring.map((e) =>
+      api(
+        `/api/connect/calendar/native-events/${encodeURIComponent(e.version_chain_id)}/occurrences` +
+        `?range_start=${encodeURIComponent(timeMin)}&range_end=${encodeURIComponent(timeMax)}`,
+      ).catch(() => []), // one bad series shouldn't blank the whole view
+    ),
+  )
+
+  return [
+    ...external.map((e) => ({
+      key: `ext-${e.id}`,
+      title: e.title || '(no title)',
+      start: e.start_at ? new Date(e.start_at) : null,
+      end: e.end_at ? new Date(e.end_at) : null,
+      allDay: e.all_day,
+      location: e.location,
+      description: e.description,
+      attendees: e.attendees || [],
+      source: 'external',
+      provider: e.provider,
+      status: e.status,
+    })),
+    ...nonRecurring.map((e) => ({
+      key: `native-${e.id}`,
+      versionChainId: e.version_chain_id,
+      title: e.title,
+      start: new Date(e.start_at),
+      end: new Date(e.end_at),
+      allDay: false,
+      location: e.location,
+      description: e.description,
+      attendees: e.attendees || [],
+      source: 'native',
+      confidentiality: e.confidentiality_class,
+      status: e.status,
+    })),
+    ...occurrenceLists.flatMap((occs, i) =>
+      occs.map((o) => ({
+        key: `native-${recurring[i].version_chain_id}-${o.recurrence_id || o.start_at}`,
+        versionChainId: o.version_chain_id,
+        recurrenceId: o.recurrence_id,
+        title: o.title,
+        start: new Date(o.start_at),
+        end: new Date(o.end_at),
+        allDay: false,
+        location: o.location,
+        description: o.description,
+        attendees: o.attendees || [],
+        source: 'native',
+        confidentiality: o.confidentiality_class,
+        status: o.status,
+        recurring: true,
+      })),
+    ),
+  ].filter((e) => e.start && e.status !== 'cancelled')
+}
+
 function weekLabel(days) {
   const start = days[0], end = days[days.length - 1]
   if (start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear()) {
@@ -205,6 +278,9 @@ export default function CalendarView() {
   const [selected, setSelected] = useState(null)
   const [editing, setEditing] = useState(null) // the native event being edited, or null
   const [showCreate, setShowCreate] = useState(null) // null | { date, startTime, endTime }
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchPool, setSearchPool] = useState(null) // null = not fetched yet
+  const [searchLoading, setSearchLoading] = useState(false)
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000)
@@ -228,83 +304,10 @@ export default function CalendarView() {
 
   useEffect(() => {
     let cancelled = false
-    const timeMin = rangeStart.toISOString()
-    const timeMax = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate(), 23, 59, 59).toISOString()
-
-    async function load() {
-      setError(null)
-      try {
-        const [external, native] = await Promise.all([
-          api(`/api/connect/calendar/events?time_min=${encodeURIComponent(timeMin)}&time_max=${encodeURIComponent(timeMax)}`),
-          api(`/api/connect/calendar/native-events?time_min=${encodeURIComponent(timeMin)}&time_max=${encodeURIComponent(timeMax)}`),
-        ])
-
-        const recurring = native.filter((e) => e.rrule)
-        const nonRecurring = native.filter((e) => !e.rrule)
-
-        const occurrenceLists = await Promise.all(
-          recurring.map((e) =>
-            api(
-              `/api/connect/calendar/native-events/${encodeURIComponent(e.version_chain_id)}/occurrences` +
-              `?range_start=${encodeURIComponent(timeMin)}&range_end=${encodeURIComponent(timeMax)}`,
-            ).catch(() => []), // one bad series shouldn't blank the whole view
-          ),
-        )
-
-        const merged = [
-          ...external.map((e) => ({
-            key: `ext-${e.id}`,
-            title: e.title || '(no title)',
-            start: e.start_at ? new Date(e.start_at) : null,
-            end: e.end_at ? new Date(e.end_at) : null,
-            allDay: e.all_day,
-            location: e.location,
-            description: e.description,
-            attendees: e.attendees || [],
-            source: 'external',
-            provider: e.provider,
-            status: e.status,
-          })),
-          ...nonRecurring.map((e) => ({
-            key: `native-${e.id}`,
-            versionChainId: e.version_chain_id,
-            title: e.title,
-            start: new Date(e.start_at),
-            end: new Date(e.end_at),
-            allDay: false,
-            location: e.location,
-            description: e.description,
-            attendees: e.attendees || [],
-            source: 'native',
-            confidentiality: e.confidentiality_class,
-            status: e.status,
-          })),
-          ...occurrenceLists.flatMap((occs, i) =>
-            occs.map((o) => ({
-              key: `native-${recurring[i].version_chain_id}-${o.recurrence_id || o.start_at}`,
-              versionChainId: o.version_chain_id,
-              recurrenceId: o.recurrence_id,
-              title: o.title,
-              start: new Date(o.start_at),
-              end: new Date(o.end_at),
-              allDay: false,
-              location: o.location,
-              description: o.description,
-              attendees: o.attendees || [],
-              source: 'native',
-              confidentiality: o.confidentiality_class,
-              status: o.status,
-              recurring: true,
-            })),
-          ),
-        ].filter((e) => e.start && e.status !== 'cancelled')
-
-        if (!cancelled) setEvents(merged)
-      } catch (err) {
-        if (!cancelled) { setError(err.message); setEvents([]) }
-      }
-    }
-    load()
+    setError(null)
+    fetchMergedEvents(rangeStart, rangeEnd)
+      .then((merged) => { if (!cancelled) setEvents(merged) })
+      .catch((err) => { if (!cancelled) { setError(err.message); setEvents([]) } })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, cursor])
@@ -369,6 +372,40 @@ export default function CalendarView() {
     }
   }
 
+  // Search covers a much wider window than whatever's currently on screen
+  // (±6 months) — fetched once, lazily, on first search rather than baked
+  // into the normal view-range fetch, since most visits never search.
+  const ensureSearchPool = () => {
+    if (searchPool !== null || searchLoading) return
+    setSearchLoading(true)
+    const wideStart = addDays(new Date(), -180)
+    const wideEnd = addDays(new Date(), 180)
+    fetchMergedEvents(wideStart, wideEnd)
+      .then(setSearchPool)
+      .catch(() => setSearchPool([]))
+      .finally(() => setSearchLoading(false))
+  }
+
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q || !searchPool) return []
+    return searchPool
+      .filter((ev) =>
+        ev.title?.toLowerCase().includes(q) ||
+        ev.location?.toLowerCase().includes(q) ||
+        ev.attendees?.some((a) => a.email?.toLowerCase().includes(q)),
+      )
+      .sort((a, b) => a.start - b.start)
+      .slice(0, 20)
+  }, [searchQuery, searchPool])
+
+  const jumpToEvent = (ev) => {
+    setMode('day')
+    setCursor(new Date(ev.start.getFullYear(), ev.start.getMonth(), ev.start.getDate()))
+    setSelected(ev)
+    setSearchQuery('')
+  }
+
   return (
     <div className="mx-auto w-full max-w-[1200px] px-6 py-10 sm:px-10">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -378,9 +415,19 @@ export default function CalendarView() {
             Your Sema calendar — native events plus anything synced from Google Calendar.
           </p>
         </div>
-        <Button variant="primary" onClick={openCreateBlank}>
-          <Plus className="h-4 w-4" /> New event
-        </Button>
+        <div className="flex items-center gap-2">
+          <SearchBox
+            query={searchQuery}
+            setQuery={setSearchQuery}
+            results={searchResults}
+            loading={searchLoading}
+            onFocus={ensureSearchPool}
+            onPick={jumpToEvent}
+          />
+          <Button variant="primary" onClick={openCreateBlank}>
+            <Plus className="h-4 w-4" /> New event
+          </Button>
+        </div>
       </header>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -647,6 +694,63 @@ function MonthGrid({ days, cursor, eventsByDay, today, onDayClick, onEventClick 
           </button>
         )
       })}
+    </div>
+  )
+}
+
+function SearchBox({ query, setQuery, results, loading, onFocus, onPick }) {
+  const [open, setOpen] = useState(false)
+  const blurTimeout = useRef(null)
+
+  const handleFocus = () => {
+    if (blurTimeout.current) clearTimeout(blurTimeout.current)
+    setOpen(true)
+    onFocus()
+  }
+  const handleBlur = () => {
+    blurTimeout.current = setTimeout(() => setOpen(false), 120)
+  }
+
+  const showDropdown = open && query.trim().length > 0
+
+  return (
+    <div className="relative">
+      <div className="flex items-center gap-1.5 rounded-[9px] border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] px-2.5 py-1.5">
+        <Search className="h-3.5 w-3.5 text-[var(--c-fg-muted)]" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          placeholder="Search events"
+          className="w-[160px] bg-transparent text-[13px] text-[var(--c-fg)] outline-none placeholder:text-[var(--c-fg-muted)] sm:w-[200px]"
+        />
+      </div>
+      {showDropdown && (
+        <div className="absolute right-0 z-30 mt-1.5 max-h-[360px] w-[320px] overflow-y-auto rounded-[10px] border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] p-1.5 shadow-lg">
+          {loading ? (
+            <div className="flex items-center justify-center py-4"><Spinner size="sm" /></div>
+          ) : results.length === 0 ? (
+            <div className="px-2 py-3 text-[12.5px] text-[var(--c-fg-muted)]">No matching events in the last/next 6 months.</div>
+          ) : (
+            results.map((ev) => (
+              <button
+                key={ev.key}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()} // keeps focus so the click lands before blur closes the dropdown
+                onClick={() => onPick(ev)}
+                className="block w-full rounded-[7px] px-2.5 py-1.5 text-left hover:bg-[var(--c-bg-3)]"
+              >
+                <span className="block truncate text-[13px] font-medium text-[var(--c-fg)]">{ev.title}</span>
+                <span className="block truncate text-[11.5px] text-[var(--c-fg-muted)]">
+                  {ev.start.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} · {fmtTime(ev.start)}
+                  {ev.location ? ` · ${ev.location}` : ''}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
     </div>
   )
 }
