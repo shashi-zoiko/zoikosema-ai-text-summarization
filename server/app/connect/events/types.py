@@ -75,3 +75,8 @@ MAIL_SEND_BUFFERED = "mail.send.buffered.v1"
 MAIL_SEND_CANCELLED = "mail.send.cancelled.v1"
 MAIL_SEND_RELEASED = "mail.send.released.v1"
 MAIL_SEND_FAILED = "mail.send.failed.v1"
+
+# Mail AI plane (Sema Calendar & Mail, spec §12.2 — Phase 3 slice 8). Fires
+# whenever a reply draft is prepared (L1 direct-return or L2 staged) — spec
+# names this event explicitly; this is its first real producer.
+MAIL_DRAFT_PREPARED = "mail.draft.prepared.v1"

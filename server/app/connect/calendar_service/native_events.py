@@ -161,7 +161,15 @@ async def create_event(
     timezone_name: str = "UTC", description: str | None = None, location: str | None = None,
     attendees: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None,
     confidentiality_class: str = "standard", rrule: str | None = None,
+    source_message_id: str | None = None,
 ) -> dict[str, Any]:
+    """`source_message_id` (Phase 3 slice 10): set when this create is a
+    governed email-to-meeting conversion — carried through the L2 staged
+    payload (if staging applies) so the Work Graph derived_from edge
+    (Email->CalendarEvent) can still be written once a staged proposal is
+    approved and materialized, not just on the direct-create path. Kept out
+    of the calendar event's own persisted fields (`_parsed`/`_insert_version`
+    never see it) since it's Work Graph provenance, not calendar data."""
     attendees = attendees or []
     resources = resources or []
     _validate_fields(title=title, start_at=start_at, end_at=end_at, confidentiality_class=confidentiality_class)
@@ -180,7 +188,7 @@ async def create_event(
         staged = await action_review.stage_action(
             db, ctx,
             action_type=CALENDAR_EVENT_CREATE_ACTION,
-            action_payload=payload,
+            action_payload={**payload, "source_message_id": source_message_id},
             policy_verdicts={"autonomy": resolved.level},
             blast_radius={"attendees": [a.get("email") for a in attendees if a.get("email")]},
             rollback_descriptor="no_rollback",  # nothing exists yet to roll back on a rejected create
@@ -189,6 +197,8 @@ async def create_event(
 
     event = _insert_version(db, ctx, version_chain_id=uuid7_str(), version_number=1, status="confirmed", **_parsed(payload))
     _link_attendees_to_work_graph(db, ctx, event)
+    if source_message_id:
+        _link_email_conversion_to_work_graph(db, ctx, event, source_message_id)
     env = _emit_mutated(db, ctx, event, action="created")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -208,12 +218,15 @@ async def create_event_from_approved_proposal(db: DbSession, ctx: TenantContext,
     if item.status != "approved":
         raise Conflict(f"Item is '{item.status}', not 'approved' — cannot materialize")
 
-    p = item.action_payload
+    p = dict(item.action_payload)
+    source_message_id = p.pop("source_message_id", None)
     event = _insert_version(
         db, ctx, version_chain_id=uuid7_str(), version_number=1, status="confirmed",
         **_parsed(p),
     )
     _link_attendees_to_work_graph(db, ctx, event)
+    if source_message_id:
+        _link_email_conversion_to_work_graph(db, ctx, event, source_message_id)
     env = _emit_mutated(db, ctx, event, action="created")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -494,6 +507,25 @@ def _link_attendees_to_work_graph(db: DbSession, ctx: TenantContext, event: Nati
             from_node_type="person", from_node_id=str(user.id),
             to_node_type="calendar_event", to_node_id=event.version_chain_id,
         )
+
+
+def _link_email_conversion_to_work_graph(
+    db: DbSession, ctx: TenantContext, event: NativeCalendarEvent, message_id: str,
+) -> None:
+    """Work Graph derived_from edge (CalendarEvent->Email, spec §3.2), Phase
+    3 slice 10 — the email-to-meeting conversion's provenance link, written
+    at creation time (materialize or approved-proposal-materialize) rather
+    than backfilled, since Work Graph already exists by the time this
+    slice landed (unlike Phase 2 slice 8's Task edges, which predated it).
+    Same local-import-to-break-cycle reasoning as
+    _link_attendees_to_work_graph above."""
+    from app.connect.work_graph import service as work_graph
+
+    work_graph.create_edge(
+        db, ctx, edge_type="derived_from",
+        from_node_type="calendar_event", from_node_id=event.version_chain_id,
+        to_node_type="email", to_node_id=message_id,
+    )
 
 
 def _emit_mutated(db: DbSession, ctx: TenantContext, event: NativeCalendarEvent, *, action: str) -> EventEnvelope:
