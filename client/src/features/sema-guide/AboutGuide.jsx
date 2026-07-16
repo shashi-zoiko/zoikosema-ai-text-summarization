@@ -70,6 +70,36 @@ function ErrorState({ message, onRetry }) {
   )
 }
 
+function Section({ title, children }) {
+  return (
+    <div className="rounded-xl border px-4 py-3.5" style={{ borderColor: 'var(--c-line)', backgroundColor: 'var(--c-surface)' }}>
+      <h3 className="mb-2.5 text-[13px] font-bold" style={{ color: 'var(--c-fg)' }}>{title}</h3>
+      {children}
+    </div>
+  )
+}
+
+function Row({ label, value, valueColor }) {
+  return (
+    <div className="flex items-center justify-between py-1.5">
+      <span className="text-[12.5px]" style={{ color: 'var(--c-fg-dim)' }}>{label}</span>
+      <span className="text-[12.5px] font-medium text-right max-w-[55%]" style={{ color: valueColor || 'var(--c-fg)' }}>{value}</span>
+    </div>
+  )
+}
+
+function CapabilityItem({ icon, label, desc }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <div className="mt-0.5">{icon}</div>
+      <div>
+        <p className="text-[12px] font-medium" style={{ color: 'var(--c-fg)' }}>{label}</p>
+        <p className="text-[11px]" style={{ color: 'var(--c-fg-dim)' }}>{desc}</p>
+      </div>
+    </div>
+  )
+}
+
 export default function AboutGuide() {
   const { clearSecondaryView, closePanel, aboutData, aboutLoading, aboutError, fetchAboutGuide } = useSemaGuide()
 
@@ -82,30 +112,6 @@ export default function AboutGuide() {
   if (!aboutData) return <LoadingSkeleton />
 
   const d = aboutData
-
-  const Section = ({ title, children }) => (
-    <div className="rounded-xl border px-4 py-3.5" style={{ borderColor: 'var(--c-line)', backgroundColor: 'var(--c-surface)' }}>
-      <h3 className="mb-2.5 text-[13px] font-bold" style={{ color: 'var(--c-fg)' }}>{title}</h3>
-      {children}
-    </div>
-  )
-
-  const Row = ({ label, value, valueColor }) => (
-    <div className="flex items-center justify-between py-1.5">
-      <span className="text-[12.5px]" style={{ color: 'var(--c-fg-dim)' }}>{label}</span>
-      <span className="text-[12.5px] font-medium text-right max-w-[55%]" style={{ color: valueColor || 'var(--c-fg)' }}>{value}</span>
-    </div>
-  )
-
-  const CapabilityItem = ({ icon, label, desc }) => (
-    <div className="flex items-start gap-2.5">
-      <div className="mt-0.5">{icon}</div>
-      <div>
-        <p className="text-[12px] font-medium" style={{ color: 'var(--c-fg)' }}>{label}</p>
-        <p className="text-[11px]" style={{ color: 'var(--c-fg-dim)' }}>{desc}</p>
-      </div>
-    </div>
-  )
 
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--c-bg)' }}>

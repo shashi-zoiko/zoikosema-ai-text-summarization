@@ -99,18 +99,48 @@ _PRODUCT_DOC_ARTICLES = [
 ]
 
 
+_SKIP_WORDS = {"the", "a", "an", "is", "are", "was", "were", "be", "been",
+               "being", "have", "has", "had", "do", "does", "did", "will",
+               "would", "could", "should", "may", "might", "can", "shall",
+               "to", "of", "in", "for", "on", "with", "at", "by", "from",
+               "as", "into", "through", "during", "before", "after", "about",
+               "between", "under", "over", "out", "off", "up", "down", "and",
+               "or", "but", "nor", "not", "so", "yet", "if", "then", "than",
+               "also", "just", "very", "too", "how", "what", "why", "when",
+               "where", "which", "who", "whom", "this", "that", "these",
+               "those", "i", "you", "he", "she", "it", "we", "they", "me",
+               "my", "your", "his", "her", "its", "our", "their", "mine",
+               "yours", "hers", "its", "ours", "theirs", "&", "check"}
+
+
+def _score_article(question: str, title: str, content: str) -> float:
+    q_words = [w for w in question.lower().split() if w not in _SKIP_WORDS and len(w) > 2]
+    if not q_words:
+        return 0
+    score = 0
+    title_lower = title.lower()
+    content_lower = content.lower()
+    matched_keywords = 0
+    for kw in q_words:
+        kw_match = False
+        if kw in title_lower:
+            score += 3
+            kw_match = True
+        if kw in content_lower:
+            score += 1
+            kw_match = True
+        if kw_match:
+            matched_keywords += 1
+    if matched_keywords < 2:
+        return 0
+    return score + matched_keywords
+
+
 class HelpCenterSource:
     def query(self, question: str, user_context: dict) -> list[KnowledgeDocument]:
-        q = question.lower()
         scored = []
         for article in _HELP_CENTER_ARTICLES:
-            score = 0
-            keywords = q.split()
-            for kw in keywords:
-                if kw in article["title"].lower():
-                    score += 3
-                if kw in article["content"].lower():
-                    score += 1
+            score = _score_article(question, article["title"], article["content"])
             if score > 0:
                 doc = KnowledgeDocument()
                 doc.title = article["title"]
@@ -120,21 +150,14 @@ class HelpCenterSource:
                 doc.relevance_score = score
                 scored.append(doc)
         scored.sort(key=lambda d: d.relevance_score, reverse=True)
-        return scored[:5]
+        return scored[:3]
 
 
 class ProductDocSource:
     def query(self, question: str, user_context: dict) -> list[KnowledgeDocument]:
-        q = question.lower()
         scored = []
         for article in _PRODUCT_DOC_ARTICLES:
-            score = 0
-            keywords = q.split()
-            for kw in keywords:
-                if kw in article["title"].lower():
-                    score += 3
-                if kw in article["content"].lower():
-                    score += 1
+            score = _score_article(question, article["title"], article["content"])
             if score > 0:
                 doc = KnowledgeDocument()
                 doc.title = article["title"]
@@ -144,7 +167,7 @@ class ProductDocSource:
                 doc.relevance_score = score
                 scored.append(doc)
         scored.sort(key=lambda d: d.relevance_score, reverse=True)
-        return scored[:5]
+        return scored[:3]
 
 
 _knowledge_sources: list[KnowledgeSource] = []
@@ -154,7 +177,7 @@ def register_source(source: KnowledgeSource):
     _knowledge_sources.append(source)
 
 
-def query_all_sources(question: str, user_context: dict, max_results: int = 5) -> list[KnowledgeDocument]:
+def query_all_sources(question: str, user_context: dict, max_results: int = 3) -> list[KnowledgeDocument]:
     results: list[KnowledgeDocument] = []
     for source in _knowledge_sources:
         try:

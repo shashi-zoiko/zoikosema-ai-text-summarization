@@ -1,5 +1,5 @@
 import { Shield, ShieldOff } from 'lucide-react'
-import { cn } from '../../lib/cn'
+
 import { t } from '../../lib/i18n'
 
 export default function ConfidentialModeBanner({ active = false }) {
