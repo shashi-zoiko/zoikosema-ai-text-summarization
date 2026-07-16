@@ -37,3 +37,32 @@ class MailMessage(ConnectBase):
     correlation_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+
+MAIL_SEND_STATUSES = ("buffered", "cancelled", "released", "failed")
+
+
+class MailSend(ConnectBase):
+    """connect_mail_sends — DDL is migrations/connect_v3_015_mail_sends.sql.
+
+    Phase 3 slice 9 (send/reply/forward, delayed-send buffer, L3). Ordinary
+    mutable table (status transitions), not append-only — a buffered send
+    resolves to cancelled/released/failed exactly once, no version chain.
+    """
+    __tablename__ = "connect_mail_sends"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(UUID(as_uuid=False), primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(BigInteger, nullable=False)
+    provider_connection_id = Column(UUID(as_uuid=False), nullable=False)
+    provider = Column(String, nullable=False)
+    draft_payload = Column(JSONB, nullable=False)
+    dlp_verdict = Column(JSONB, nullable=False, default=dict)
+    scheduled_release_at = Column(DateTime(timezone=True), nullable=False)
+    status = Column(String, nullable=False, default="buffered")
+    provider_message_id = Column(String, nullable=True)
+    failure_reason = Column(String, nullable=True)
+    correlation_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
