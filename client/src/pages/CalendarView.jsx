@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Trash2, Users2 } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Trash2, Users2, X } from 'lucide-react'
 import { api } from '../api/client'
 import { cn } from '../lib/cn'
 import Button from '../components/ui/Button'
@@ -696,6 +696,7 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
   const [startTime, setStartTime] = useState('09:00')
   const [endTime, setEndTime] = useState('09:30')
   const [location, setLocation] = useState('')
+  const [attendees, setAttendees] = useState([])
   const [repeat, setRepeat] = useState('none')
   const [endType, setEndType] = useState('never')
   const [endDate, setEndDate] = useState('')
@@ -713,6 +714,7 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
       setEndTime(initial?.endTime || '09:30')
       setTitle('')
       setLocation('')
+      setAttendees([])
       setRepeat('none')
       setEndType('never')
       setEndDate('')
@@ -736,6 +738,7 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
           start_at,
           end_at,
           location: location.trim() || null,
+          attendees,
           timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
           rrule: buildRRule({ repeat, date, endType, endDate }),
         },
@@ -805,6 +808,7 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
             placeholder="Room 4 / video link"
           />
         </LabeledInput>
+        <AttendeesInput attendees={attendees} setAttendees={setAttendees} />
         <RepeatPicker
           repeat={repeat} setRepeat={setRepeat}
           endType={endType} setEndType={setEndType}
@@ -818,6 +822,57 @@ function CreateEventModal({ open, initial, events, onClose, onCreated, toast }) 
         </div>
       </form>
     </Modal>
+  )
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function AttendeesInput({ attendees, setAttendees }) {
+  const [value, setValue] = useState('')
+
+  const addFromValue = () => {
+    const email = value.trim().replace(/[,;]$/, '')
+    if (!email || !EMAIL_RE.test(email)) { setValue(''); return }
+    if (!attendees.some((a) => a.email.toLowerCase() === email.toLowerCase())) {
+      setAttendees([...attendees, { email }])
+    }
+    setValue('')
+  }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault()
+      addFromValue()
+    } else if (e.key === 'Backspace' && !value && attendees.length) {
+      setAttendees(attendees.slice(0, -1))
+    }
+  }
+
+  return (
+    <LabeledInput label="Attendees (optional)">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {attendees.map((a) => (
+          <span key={a.email} className="inline-flex items-center gap-1 rounded-full bg-[var(--c-bg-3)] px-2 py-0.5 text-[12px] text-[var(--c-fg-dim)]">
+            {a.email}
+            <button
+              type="button"
+              onClick={() => setAttendees(attendees.filter((x) => x.email !== a.email))}
+              className="text-[var(--c-fg-muted)] hover:text-[var(--c-danger)]"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={onKeyDown}
+          onBlur={addFromValue}
+          placeholder={attendees.length ? '' : 'name@example.com — Enter to add'}
+          className="min-w-[140px] flex-1 bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+        />
+      </div>
+    </LabeledInput>
   )
 }
 
@@ -871,6 +926,7 @@ function EditEventModal({ event, events, onClose, onSaved, toast }) {
   const [startTime, setStartTime] = useState('09:00')
   const [endTime, setEndTime] = useState('09:30')
   const [location, setLocation] = useState('')
+  const [attendees, setAttendees] = useState([])
   const [saving, setSaving] = useState(false)
 
   const conflicts = useMemo(
@@ -885,6 +941,7 @@ function EditEventModal({ event, events, onClose, onSaved, toast }) {
       setStartTime(hhmm(event.start.getHours(), event.start.getMinutes()))
       setEndTime(hhmm(event.end.getHours(), event.end.getMinutes()))
       setLocation(event.location || '')
+      setAttendees((event.attendees || []).filter((a) => a.email))
     }
   }, [event])
 
@@ -902,6 +959,7 @@ function EditEventModal({ event, events, onClose, onSaved, toast }) {
           start_at,
           end_at,
           location: location.trim() || null,
+          attendees,
           timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
       })
@@ -969,6 +1027,7 @@ function EditEventModal({ event, events, onClose, onSaved, toast }) {
             placeholder="Room 4 / video link"
           />
         </LabeledInput>
+        <AttendeesInput attendees={attendees} setAttendees={setAttendees} />
         <ConflictWarning conflicts={conflicts} />
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
