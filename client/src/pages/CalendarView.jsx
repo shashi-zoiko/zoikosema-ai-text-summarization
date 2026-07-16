@@ -167,7 +167,7 @@ export default function CalendarView() {
         <div>
           <h1 className="text-[26px] font-bold tracking-[-0.03em] text-[var(--c-fg)]">Calendar</h1>
           <p className="mt-1 text-[14px] text-[var(--c-fg-muted)]">
-            Your Sema calendar — native events plus anything synced from Google or Outlook.
+            Your Sema calendar — native events plus anything synced from Google Calendar.
           </p>
         </div>
         <Button variant="primary" onClick={() => setShowCreate(true)}>
