@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, MapPin, Plus, Users2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Trash2, Users2 } from 'lucide-react'
 import { api } from '../api/client'
 import { cn } from '../lib/cn'
 import Button from '../components/ui/Button'
@@ -77,6 +77,14 @@ function plusThirtyMin(hour, minute) {
   return hhmm(Math.floor(total / 60), total % 60)
 }
 
+// A recurring occurrence's edit/delete target its one instance
+// (.../occurrences/{recurrenceId}); a non-recurring native event targets
+// the series directly — both are "the whole thing" when there's only one.
+function nativeEventPath(ev) {
+  const base = `/api/connect/calendar/native-events/${encodeURIComponent(ev.versionChainId)}`
+  return ev.recurring ? `${base}/occurrences/${encodeURIComponent(ev.recurrenceId)}` : base
+}
+
 function weekLabel(days) {
   const start = days[0], end = days[days.length - 1]
   if (start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear()) {
@@ -95,6 +103,7 @@ export default function CalendarView() {
   const [events, setEvents] = useState(null) // null = loading
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState(null)
+  const [editing, setEditing] = useState(null) // the native event being edited, or null
   const [showCreate, setShowCreate] = useState(null) // null | { date, startTime, endTime }
 
   useEffect(() => {
@@ -227,9 +236,27 @@ export default function CalendarView() {
     setShowCreate({ date: isoDateLocal(day), startTime: '09:00', endTime: '09:30' })
   }
 
+  const refetch = () => setCursor((c) => new Date(c)) // same range, forces the fetch effect to re-run
+
   const onCreated = () => {
     setShowCreate(null)
-    setCursor((c) => new Date(c)) // trigger refetch of current range
+    refetch()
+  }
+  const onSaved = () => {
+    setEditing(null)
+    setSelected(null)
+    refetch()
+  }
+  const onDelete = async (ev) => {
+    if (!window.confirm(`Delete "${ev.title}"? Attendees will be notified.`)) return
+    try {
+      await api(nativeEventPath(ev), { method: 'DELETE' })
+      toast({ variant: 'success', title: 'Event deleted', description: ev.title })
+      setSelected(null)
+      refetch()
+    } catch (err) {
+      toast({ variant: 'error', title: 'Could not delete event', description: err.message })
+    }
   }
 
   return (
@@ -303,12 +330,23 @@ export default function CalendarView() {
         />
       )}
 
-      <EventDetailModal event={selected} onClose={() => setSelected(null)} />
+      <EventDetailModal
+        event={selected}
+        onClose={() => setSelected(null)}
+        onEdit={(ev) => { setSelected(null); setEditing(ev) }}
+        onDelete={onDelete}
+      />
       <CreateEventModal
         open={!!showCreate}
         initial={showCreate}
         onClose={() => setShowCreate(null)}
         onCreated={onCreated}
+        toast={toast}
+      />
+      <EditEventModal
+        event={editing}
+        onClose={() => setEditing(null)}
+        onSaved={onSaved}
         toast={toast}
       />
     </div>
@@ -491,7 +529,8 @@ function MonthGrid({ days, cursor, eventsByDay, today, onDayClick, onEventClick 
   )
 }
 
-function EventDetailModal({ event, onClose }) {
+function EventDetailModal({ event, onClose, onEdit, onDelete }) {
+  const editable = event?.source === 'native'
   return (
     <Modal open={!!event} onClose={onClose} title={event?.title} size="sm">
       {event && (
@@ -522,6 +561,20 @@ function EventDetailModal({ event, onClose }) {
             {event.recurring && <Badge tone="neutral" size="sm">Recurring</Badge>}
             {event.confidentiality === 'confidential' && <Badge tone="warn" size="sm">Confidential</Badge>}
           </div>
+          {editable ? (
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => onDelete(event)}>
+                <Trash2 className="h-3.5 w-3.5" /> Delete
+              </Button>
+              <Button variant="primary" onClick={() => onEdit(event)}>
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </Button>
+            </div>
+          ) : (
+            <p className="pt-1 text-[12px] text-[var(--c-fg-muted)]">
+              Synced from Google Calendar — edit it there, changes flow back into Sema on the next sync.
+            </p>
+          )}
         </div>
       )}
     </Modal>
@@ -634,6 +687,114 @@ function CreateEventModal({ open, initial, onClose, onCreated, toast }) {
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="primary" disabled={saving}>{saving ? 'Creating…' : 'Create'}</Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function EditEventModal({ event, onClose, onSaved, toast }) {
+  const [title, setTitle] = useState('')
+  const [date, setDate] = useState('')
+  const [startTime, setStartTime] = useState('09:00')
+  const [endTime, setEndTime] = useState('09:30')
+  const [location, setLocation] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (event) {
+      setTitle(event.title || '')
+      setDate(isoDateLocal(event.start))
+      setStartTime(hhmm(event.start.getHours(), event.start.getMinutes()))
+      setEndTime(hhmm(event.end.getHours(), event.end.getMinutes()))
+      setLocation(event.location || '')
+    }
+  }, [event])
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!event || !title.trim() || !date) return
+    setSaving(true)
+    try {
+      const start_at = new Date(`${date}T${startTime}`).toISOString()
+      const end_at = new Date(`${date}T${endTime}`).toISOString()
+      await api(nativeEventPath(event), {
+        method: 'PATCH',
+        body: {
+          title: title.trim(),
+          start_at,
+          end_at,
+          location: location.trim() || null,
+          timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+      })
+      toast({ variant: 'success', title: 'Event updated', description: title.trim() })
+      onSaved()
+    } catch (err) {
+      toast({ variant: 'error', title: 'Could not update event', description: err.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal open={!!event} onClose={onClose} title="Edit event" size="sm">
+      <form onSubmit={submit} className="space-y-3">
+        {event?.recurring && (
+          <p className="text-[12px] text-[var(--c-fg-muted)]">
+            This edits only this occurrence — the rest of the recurring series is unaffected.
+          </p>
+        )}
+        <LabeledInput label="Title">
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            required
+            className="w-full bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+            placeholder="Team sync"
+          />
+        </LabeledInput>
+        <LabeledInput label="Date">
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            required
+            className="w-full bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+          />
+        </LabeledInput>
+        <div className="grid grid-cols-2 gap-3">
+          <LabeledInput label="Start">
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              required
+              className="w-full bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+            />
+          </LabeledInput>
+          <LabeledInput label="End">
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              required
+              className="w-full bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+            />
+          </LabeledInput>
+        </div>
+        <LabeledInput label="Location (optional)">
+          <input
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            className="w-full bg-transparent text-[14px] text-[var(--c-fg)] outline-none"
+            placeholder="Room 4 / video link"
+          />
+        </LabeledInput>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
         </div>
       </form>
     </Modal>
