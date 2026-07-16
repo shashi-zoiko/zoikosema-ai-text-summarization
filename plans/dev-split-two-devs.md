@@ -47,12 +47,12 @@ Phase 3 is where both devs' near-term work lives.
 3. Slice 8 — AI thread summaries + reply drafts, L1-L2 (`sema/ai-mail-summaries-drafts`)
 
 **Dev B — Governance & structure (parallel track)**
-1. Slice 7 — Work Graph service MVP (`sema/work-graph-mvp`) — start immediately, no dependency on Dev A's slice 4
-2. Slice 6 — DLP MVP (`sema/dlp-mvp`) — start once Dev A's slice 4 lands (needs rendered content to scan)
-3. Slice 10 — Email-to-meeting/task governed conversions (`sema/email-to-meeting-task-conversion`) — needs own slice 7 done
-4. Slice 9 — Send/reply/forward, delayed-send buffer, L3 (`sema/mail-send-delayed-buffer-l3`) — fits here once 6/10 stable, or swap to Dev A if Dev B is still on 10
+1. ~~Slice 7 — Work Graph service MVP (`sema/work-graph-mvp`)~~ — **done**, merged 2026-07-16. Built ahead of slice 4/5/6 landing (only used slices 1-3's real Email data); re-verify its subgraph filter once slice 6 (DLP) lands since it only has calendar confidentiality to filter on today, not mail. See roadmap's "sequencing deviation" note.
+2. Slice 6 — DLP MVP (`sema/dlp-mvp`) — **now genuinely unblocked**, Dev A's slice 4 merged 2026-07-16 (`sema/mail-rendering-pipeline`, PR #52). Real rendered/sanitized mail content exists now (`mail_service/service.py::get_message_body`) — this is the next real thing to build.
+3. Slice 10 — Email-to-meeting/task governed conversions (`sema/email-to-meeting-task-conversion`) — needs own slice 7 (done) and slice 5 (still planned, not yet started by Dev A) — still blocked on slice 5.
+4. ~~Slice 9 — Send/reply/forward, delayed-send buffer, L3 (`sema/mail-send-delayed-buffer-l3`)~~ — **done**, merged 2026-07-16, ahead of slice 6/8. DLP preflight is a pass-through stub until slice 6 lands for real; re-verify then.
 
-Slice 11 (CASA paperwork) — assign to whichever dev has slack in week 1; it runs alongside everything else and blocks nothing except the Phase 3 exit gate itself.
+Slice 11 (CASA paperwork) — **evidence draft prepared** 2026-07-16, not submitted (see `docs/google-casa-evidence-pack.md`). Still needs a real privacy policy (doesn't exist anywhere in this repo) and compliance-owner review before it can actually go to Google.
 
 ## 5. Branching rule adaptation for two devs
 
