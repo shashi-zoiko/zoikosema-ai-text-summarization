@@ -65,7 +65,7 @@ Detailed now that Phase 2's actual shape (Policy Engine, Action Review Queue, na
 | 3 | Outlook Mail read-only sync | `sema/outlook-mail-readonly-sync` | done — real Azure AD/Outlook validated 2026-07-15 | [sema-p3-s3-outlook-mail-readonly-sync.md](./sema-p3-s3-outlook-mail-readonly-sync.md) |
 | 4 | Mail rendering/sanitization pipeline | `sema/mail-rendering-pipeline` | done | [sema-p3-s4-mail-rendering-pipeline.md](./sema-p3-s4-mail-rendering-pipeline.md) |
 | 5 | Unified inbox UI + read-only search | `sema/unified-inbox-search` | planned | [sema-p3-s5-unified-inbox-search.md](./sema-p3-s5-unified-inbox-search.md) |
-| 6 | DLP MVP | `sema/dlp-mvp` | planned | [sema-p3-s6-dlp-mvp.md](./sema-p3-s6-dlp-mvp.md) |
+| 6 | DLP MVP | `sema/dlp-mvp` | done — merged 2026-07-16, verified end-to-end against real Postgres. Rule-based only (SSN/credit-card/secret-key patterns + keyword list); attachment content scanning is a disclosed gap, not built | [sema-p3-s6-dlp-mvp.md](./sema-p3-s6-dlp-mvp.md) |
 | 7 | Work Graph service MVP | `sema/work-graph-mvp` | done — merged 2026-07-16, verified end-to-end against real Postgres | [sema-p3-s7-work-graph-mvp.md](./sema-p3-s7-work-graph-mvp.md) |
 | 8 | AI thread summaries + reply drafts, L1-L2 | `sema/ai-mail-summaries-drafts` | planned | [sema-p3-s8-ai-mail-summaries-drafts.md](./sema-p3-s8-ai-mail-summaries-drafts.md) |
 | 9 | Send/reply/forward, delayed-send buffer, L3 | `sema/mail-send-delayed-buffer-l3` | done — merged 2026-07-16, verified end-to-end against real Postgres (send-scope OAuth widening still not wired into the consent flow, see slice 11 evidence pack) | [sema-p3-s9-mail-send-delayed-buffer-l3.md](./sema-p3-s9-mail-send-delayed-buffer-l3.md) |

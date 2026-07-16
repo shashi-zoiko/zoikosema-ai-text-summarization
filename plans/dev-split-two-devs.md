@@ -47,10 +47,10 @@ Phase 3 is where both devs' near-term work lives.
 3. Slice 8 — AI thread summaries + reply drafts, L1-L2 (`sema/ai-mail-summaries-drafts`)
 
 **Dev B — Governance & structure (parallel track)**
-1. ~~Slice 7 — Work Graph service MVP (`sema/work-graph-mvp`)~~ — **done**, merged 2026-07-16. Built ahead of slice 4/5/6 landing (only used slices 1-3's real Email data); re-verify its subgraph filter once slice 6 (DLP) lands since it only has calendar confidentiality to filter on today, not mail. See roadmap's "sequencing deviation" note.
-2. Slice 6 — DLP MVP (`sema/dlp-mvp`) — **now genuinely unblocked**, Dev A's slice 4 merged 2026-07-16 (`sema/mail-rendering-pipeline`, PR #52). Real rendered/sanitized mail content exists now (`mail_service/service.py::get_message_body`) — this is the next real thing to build.
+1. ~~Slice 7 — Work Graph service MVP (`sema/work-graph-mvp`)~~ — **done**, merged 2026-07-16. Built ahead of slice 4/5/6 landing (only used slices 1-3's real Email data); its subgraph filter still only has calendar confidentiality_class to filter on, not a mail/DLP-based one — spec never actually asked for the latter (DLP governs outbound sends, not inbox-visibility), so this is a documented scope note, not an open defect.
+2. ~~Slice 6 — DLP MVP (`sema/dlp-mvp`)~~ — **done**, merged 2026-07-16, once Dev A's slice 4 (`sema/mail-rendering-pipeline`, PR #52) landed real rendered mail content. Rule-based (SSN/credit-card/secret-key/keyword), wired as a real `dlp_verdict` input into Policy Engine and a hard preflight gate in slice 9's send path. Attachment content scanning is a disclosed gap.
 3. Slice 10 — Email-to-meeting/task governed conversions (`sema/email-to-meeting-task-conversion`) — needs own slice 7 (done) and slice 5 (still planned, not yet started by Dev A) — still blocked on slice 5.
-4. ~~Slice 9 — Send/reply/forward, delayed-send buffer, L3 (`sema/mail-send-delayed-buffer-l3`)~~ — **done**, merged 2026-07-16, ahead of slice 6/8. DLP preflight is a pass-through stub until slice 6 lands for real; re-verify then.
+4. ~~Slice 9 — Send/reply/forward, delayed-send buffer, L3 (`sema/mail-send-delayed-buffer-l3`)~~ — **done**, merged 2026-07-16. DLP preflight now uses slice 6's real scanner (updated in place once slice 6 landed) instead of the original pass-through stub.
 
 Slice 11 (CASA paperwork) — **evidence draft prepared** 2026-07-16, not submitted (see `docs/google-casa-evidence-pack.md`). Still needs a real privacy policy (doesn't exist anywhere in this repo) and compliance-owner review before it can actually go to Google.
 
