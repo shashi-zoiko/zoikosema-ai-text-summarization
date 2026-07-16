@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 import httpx
 import nh3
+from sqlalchemy import or_
 from sqlalchemy.orm import Session as DbSession
 
 from app.connect.audit import service as audit
@@ -233,6 +234,34 @@ def list_mail_messages(
     if time_min is not None:
         q = q.filter(MailMessage.received_at >= time_min)
     return q.order_by(MailMessage.received_at.desc()).all()
+
+
+_SEARCH_LIMIT = 50
+
+
+def search_messages(db: DbSession, ctx: TenantContext, *, query: str) -> list[MailMessage]:
+    """Phase 3 slice 5 — read-only search over synced metadata (subject/
+    from_email/snippet). Full-text body search is a heavier index (spec's
+    own Search Service is security-trimmed and cross-surface) that can wait
+    for a real usage signal, not built speculatively now — this searches
+    the same metadata every inbox row already renders, nothing deeper."""
+    if not query or not query.strip():
+        return []
+    like = f"%{query.strip()}%"
+    return (
+        db.query(MailMessage)
+        .filter(
+            MailMessage.tenant_id == ctx.tenant_id, MailMessage.user_id == ctx.user_id,
+            or_(
+                MailMessage.subject.ilike(like),
+                MailMessage.from_email.ilike(like),
+                MailMessage.snippet.ilike(like),
+            ),
+        )
+        .order_by(MailMessage.received_at.desc())
+        .limit(_SEARCH_LIMIT)
+        .all()
+    )
 
 
 async def get_message_body(db: DbSession, ctx: TenantContext, message_id: str) -> dict:

@@ -10,6 +10,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
+from app.connect.mail_service import conversion
+from app.connect.mail_service import mail_ai
 from app.connect.mail_service import send as send_service
 from app.connect.mail_service import service
 from app.connect.shared.errors import DomainError
@@ -88,6 +90,15 @@ def list_mail_messages(
     return [_to_out(m) for m in service.list_mail_messages(db, ctx, time_min=time_min)]
 
 
+@router.get("/search", response_model=list[MailMessageOut])
+def search_mail_messages(
+    q: str = Query(min_length=1),
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    return [_to_out(m) for m in service.search_messages(db, ctx, query=q)]
+
+
 @router.get("/messages/{message_id}/body", response_model=MailMessageBodyOut)
 async def get_mail_message_body(
     message_id: str,
@@ -96,6 +107,80 @@ async def get_mail_message_body(
 ):
     try:
         return await service.get_message_body(db, ctx, message_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+class ConvertToMeetingIn(BaseModel):
+    title: str
+    start_at: datetime
+    end_at: datetime
+    timezone_name: str = "UTC"
+    description: str | None = None
+    location: str | None = None
+    attendees: list[dict[str, Any]] = []
+    resources: list[dict[str, Any]] = []
+    confidentiality_class: str = "standard"
+    rrule: str | None = None
+
+
+class ConvertToTaskIn(BaseModel):
+    title: str
+    priority: str = "med"
+    assignee_email: str | None = None
+
+
+@router.post("/messages/{message_id}/convert-to-meeting", status_code=201)
+async def convert_message_to_meeting(
+    message_id: str,
+    data: ConvertToMeetingIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        return await conversion.convert_to_meeting(db, ctx, message_id=message_id, **data.model_dump())
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+@router.post("/messages/{message_id}/convert-to-task", status_code=201)
+def convert_message_to_task(
+    message_id: str,
+    data: ConvertToTaskIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        return conversion.convert_to_task(db, ctx, message_id=message_id, **data.model_dump())
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+class DraftReplyIn(BaseModel):
+    instruction: str
+
+
+@router.get("/threads/{thread_id}/summary")
+async def get_thread_summary(
+    thread_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        return await mail_ai.summarize_thread(db, ctx, thread_id=thread_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+
+
+@router.post("/threads/{thread_id}/draft-reply", status_code=201)
+async def post_draft_reply(
+    thread_id: str,
+    data: DraftReplyIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        return await mail_ai.draft_reply(db, ctx, thread_id=thread_id, instruction=data.instruction)
     except DomainError as e:
         raise _to_http(e) from e
 
