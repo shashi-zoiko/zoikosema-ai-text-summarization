@@ -67,7 +67,7 @@ Detailed now that Phase 2's actual shape (Policy Engine, Action Review Queue, na
 | 8 | AI thread summaries + reply drafts, L1-L2 | `sema/ai-mail-summaries-drafts` | planned | [sema-p3-s8-ai-mail-summaries-drafts.md](./sema-p3-s8-ai-mail-summaries-drafts.md) |
 | 9 | Send/reply/forward, delayed-send buffer, L3 | `sema/mail-send-delayed-buffer-l3` | planned | [sema-p3-s9-mail-send-delayed-buffer-l3.md](./sema-p3-s9-mail-send-delayed-buffer-l3.md) |
 | 10 | Email-to-meeting/task governed conversions | `sema/email-to-meeting-task-conversion` | planned | [sema-p3-s10-email-to-meeting-task-conversion.md](./sema-p3-s10-email-to-meeting-task-conversion.md) |
-| 11 | Google CASA / restricted-scope evidence pack | (paperwork, no branch) | planned — **start alongside slice 1**, not after | [sema-p3-s11-google-casa-verification-prep.md](./sema-p3-s11-google-casa-verification-prep.md) |
+| 11 | Google CASA / restricted-scope evidence pack | (paperwork, no branch) | evidence draft prepared 2026-07-16 (see [`docs/google-casa-evidence-pack.md`](../docs/google-casa-evidence-pack.md)) — **not submitted, not done**; still needs a real privacy policy and compliance-owner review before submission | [sema-p3-s11-google-casa-verification-prep.md](./sema-p3-s11-google-casa-verification-prep.md) |
 
 **Phase 3 exit gate**: Google restricted-scope requirements satisfied, rendering security audit clean, delayed-send rollback verified, inbox freshness SLO met.
 
