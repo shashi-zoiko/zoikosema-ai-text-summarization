@@ -85,6 +85,51 @@ function nativeEventPath(ev) {
   return ev.recurring ? `${base}/occurrences/${encodeURIComponent(ev.recurrenceId)}` : base
 }
 
+// Assigns each event a { col, colCount } so overlapping events split into
+// side-by-side columns instead of stacking on top of each other. Standard
+// two-pass approach: group events into clusters of mutual overlap first
+// (so an unrelated 9am cluster doesn't inherit a 2pm cluster's column
+// count), then greedily pack each cluster into the fewest columns.
+function layoutDayEvents(sortedEvents) {
+  const clusters = []
+  let current = []
+  let clusterEnd = -Infinity
+  for (const ev of sortedEvents) {
+    if (ev.start.getTime() >= clusterEnd) {
+      if (current.length) clusters.push(current)
+      current = []
+      clusterEnd = -Infinity
+    }
+    current.push(ev)
+    clusterEnd = Math.max(clusterEnd, ev.end.getTime())
+  }
+  if (current.length) clusters.push(current)
+
+  const layout = new Map() // event key -> { col, colCount }
+  for (const cluster of clusters) {
+    const columnEndTimes = []
+    const colOf = new Map()
+    for (const ev of cluster) {
+      let placed = false
+      for (let c = 0; c < columnEndTimes.length; c++) {
+        if (columnEndTimes[c] <= ev.start.getTime()) {
+          columnEndTimes[c] = ev.end.getTime()
+          colOf.set(ev.key, c)
+          placed = true
+          break
+        }
+      }
+      if (!placed) {
+        columnEndTimes.push(ev.end.getTime())
+        colOf.set(ev.key, columnEndTimes.length - 1)
+      }
+    }
+    const colCount = columnEndTimes.length
+    for (const ev of cluster) layout.set(ev.key, { col: colOf.get(ev.key), colCount })
+  }
+  return layout
+}
+
 function weekLabel(days) {
   const start = days[0], end = days[days.length - 1]
   if (start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear()) {
@@ -416,6 +461,7 @@ function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) 
           </div>
           {days.map((d) => {
             const dayEvents = (eventsByDay.get(d.toDateString()) || []).filter((e) => !e.allDay)
+            const layout = layoutDayEvents(dayEvents)
             const isToday = sameDay(d, today)
             const nowMinutes = now.getHours() * 60 + now.getMinutes()
             return (
@@ -443,13 +489,21 @@ function WeekGrid({ days, eventsByDay, today, now, onSlotClick, onEventClick }) 
                   const endMin = Math.max(startMin + 20, ev.end.getHours() * 60 + ev.end.getMinutes())
                   const top = (startMin / 60) * HOUR_H
                   const height = ((endMin - startMin) / 60) * HOUR_H
+                  const { col, colCount } = layout.get(ev.key) || { col: 0, colCount: 1 }
+                  const widthPct = 100 / colCount
                   return (
                     <button
                       key={ev.key}
                       onClick={() => onEventClick(ev)}
-                      style={{ top, height }}
+                      style={{
+                        top, height,
+                        left: `calc(${col * widthPct}% + 2px)`,
+                        width: `calc(${widthPct}% - 4px)`,
+                        zIndex: 20 + col,
+                      }}
                       className={cn(
-                        'absolute inset-x-0.5 z-20 overflow-hidden rounded-[6px] px-1.5 py-0.5 text-left text-[11px] font-medium leading-tight',
+                        'absolute overflow-hidden rounded-[6px] px-1.5 py-0.5 text-left text-[11px] font-medium leading-tight',
+                        'ring-1 ring-[var(--c-bg-1)]', // thin separator so adjacent columns read as distinct events
                         ev.source === 'native'
                           ? 'bg-[var(--c-accent-soft)] text-[var(--c-accent)]'
                           : 'bg-[var(--c-bg-3)] text-[var(--c-fg-dim)]',
