@@ -18,11 +18,11 @@ Autonomy gating only applies where something is actually mutated:
   gets the exact same ceiling check create_event() already uses.
 
 Task version-history/rollback (spec §5.2's Task row: "restore previous
-task version or delete task if newly created") is NOT built in this
-slice — a rejected/unwanted suggested task is just deleted or dismissed.
-Full version-chain infrastructure for a brand-new, low-stakes entity with
-no real usage yet would be building for a scenario nobody has hit;
-revisit if task edits/undo actually matter in practice.
+task version or delete task if newly created") is now real — see tasks.py's
+TaskVersion/restore_previous_task_version (Phase 4 slice). A rejected/
+unwanted suggested task can still just be dismissed (update_task_status);
+restore is for reverting an unwanted *edit* to an existing task, not an
+alternative to dismissal.
 """
 from __future__ import annotations
 
@@ -162,7 +162,11 @@ async def generate_followup_tasks(
                 ],
                 "model": generated.get("_model"),
             },
-            rollback_descriptor="no_rollback",
+            # tasks.py's TaskVersion history + restore_previous_task_version
+            # now give this a real rollback path once materialized (Phase 4
+            # slice) — each created task can be restored to its prior
+            # version, or dismissed if it's newly created and has none.
+            rollback_descriptor="restore_previous_version",
             proposed_by_agent="ai_generate_followup_tasks",
             policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),
         )
