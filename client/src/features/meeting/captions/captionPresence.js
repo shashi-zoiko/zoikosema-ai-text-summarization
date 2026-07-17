@@ -35,10 +35,15 @@ export default function useCaptionPresence({ enabled, remoteIdentities }) {
 
   const broadcast = useCallback((payload) => {
     try {
-      sendRef.current?.(encoder.encode(JSON.stringify(payload)), {
+      const p = sendRef.current?.(encoder.encode(JSON.stringify(payload)), {
         reliable: true,
         topic: CAPTION_CONFIG.presenceTopic,
       })
+      // send() (LiveKit publishData) is async — a sync try/catch does NOT catch
+      // its rejection. When the data transport isn't ready (e.g. "PC manager is
+      // closed" during a reconnect) that surfaced as an uncaught promise. Swallow
+      // it; a later toggle/query re-announces.
+      if (p && typeof p.catch === 'function') p.catch(() => {})
     } catch { /* not connected yet — a later toggle/query re-announces */ }
   }, [])
 
