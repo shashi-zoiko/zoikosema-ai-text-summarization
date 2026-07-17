@@ -194,7 +194,7 @@ def get_handoff_state(
 ):
     session = get_active_session(user.id)
     if not session:
-        return HandoffState(state="idle")
+        return HandoffState(state=None)
 
     return HandoffState(
         state=session.state.value,

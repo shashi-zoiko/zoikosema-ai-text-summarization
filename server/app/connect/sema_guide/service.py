@@ -16,10 +16,16 @@ log = logging.getLogger(__name__)
 
 def _get_client():
     """Return a Groq client (official SDK — same one core/ai.py's transcript
-    summarizer uses, already a real dependency, unlike the openai package)."""
+    summarizer uses, already a real dependency, unlike the openai package).
+
+    Sema Guide has no Anthropic code path left (Groq-only since the
+    guardrails rework), so this doesn't gate on `settings.ai_provider` —
+    that flag is shared with other AI features (see core/ai.py) and
+    defaults to "anthropic", which would silently disable Sema Guide on
+    any deployment that doesn't also flip the global default. Presence of
+    a usable key is the only real precondition here.
+    """
     settings = get_settings()
-    if settings.ai_provider != "groq":
-        return None
     try:
         import groq
     except ImportError:
