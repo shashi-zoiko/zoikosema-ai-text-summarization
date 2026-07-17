@@ -30,10 +30,12 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session as DbSession
 
+from app.connect.action_review.models import ReviewQueueItem
 from app.connect.calendar_service import tasks as tasks_service
 from app.connect.calendar_service import native_events
 from app.connect.calendar_service.models import NativeCalendarEvent, Task
 from app.connect.mail_service.models import MailMessage
+from app.connect.policy_engine.models import PolicyVersion
 from app.connect.provider_connections.models import ProviderConnection
 from app.connect.shared.errors import Invalid, NotFound
 from app.connect.shared.ids import uuid7_str
@@ -177,12 +179,48 @@ def _resolve_mailbox(db: DbSession, ctx: TenantContext, node_id: str) -> dict[st
     }
 
 
+def _resolve_agent_action(db: DbSession, ctx: TenantContext, node_id: str) -> dict[str, Any] | None:
+    """An 'agent_action' node IS a connect_action_review_items row — the
+    staged proposal itself, human- or agent-drafted (see action_review's
+    own docstring on why the queue doesn't distinguish the two at the
+    naming level). Not restricted to agent-proposed items only; spec's own
+    AgentAction node is "mandatory for every agent mutation" but this
+    build's queue is deliberately generic across both, same precedent."""
+    item = db.query(ReviewQueueItem).filter(
+        ReviewQueueItem.tenant_id == ctx.tenant_id, ReviewQueueItem.id == node_id,
+    ).first()
+    if item is None:
+        return None
+    return {
+        "node_type": "agent_action", "node_id": item.id, "action_type": item.action_type,
+        "status": item.status, "proposed_by_agent": item.proposed_by_agent,
+        "rollback_descriptor": item.rollback_descriptor,
+    }
+
+
+def _resolve_policy_version(db: DbSession, ctx: TenantContext, node_id: str) -> dict[str, Any] | None:
+    """A 'policy_version' node IS a connect_policy_versions row — append-only,
+    same as the table itself; see policy_engine/models.py."""
+    row = db.query(PolicyVersion).filter(
+        PolicyVersion.tenant_id == ctx.tenant_id, PolicyVersion.id == node_id,
+    ).first()
+    if row is None:
+        return None
+    return {
+        "node_type": "policy_version", "node_id": row.id, "category": row.category,
+        "version": row.version, "autonomy_ceiling": row.autonomy_ceiling,
+        "effective_at": row.effective_at.isoformat() if row.effective_at else None,
+    }
+
+
 _RESOLVERS = {
     "person": _resolve_person,
     "email": _resolve_email,
     "calendar_event": _resolve_calendar_event,
     "task": _resolve_task,
     "mailbox": _resolve_mailbox,
+    "agent_action": _resolve_agent_action,
+    "policy_version": _resolve_policy_version,
 }
 
 

@@ -79,6 +79,7 @@ async def generate_agenda(
             reasoning_trace_ref=f"ai_generate_agenda:{agenda.get('_model')}",
             rollback_descriptor="no_rollback",
             proposed_by_agent="ai_generate_agenda",
+            policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),
         )
         return {"staged": True, "review_item": staged, "agent_generated": True}
     return {"staged": False, "agenda_items": agenda["agenda_items"], "agent_generated": True, "_error": agenda.get("_error")}
@@ -144,6 +145,7 @@ async def generate_followup_tasks(
             reasoning_trace_ref=f"ai_generate_followup_tasks:{generated.get('_model')}",
             rollback_descriptor="no_rollback",
             proposed_by_agent="ai_generate_followup_tasks",
+            policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),
         )
         return {"staged": True, "review_item": staged, "agent_generated": True}
 
@@ -177,4 +179,20 @@ async def create_tasks_from_approved_proposal(db: DbSession, ctx: TenantContext,
         )
         for t in payload["tasks"]
     ]
+
+    # Work Graph mutated edge (AgentAction->Task, spec §3.2: "Blast-radius
+    # analysis") — one per task this approved proposal actually created.
+    # Local import: work_graph/service.py imports this module (via
+    # calendar_service.tasks) at top level, so importing it back here at
+    # module scope would cycle — same pattern native_events.py's own
+    # Work Graph helpers already established.
+    from app.connect.work_graph import service as work_graph
+    for task in created:
+        work_graph.create_edge(
+            db, ctx, edge_type="mutated",
+            from_node_type="agent_action", from_node_id=item_id,
+            to_node_type="task", to_node_id=task.id,
+        )
+    db.commit()
+
     return [tasks_service.to_dict(t) for t in created]

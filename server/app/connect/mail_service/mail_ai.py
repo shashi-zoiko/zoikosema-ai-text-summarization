@@ -145,6 +145,7 @@ async def draft_reply(db: DbSession, ctx: TenantContext, *, thread_id: str, inst
             reasoning_trace_ref=f"ai_draft_reply:{draft.get('_model')}",
             rollback_descriptor="no_rollback",  # acknowledging/staging a draft mutates nothing to roll back
             proposed_by_agent="ai_draft_reply",
+            policy_version_id=policy_engine.get_current_version_id(db, ctx, category="mail"),
         )
         db.commit()
         await publish(env, topic=f"tenant:{ctx.tenant_id}")

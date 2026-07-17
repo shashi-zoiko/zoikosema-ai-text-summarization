@@ -100,6 +100,18 @@ def get_current_ceiling(db: DbSession, ctx: TenantContext, *, category: str) -> 
     return row.autonomy_ceiling if row else DEFAULT_AUTONOMY_CEILING
 
 
+def get_current_version_id(db: DbSession, ctx: TenantContext, *, category: str) -> str | None:
+    """The PolicyVersion row currently in force for this category, or None
+    if the tenant has never explicitly set one (still on the conservative
+    default ceiling — see DEFAULT_AUTONOMY_CEILING — with no versioned row
+    to point at). Used by action_review.stage_action's governed_by Work
+    Graph edge (spec §3.2: "governed_by: AgentAction/Object -> PolicyVersion
+    — Point-in-time policy evidence")."""
+    _validate_category(category)
+    row = _latest_version_row(db, ctx.tenant_id, category)
+    return row.id if row else None
+
+
 def list_policy_history(db: DbSession, ctx: TenantContext, *, category: str) -> list[PolicyVersion]:
     _validate_category(category)
     return (
