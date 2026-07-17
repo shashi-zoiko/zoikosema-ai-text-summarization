@@ -115,6 +115,10 @@ def invite_to_meeting(
             join_url=join_url,
             scheduled_at=scheduled_str,
             ics_data=ics_data,
+            organizer_email=user.email,
+            timezone=meeting.timezone_name,
+            ics_download_url=f"/api/meetings/{meeting.code}/calendar",
+            scheduled_at_dt=meeting.scheduled_at,
         )
 
         results.append({"email": email, "status": "invited"})

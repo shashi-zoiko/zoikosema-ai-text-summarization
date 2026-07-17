@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # with BRAND_EMAIL_LOGO_URL if the logo lives elsewhere.
     brand_email_logo_url: str = "https://meet.zoikosema.com/email-logo.png"
 
+    # Absolute, publicly-reachable URL of the transparent-background ZoikoSema
+    # wordmark used only by the redesigned invite email — kept separate from
+    # brand_email_logo_url so reminder/cancelled/rsvp/password-reset emails are
+    # unaffected. Override with BRAND_EMAIL_INVITE_LOGO_URL.
+    brand_email_invite_logo_url: str = "https://meet.zoikosema.com/email-logo-invite.png"
+
     # Absolute, publicly-reachable URL of the square ZoikoSema app icon (favicon)
     # shown as the brand mark in transactional email headers. Same hosting
     # constraint as the wordmark above; override with BRAND_EMAIL_ICON_URL.
