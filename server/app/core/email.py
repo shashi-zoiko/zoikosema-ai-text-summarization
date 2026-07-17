@@ -234,7 +234,7 @@ def send_meeting_invite_email(
     inviter_name: str,
     meeting_title: str,
     meeting_code: str,
-    join_url: str,
+    join_url: str | None,
     scheduled_at: str | None = None,
     ics_data: bytes | None = None,
 ) -> bool:
