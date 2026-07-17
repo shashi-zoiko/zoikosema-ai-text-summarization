@@ -12,6 +12,7 @@ const variants = cva(
         warn:    'bg-[var(--c-warn-soft)]    text-[var(--c-warn)]    border-[color-mix(in_srgb,var(--c-warn)_28%,transparent)]',
         danger:  'bg-[var(--c-danger-soft)]  text-[var(--c-danger)]  border-[color-mix(in_srgb,var(--c-danger)_28%,transparent)]',
         live:    'bg-[var(--c-success-soft)] text-[var(--c-success)] border-[color-mix(in_srgb,var(--c-success)_28%,transparent)]',
+        agent:   'bg-[var(--c-agent-violet-soft)] text-[var(--c-agent-violet)] border-[color-mix(in_srgb,var(--c-agent-violet)_28%,transparent)]',
       },
       size: {
         sm: 'text-[10.5px] px-1.5 py-0.5',
