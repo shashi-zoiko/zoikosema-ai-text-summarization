@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useDataChannel, useLocalParticipant } from '@livekit/components-react'
+import { useDataChannel, useLocalParticipant, useRoomContext } from '@livekit/components-react'
+import { ConnectionState, RoomEvent } from 'livekit-client'
 import { CAPTION_CONFIG } from './config'
 import { clog } from './captionDebug'
 
@@ -27,6 +28,7 @@ const decoder = new TextDecoder()
  */
 export default function useCaptionPresence({ enabled, remoteIdentities }) {
   const { localParticipant } = useLocalParticipant()
+  const room = useRoomContext()
   const selfId = localParticipant?.identity
   const [interested, setInterested] = useState(() => new Set())
   const enabledRef = useRef(enabled)
@@ -34,18 +36,23 @@ export default function useCaptionPresence({ enabled, remoteIdentities }) {
   useEffect(() => { enabledRef.current = enabled }, [enabled])
 
   const broadcast = useCallback((payload) => {
+    // CRITICAL: do not publishData before the room is Connected. This beacon
+    // fires on mount, when the publisher data transport isn't ready — and that
+    // premature publishData poisons LiveKit's cached publisher-connection
+    // promise ("PC manager is closed"), which is never cleared on connect and
+    // then breaks ALL caption sends for the whole session. Wait for Connected;
+    // the connect effect below re-announces.
+    if (room?.state !== ConnectionState.Connected) return
     try {
       const p = sendRef.current?.(encoder.encode(JSON.stringify(payload)), {
         reliable: true,
         topic: CAPTION_CONFIG.presenceTopic,
       })
       // send() (LiveKit publishData) is async — a sync try/catch does NOT catch
-      // its rejection. When the data transport isn't ready (e.g. "PC manager is
-      // closed" during a reconnect) that surfaced as an uncaught promise. Swallow
-      // it; a later toggle/query re-announces.
+      // its rejection. Swallow it; a later toggle/query re-announces.
       if (p && typeof p.catch === 'function') p.catch(() => {})
     } catch { /* not connected yet — a later toggle/query re-announces */ }
-  }, [])
+  }, [room])
 
   const { send } = useDataChannel(CAPTION_CONFIG.presenceTopic, (msg) => {
     let data
@@ -76,6 +83,22 @@ export default function useCaptionPresence({ enabled, remoteIdentities }) {
   // On join, ask who already wants captions (so a silent late-joiner still
   // starts capturing for existing CC viewers).
   useEffect(() => { broadcast({ query: true }) }, [broadcast])
+
+  // Re-announce once the room reaches Connected. The mount-time announce/query
+  // above no-op while the room is still connecting (broadcast gates on
+  // Connected to avoid poisoning the publisher promise); this fires them for
+  // real the moment the transport is ready, and again after any reconnect.
+  useEffect(() => {
+    if (!room) return undefined
+    const onState = (state) => {
+      if (state === ConnectionState.Connected) {
+        broadcast({ on: !!enabledRef.current })
+        broadcast({ query: true })
+      }
+    }
+    room.on(RoomEvent.ConnectionStateChanged, onState)
+    return () => room.off(RoomEvent.ConnectionStateChanged, onState)
+  }, [room, broadcast])
 
   // Captions are wanted if WE want them, or any STILL-PRESENT peer does.
   // Departed peers are pruned at derivation time (filtered against the live
