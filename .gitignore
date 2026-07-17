@@ -19,6 +19,7 @@ server/venv/
 server/.venv/
 server/zoiko.db
 server/zoiko.db-journal
+server/test_zoiko.db
 
 # =========================
 # Env files

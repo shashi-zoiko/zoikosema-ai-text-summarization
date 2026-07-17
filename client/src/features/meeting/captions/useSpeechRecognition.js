@@ -36,6 +36,11 @@ export default function useSpeechRecognition(active, { lang, onResult, onError }
     if (!active || !SpeechRecognitionImpl) return
 
     let terminated = false
+    // The engine's current best guess for the in-progress (not yet finalized)
+    // phrase. Tracked so `onend` can flush it as a best-effort final instead
+    // of silently losing it — see the onend comment below for why that
+    // matters. Cleared whenever a real final arrives for the same phrase.
+    let pendingInterim = ''
     const rec = new SpeechRecognitionImpl()
     rec.lang = lang || 'en-US'
     rec.continuous = true
@@ -49,17 +54,26 @@ export default function useSpeechRecognition(active, { lang, onResult, onError }
       let confN = 0
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
+        const piece = r[0].transcript
+        // A single event can carry more than one result piece (e.g. two
+        // distinct finals batched together); concatenating without a
+        // separator glued them into one run-on word instead of two.
         if (r.isFinal) {
-          final += r[0].transcript
+          final += (final ? ' ' : '') + piece
           // Only finals carry a meaningful confidence; average across them.
           if (typeof r[0].confidence === 'number') { conf += r[0].confidence; confN++ }
         } else {
-          interim += r[0].transcript
+          interim += (interim ? ' ' : '') + piece
         }
       }
       const confidence = confN ? conf / confN : 0
-      if (final) cbRef.current.onResult?.({ text: final.trim(), isFinal: true, confidence })
-      else if (interim) cbRef.current.onResult?.({ text: interim.trim(), isFinal: false, confidence: 0 })
+      if (final) {
+        pendingInterim = ''
+        cbRef.current.onResult?.({ text: final.trim(), isFinal: true, confidence })
+      } else if (interim) {
+        pendingInterim = interim
+        cbRef.current.onResult?.({ text: interim.trim(), isFinal: false, confidence: 0 })
+      }
     }
 
     rec.onerror = (e) => {
@@ -76,6 +90,16 @@ export default function useSpeechRecognition(active, { lang, onResult, onError }
       // keep one continuous transcript. Skip if the mic was denied or we're
       // tearing down.
       if (!terminated && activeRef.current) {
+        // A fresh recognition session has no memory of the outgoing one's
+        // in-progress phrase — if the speaker was mid-sentence when the
+        // engine stopped, whatever was only interim-so-far (never finalized)
+        // would otherwise vanish silently right here. Flush it as a
+        // best-effort final so it still reaches the transcript.
+        if (pendingInterim) {
+          const flushed = pendingInterim
+          pendingInterim = ''
+          cbRef.current.onResult?.({ text: flushed.trim(), isFinal: true })
+        }
         try { rec.start() } catch { /* already (re)starting */ }
       }
     }

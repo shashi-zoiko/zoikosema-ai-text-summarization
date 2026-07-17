@@ -14,6 +14,7 @@ import asyncio
 import logging
 import math
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, OperationalError
@@ -39,7 +40,10 @@ CHECK_INTERVAL_SECONDS = 60
 
 def _format_scheduled(meeting: Meeting) -> str:
     """Human-readable schedule line for the reminder email body."""
-    when = meeting.scheduled_at.strftime("%b %d, %Y at %I:%M %p")
+    scheduled_at = meeting.scheduled_at
+    if meeting.timezone_name:
+        scheduled_at = scheduled_at.astimezone(ZoneInfo(meeting.timezone_name))
+    when = scheduled_at.strftime("%b %d, %Y at %I:%M %p")
     if meeting.timezone_name:
         when += f" ({meeting.timezone_name})"
     return when

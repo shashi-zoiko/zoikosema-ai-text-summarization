@@ -4,6 +4,8 @@ import { meetingPath } from './lib/meetingUrls.js'
 import Layout from './components/Layout.jsx'
 import UpdateToast from './components/UpdateToast.jsx'
 import CallOverlay from './components/CallOverlay.jsx'
+import SemaGuideToggle from './components/SemaGuideToggle.jsx'
+import SemaGuidePanel from './features/sema-guide/SemaGuidePanel.jsx'
 import Spinner from './components/ui/Spinner.jsx'
 import RoomErrorBoundary from './features/meeting/components/RoomErrorBoundary.jsx'
 import { useAuth } from './context/AuthContext.jsx'
@@ -29,6 +31,7 @@ const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
 const AccountSettings = lazy(() => import('./pages/AccountSettings.jsx'))
 const CalendarIntegrations = lazy(() => import('./pages/CalendarIntegrations.jsx'))
 const Inbox = lazy(() => import('./pages/Inbox.jsx'))
+const CalendarView = lazy(() => import('./pages/CalendarView.jsx'))
 const ReviewQueue = lazy(() => import('./pages/ReviewQueue.jsx'))
 const Governance = lazy(() => import('./pages/Governance.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
@@ -115,6 +118,8 @@ export default function App() {
     <>
     <UpdateToast />
     <CallOverlay />
+    <SemaGuidePanel />
+    <SemaGuideToggle />
     <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route
@@ -199,8 +204,9 @@ export default function App() {
           <Route path="/chat" element={<Chat />} />
           <Route path="/chat/:channelId" element={<Chat />} />
           <Route path="/actions" element={<Actions />} />
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/ai-summaries" element={<Dashboard />} />
           <Route path="/scheduled" element={<ScheduledMeetings />} />
+          <Route path="/calendar" element={<CalendarView />} />
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
           <Route path="/settings" element={<Settings />} />
@@ -217,7 +223,6 @@ export default function App() {
           <Route path="/billing" element={<RequireAdmin><Billing /></RequireAdmin>} />
           <Route path="/recordings" element={<ComingSoon feature="Recordings" description="A searchable archive of your meeting recordings will live here. Recording capture is being finalized." />} />
           <Route path="/analytics" element={<ComingSoon feature="Analytics" description="Usage trends, meeting insights, and workspace reports are on the way." />} />
-          <Route path="/ai-summaries" element={<ComingSoon feature="AI Summaries" description="Automatic recaps, action items, and highlights from your meetings are coming soon." />} />
           <Route path="/help-support" element={<HelpSupport />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
