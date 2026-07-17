@@ -56,6 +56,11 @@ MAIL_MESSAGE_SYNCED = "mail.message.synced.v1"
 # /service.py). Add one when a real consumer needs it.
 SETTINGS_POLICY_VERSIONED = "settings.policy.versioned.v1"
 
+# Mail governance settings (DLP keyword list + delayed-send buffer bounds,
+# Phase 4 slice) — same "no real Observability consumer yet" precedent as
+# SETTINGS_POLICY_VERSIONED above; still emitted for parity/future use.
+SETTINGS_MAIL_GOVERNANCE_VERSIONED = "settings.mail_governance.versioned.v1"
+
 # Action Review Queue plane (Sema Calendar & Mail, spec §12.2 — Phase 2
 # slice 2). AGENT_ACTION_CREATED matches spec's canonical name even though
 # this MVP's staged items may be human- or agent-drafted — the queue

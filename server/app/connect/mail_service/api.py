@@ -303,7 +303,9 @@ class StageSendIn(BaseModel):
     body_text: str
     thread_id: str | None = None
     in_reply_to_message_id: str | None = None
-    buffer_minutes: int = send_service.DEFAULT_BUFFER_MINUTES
+    # None -> resolve the tenant's configured default (Governance.jsx mail
+    # settings), not a fixed module constant — see send_service.stage_send.
+    buffer_minutes: int | None = None
 
 
 class MailSendOut(BaseModel):
