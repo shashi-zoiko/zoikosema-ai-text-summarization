@@ -192,6 +192,7 @@ async def create_event(
             policy_verdicts={"autonomy": resolved.level},
             blast_radius={"attendees": [a.get("email") for a in attendees if a.get("email")]},
             rollback_descriptor="no_rollback",  # nothing exists yet to roll back on a rejected create
+            policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),
         )
         return {"staged": True, "review_item": staged}
 
@@ -227,6 +228,7 @@ async def create_event_from_approved_proposal(db: DbSession, ctx: TenantContext,
     _link_attendees_to_work_graph(db, ctx, event)
     if source_message_id:
         _link_email_conversion_to_work_graph(db, ctx, event, source_message_id)
+    _link_agent_action_mutation_to_work_graph(db, ctx, item_id=item.id, event=event)
     env = _emit_mutated(db, ctx, event, action="created")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -525,6 +527,25 @@ def _link_email_conversion_to_work_graph(
         db, ctx, edge_type="derived_from",
         from_node_type="calendar_event", from_node_id=event.version_chain_id,
         to_node_type="email", to_node_id=message_id,
+    )
+
+
+def _link_agent_action_mutation_to_work_graph(
+    db: DbSession, ctx: TenantContext, *, item_id: str, event: NativeCalendarEvent,
+) -> None:
+    """Work Graph mutated edge (AgentAction->CalendarEvent, spec §3.2:
+    "Blast-radius analysis"), Phase 3/4 governance pass. Only called from
+    create_event_from_approved_proposal — the direct-create path (L0/L1,
+    no staging) has no AgentAction/ReviewQueueItem row to link from at all.
+    Same local-import-to-break-cycle reasoning as the two helpers above
+    (not `_emit_mutated`, a same-named-by-coincidence function a few lines
+    down that emits the CALENDAR_EVENT_MUTATED domain event — unrelated)."""
+    from app.connect.work_graph import service as work_graph
+
+    work_graph.create_edge(
+        db, ctx, edge_type="mutated",
+        from_node_type="agent_action", from_node_id=item_id,
+        to_node_type="calendar_event", to_node_id=event.version_chain_id,
     )
 
 

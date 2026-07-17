@@ -20,15 +20,26 @@ from app.connect.shared.base import ConnectBase
 # audit events, not hidden provider-only state") — a durable VISIBILITY
 # record that a grant once existed, not the authorization source of truth
 # (that's connect_mailbox_delegates.status; edges here are append-only and
-# can't be revoked in place).
-EDGE_TYPES = ("sent_by", "attendee_of", "derived_from", "delegated_access")
+# can't be revoked in place). governed_by/mutated/reviewed_by (this pass):
+# real Action Review Queue governance evidence — see action_review/service.py
+# and calendar_service/native_events.py & ai_workflows.py for the producers.
+#
+# Deliberately NOT added: blocked_by (no persisted "blocked attempt" object
+# exists yet — DLP failures are exceptions, not rows), executed_by_agent
+# (no distinct Agent Identity node exists — agents are plain strings today),
+# follows_up (needs its own scoping pass).
+EDGE_TYPES = ("sent_by", "attendee_of", "derived_from", "delegated_access", "governed_by", "mutated", "reviewed_by")
 
 # Node types with a real consumer today. `mailbox` (Phase 4 slice 1) is a
-# connect_provider_connections row, not a new entity — see
-# shared_mailboxes/service.py. `Organisation`, `Message` (chat),
-# `AISummary`, `File`, `AgentAction`, `PolicyVersion` all exist in spec's
-# full node table (§3.1) but have no real Work Graph traversal need yet.
-NODE_TYPES = ("person", "email", "calendar_event", "task", "mailbox")
+# connect_provider_connections row; `agent_action` is a
+# connect_action_review_items row; `policy_version` is a
+# connect_policy_versions row — none are new entities, see service.py's
+# resolvers. `Organisation`, `Message` (chat), `AISummary`, `File`, and
+# `Meeting` all exist in spec's full node table (§3.1) but have no real
+# Work Graph edge producer yet (Organisation/Meeting specifically: wiring
+# either in would mean touching meeting-join code, which CLAUDE.md flags as
+# sensitive — deliberately not done here, not an oversight).
+NODE_TYPES = ("person", "email", "calendar_event", "task", "mailbox", "agent_action", "policy_version")
 
 
 class WorkGraphEdge(ConnectBase):
