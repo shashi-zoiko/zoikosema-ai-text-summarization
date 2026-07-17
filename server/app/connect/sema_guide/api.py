@@ -7,6 +7,7 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.connect.sema_guide.models import (
     GuideChatRequest,
+    SaveConversationRequest,
     GuideChatResponse,
     RankedActionsResponse,
     HandoffRequest,
@@ -193,7 +194,7 @@ def get_handoff_state(
 ):
     session = get_active_session(user.id)
     if not session:
-        return HandoffState(state="idle")
+        return HandoffState(state=None)
 
     return HandoffState(
         state=session.state.value,
@@ -318,7 +319,7 @@ def get_conversation(
 
 @router.put("/conversation")
 def save_conversation(
-    data: GuideChatRequest,
+    data: SaveConversationRequest,
     user: User = Depends(get_current_user),
 ):
     _conversations[user.id] = data.conversation

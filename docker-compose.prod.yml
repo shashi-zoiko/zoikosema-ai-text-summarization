@@ -108,7 +108,7 @@ services:
       livekit:
         condition: service_healthy
     ports:
-      - "8001:8080"
+      - "8002:8080"
     volumes:
       - zoiko_uploads:/app/uploads
       - zoiko_recordings:/app/recordings

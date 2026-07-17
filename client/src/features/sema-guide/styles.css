@@ -74,19 +74,110 @@
 }
 
 .sg-launcher-inner {
+  position: relative;
   width: 64px;
   height: 64px;
   border-radius: 18px;
-  background: var(--c-surface, #FFFFFF);
-  border: 1px solid var(--c-line, rgba(255,255,255,0.8));
   display: grid;
   place-items: center;
   will-change: transform;
+  transition: transform 180ms ease, box-shadow 180ms ease;
+
+  /* Light theme (default) */
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
 }
 
+/* Dark theme */
+[data-theme="midnight"] .sg-launcher-inner {
+  background: #1E1F2E;
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow:
+    0 12px 32px rgba(0,0,0,0.45),
+    0 0 20px rgba(91,76,230,0.18);
+}
+
+/* Hover */
+.sg-launcher:hover .sg-launcher-inner {
+  transform: scale(1.06);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.55);
+}
+
+[data-theme="midnight"] .sg-launcher:hover .sg-launcher-inner {
+  box-shadow:
+    0 16px 40px rgba(0,0,0,0.55),
+    0 0 28px rgba(91,76,230,0.28);
+}
+
+/* Active (click) */
+.sg-launcher:active .sg-launcher-inner {
+  transform: scale(0.96);
+  transition: transform 100ms ease, box-shadow 100ms ease;
+}
+
+/* Focus-visible */
 .sg-launcher:focus-visible .sg-launcher-inner {
   outline: 2px solid var(--c-accent, #6366F1);
   outline-offset: 3px;
+}
+
+/* ── Notification Badge ──────────────────────────────────────── */
+.sg-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: #EF4444;
+  color: #FFFFFF;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── Floating animation (breathing shadow) ───────────────────── */
+.sg-launcher-breathe {
+  animation: sg-float 3.2s ease-in-out infinite;
+}
+
+@keyframes sg-float {
+  0%, 100% {
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  }
+  50% {
+    box-shadow: 0 18px 36px rgba(0,0,0,0.22);
+  }
+}
+
+[data-theme="midnight"] .sg-launcher-breathe {
+  animation-name: sg-float-dark;
+}
+
+@keyframes sg-float-dark {
+  0%, 100% {
+    box-shadow:
+      0 12px 32px rgba(0,0,0,0.45),
+      0 0 20px rgba(91,76,230,0.18);
+  }
+  50% {
+    box-shadow:
+      0 18px 36px rgba(0,0,0,0.50),
+      0 0 24px rgba(91,76,230,0.24);
+  }
+}
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .sg-launcher-inner {
+    width: 60px;
+    height: 60px;
+  }
 }
 
 @media (max-width: 640px) {
