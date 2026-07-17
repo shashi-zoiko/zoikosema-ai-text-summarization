@@ -40,7 +40,7 @@ export const CAPTION_CONFIG = {
   // Concurrent speakers shown at once. Meet shows ~1–3; older ones fade as new
   // speakers appear. Each speaker keeps an INDEPENDENT stream — raising this
   // never merges conversations, it just shows more of them.
-  maxSpeakers: 3,
+  maxSpeakers: 4,
 
   // Speaking gate: only capture/broadcast the local mic while LiveKit reports
   // the local participant as actually speaking, plus this hangover after they
