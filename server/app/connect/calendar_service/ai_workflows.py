@@ -18,11 +18,11 @@ Autonomy gating only applies where something is actually mutated:
   gets the exact same ceiling check create_event() already uses.
 
 Task version-history/rollback (spec §5.2's Task row: "restore previous
-task version or delete task if newly created") is NOT built in this
-slice — a rejected/unwanted suggested task is just deleted or dismissed.
-Full version-chain infrastructure for a brand-new, low-stakes entity with
-no real usage yet would be building for a scenario nobody has hit;
-revisit if task edits/undo actually matter in practice.
+task version or delete task if newly created") is now real — see tasks.py's
+TaskVersion/restore_previous_task_version (Phase 4 slice). A rejected/
+unwanted suggested task can still just be dismissed (update_task_status);
+restore is for reverting an unwanted *edit* to an existing task, not an
+alternative to dismissal.
 """
 from __future__ import annotations
 
@@ -76,9 +76,18 @@ async def generate_agenda(
             action_type=CALENDAR_AGENDA_PROPOSE_ACTION,
             action_payload={"version_chain_id": version_chain_id, "agenda_items": agenda["agenda_items"]},
             policy_verdicts={"autonomy": resolved.level},
-            reasoning_trace_ref=f"ai_generate_agenda:{agenda.get('_model')}",
+            reasoning_trace={
+                "rationale": (
+                    f"Generated agenda for '{event.title}' from {len(event.attendees or [])} "
+                    f"attendee(s)" + (" with supplied context notes." if context_notes else ".")
+                ),
+                "source_nodes": [{"node_type": "calendar_event", "node_id": event.version_chain_id}],
+                "tool_chain": ["core.ai.ai_generate_agenda", "calendar_service.ai_workflows.generate_agenda"],
+                "model": agenda.get("_model"),
+            },
             rollback_descriptor="no_rollback",
             proposed_by_agent="ai_generate_agenda",
+            policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),
         )
         return {"staged": True, "review_item": staged, "agent_generated": True}
     return {"staged": False, "agenda_items": agenda["agenda_items"], "agent_generated": True, "_error": agenda.get("_error")}
@@ -141,9 +150,25 @@ async def generate_followup_tasks(
             action_type=TASKS_CREATE_ACTION,
             action_payload={"version_chain_id": version_chain_id, "tasks": task_payloads},
             policy_verdicts={"autonomy": resolved.level},
-            reasoning_trace_ref=f"ai_generate_followup_tasks:{generated.get('_model')}",
-            rollback_descriptor="no_rollback",
+            reasoning_trace={
+                "rationale": (
+                    f"Generated {len(task_payloads)} follow-up task(s) for '{event.title}' "
+                    f"from post-meeting context notes."
+                ),
+                "source_nodes": [{"node_type": "calendar_event", "node_id": event.version_chain_id}],
+                "tool_chain": [
+                    "core.ai.ai_generate_followup_tasks",
+                    "calendar_service.ai_workflows.generate_followup_tasks",
+                ],
+                "model": generated.get("_model"),
+            },
+            # tasks.py's TaskVersion history + restore_previous_task_version
+            # now give this a real rollback path once materialized (Phase 4
+            # slice) — each created task can be restored to its prior
+            # version, or dismissed if it's newly created and has none.
+            rollback_descriptor="restore_previous_version",
             proposed_by_agent="ai_generate_followup_tasks",
+            policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),
         )
         return {"staged": True, "review_item": staged, "agent_generated": True}
 
@@ -177,4 +202,20 @@ async def create_tasks_from_approved_proposal(db: DbSession, ctx: TenantContext,
         )
         for t in payload["tasks"]
     ]
+
+    # Work Graph mutated edge (AgentAction->Task, spec §3.2: "Blast-radius
+    # analysis") — one per task this approved proposal actually created.
+    # Local import: work_graph/service.py imports this module (via
+    # calendar_service.tasks) at top level, so importing it back here at
+    # module scope would cycle — same pattern native_events.py's own
+    # Work Graph helpers already established.
+    from app.connect.work_graph import service as work_graph
+    for task in created:
+        work_graph.create_edge(
+            db, ctx, edge_type="mutated",
+            from_node_type="agent_action", from_node_id=item_id,
+            to_node_type="task", to_node_id=task.id,
+        )
+    db.commit()
+
     return [tasks_service.to_dict(t) for t in created]

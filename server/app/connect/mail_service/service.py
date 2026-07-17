@@ -13,8 +13,14 @@ plans/sema-p3-s2-gmail-readonly-sync.md).
 """
 from __future__ import annotations
 
+import ipaddress
+import socket
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
+import httpx
+import nh3
+from sqlalchemy import or_
 from sqlalchemy.orm import Session as DbSession
 
 from app.connect.audit import service as audit
@@ -26,12 +32,77 @@ from app.connect.provider_connections import service as provider_connections_ser
 from app.connect.provider_connections.adapters import get_adapter
 from app.connect.provider_connections.models import ProviderConnection
 from app.connect.shared.envelope import EventEnvelope
-from app.connect.shared.errors import NotFound
+from app.connect.shared.errors import Invalid, NotFound
 from app.connect.shared.ids import uuid7_str
 from app.connect.shared.telemetry import get_correlation_id
 from app.connect.shared.tenant import TenantContext
+from app.connect.shared_mailboxes import service as shared_mailboxes
+from app.connect.work_graph import service as work_graph
+from app.models.user import User
 
 DEFAULT_SYNC_WINDOW_PAST = timedelta(days=30)
+
+# Phase 3 slice 4 — server-side half of the two-layer sanitize (this + the
+# client's DOMPurify pass, same allowlist by design so a bypass needs to
+# defeat two independent implementations, not one). Email HTML is richer
+# than typical user content (tables, inline layout styles) so the allowlist
+# is deliberately wider than a comment-box sanitizer's default, but every
+# addition here is layout/typography only — nothing that can execute or
+# navigate. `url_schemes` excludes `cid:` on purpose: inline-attachment
+# images are out of scope for this slice (see plan file) and fall back to
+# broken-image + alt text rather than being resolved or passed through raw.
+_MAIL_HTML_TAGS = {
+    "p", "br", "div", "span", "a", "b", "strong", "i", "em", "u", "s", "strike",
+    "ul", "ol", "li", "table", "thead", "tbody", "tfoot", "tr", "td", "th",
+    "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "pre", "code",
+    "sub", "sup", "small", "font", "center",
+}
+_MAIL_HTML_ATTRIBUTES = {
+    "*": {"style", "align", "dir"},
+    "a": {"href", "title", "target", "rel"},
+    "img": {"src", "alt", "width", "height"},
+    "table": {"width", "height", "colspan", "rowspan", "bgcolor", "valign"},
+    "td": {"width", "height", "colspan", "rowspan", "bgcolor", "valign"},
+    "th": {"width", "height", "colspan", "rowspan", "bgcolor", "valign"},
+}
+_MAIL_HTML_STYLE_PROPERTIES = {
+    "color", "background-color", "font-size", "font-family", "font-weight",
+    "font-style", "text-align", "text-decoration", "line-height",
+    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "border", "border-color", "border-width", "border-style",
+    "width", "height", "max-width", "max-height", "min-width", "min-height",
+    "vertical-align", "white-space",
+}
+_MAIL_HTML_URL_SCHEMES = {"http", "https", "mailto"}
+
+
+def _sanitize_mail_html(html: str) -> str:
+    return nh3.clean(
+        html,
+        tags=_MAIL_HTML_TAGS,
+        attributes=_MAIL_HTML_ATTRIBUTES,
+        filter_style_properties=_MAIL_HTML_STYLE_PROPERTIES,
+        url_schemes=_MAIL_HTML_URL_SCHEMES,
+        link_rel=None,  # we allowlist "rel" on <a> ourselves; don't let nh3 also manage it
+    )
+
+
+def _link_sender_to_work_graph(db: DbSession, ctx: TenantContext, *, message_id: str, from_email: str) -> None:
+    """Work Graph sent_by edge (Email->Person, spec §3.2), Phase 3 slice 7.
+    Only registered users resolve to a Person node — an external sender has
+    no Person node to link to yet (spec's node table has no "external
+    contact" node type), so this is silently a no-op for them, not an
+    error. No per-edge audit/event — see work_graph/service.py's module
+    docstring for why."""
+    sender = db.query(User).filter(User.email == from_email).first()
+    if sender is None:
+        return
+    work_graph.create_edge(
+        db, ctx, edge_type="sent_by",
+        from_node_type="email", from_node_id=message_id,
+        to_node_type="person", to_node_id=str(sender.id),
+    )
 
 
 async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict:
@@ -102,9 +173,11 @@ async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict
             existing.history_id = raw.history_id
             existing.label_ids = raw.label_ids
             updated += 1
+            message_id = existing.id
         else:
+            message_id = uuid7_str()
             db.add(MailMessage(
-                id=uuid7_str(),
+                id=message_id,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 provider_connection_id=connection.id,
@@ -122,6 +195,8 @@ async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict
                 correlation_id=get_correlation_id(),
             ))
             created += 1
+
+        _link_sender_to_work_graph(db, ctx, message_id=message_id, from_email=raw.from_email)
 
         if raw.history_id and (next_history_id is None or raw.history_id > next_history_id):
             next_history_id = raw.history_id
@@ -154,9 +229,165 @@ async def sync_mail(db: DbSession, ctx: TenantContext, *, provider: str) -> dict
 def list_mail_messages(
     db: DbSession, ctx: TenantContext, *, time_min: datetime | None = None,
 ) -> list[MailMessage]:
+    """Scoped by accessible_connection_ids (Phase 4 slice 1), not a strict
+    user_id match — MailMessage.user_id is whoever's connection synced the
+    row (the mailbox owner), so a delegate reading a shared mailbox's mail
+    is a different person than that column. Every read path below (list,
+    search, get body) uses the same scoping for the same reason."""
+    ids = shared_mailboxes.accessible_connection_ids(db, ctx)
+    if not ids:
+        return []
     q = db.query(MailMessage).filter(
-        MailMessage.tenant_id == ctx.tenant_id, MailMessage.user_id == ctx.user_id,
+        MailMessage.tenant_id == ctx.tenant_id, MailMessage.provider_connection_id.in_(ids),
     )
     if time_min is not None:
         q = q.filter(MailMessage.received_at >= time_min)
     return q.order_by(MailMessage.received_at.desc()).all()
+
+
+_SEARCH_LIMIT = 50
+
+
+def search_messages(db: DbSession, ctx: TenantContext, *, query: str) -> list[MailMessage]:
+    """Phase 3 slice 5 — read-only search over synced metadata (subject/
+    from_email/snippet). Full-text body search is a heavier index (spec's
+    own Search Service is security-trimmed and cross-surface) that can wait
+    for a real usage signal, not built speculatively now — this searches
+    the same metadata every inbox row already renders, nothing deeper."""
+    if not query or not query.strip():
+        return []
+    ids = shared_mailboxes.accessible_connection_ids(db, ctx)
+    if not ids:
+        return []
+    like = f"%{query.strip()}%"
+    return (
+        db.query(MailMessage)
+        .filter(
+            MailMessage.tenant_id == ctx.tenant_id, MailMessage.provider_connection_id.in_(ids),
+            or_(
+                MailMessage.subject.ilike(like),
+                MailMessage.from_email.ilike(like),
+                MailMessage.snippet.ilike(like),
+            ),
+        )
+        .order_by(MailMessage.received_at.desc())
+        .limit(_SEARCH_LIMIT)
+        .all()
+    )
+
+
+async def get_message_body(db: DbSession, ctx: TenantContext, message_id: str) -> dict:
+    """Phase 3 slice 4 — fetch and sanitize a single message's full body.
+    Nothing raw is persisted: the provider is re-fetched on every open, same
+    "object-storage-references-only" discipline as the rest of Connect
+    (spec §9.3) — there's no reference to store here since we don't store
+    the body at all."""
+    ids = shared_mailboxes.accessible_connection_ids(db, ctx)
+    message = (
+        db.query(MailMessage)
+        .filter(
+            MailMessage.tenant_id == ctx.tenant_id,
+            MailMessage.provider_connection_id.in_(ids),
+            MailMessage.id == message_id,
+        )
+        .first()
+        if ids else None
+    )
+    if message is None:
+        raise NotFound("Mail message not found")
+
+    connection = (
+        db.query(ProviderConnection)
+        .filter(
+            ProviderConnection.tenant_id == ctx.tenant_id,
+            ProviderConnection.id == message.provider_connection_id,
+            ProviderConnection.status == "active",
+        )
+        .first()
+    )
+    if connection is None:
+        raise NotFound("Provider connection for this message is no longer active")
+
+    adapter = get_adapter(message.provider)
+    access_token = await provider_connections_service.ensure_valid_access_token(db, connection, adapter)
+    raw_body = await adapter.get_message_body(access_token, message.provider_message_id)
+
+    html = _sanitize_mail_html(raw_body.html) if raw_body.html else None
+    return {
+        "html": html,
+        "text": raw_body.text,
+        "attachments": [
+            {
+                "provider_attachment_id": a.provider_attachment_id,
+                "filename": a.filename,
+                "size_bytes": a.size_bytes,
+                "content_type": a.content_type,
+            }
+            for a in raw_body.attachments
+        ],
+    }
+
+
+# ── Image proxy (Phase 3 slice 4) ────────────────────────────────────────
+#
+# Rewrites remote <img> URLs so the VIEWER's real IP is never exposed to a
+# sender-controlled tracking host, and the server, not the browser, is what
+# resolves/fetches the URL — this is the whole point of a proxy, and it's
+# also a real SSRF surface: an attacker-controlled URL fetched server-side
+# could otherwise target internal infra (cloud metadata endpoints, internal
+# services). Every hop (initial URL AND any redirect target) is validated
+# before being fetched — validating only the first URL is not sufficient,
+# since a public-looking URL can 302 to an internal one.
+
+_IMAGE_PROXY_MAX_REDIRECTS = 3
+_IMAGE_PROXY_MAX_BYTES = 5 * 1024 * 1024
+_IMAGE_PROXY_TIMEOUT = 10.0
+
+
+def _validate_proxy_target(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise Invalid("Image proxy only supports http/https URLs")
+    if not parsed.hostname:
+        raise Invalid("Image proxy URL has no host")
+
+    try:
+        addrinfo = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror as exc:
+        raise Invalid("Image proxy URL host could not be resolved") from exc
+
+    for family, _, _, _, sockaddr in addrinfo:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+        ):
+            raise Invalid("Image proxy URL resolves to a non-public address")
+
+
+async def fetch_proxied_image(url: str) -> tuple[bytes, str]:
+    """Validate then fetch an image URL server-side. Returns (bytes,
+    content_type). Manually follows redirects (httpx auto-follow disabled)
+    so each hop gets the same private-IP validation as the initial URL."""
+    current_url = url
+    async with httpx.AsyncClient(timeout=_IMAGE_PROXY_TIMEOUT, follow_redirects=False) as client:
+        for _ in range(_IMAGE_PROXY_MAX_REDIRECTS + 1):
+            _validate_proxy_target(current_url)
+            resp = await client.get(current_url)
+            if resp.status_code in (301, 302, 303, 307, 308):
+                location = resp.headers.get("location")
+                if not location:
+                    raise Invalid("Image proxy target redirected with no Location header")
+                current_url = location
+                continue
+            if resp.status_code != 200:
+                raise Invalid(f"Image proxy fetch failed: {resp.status_code}")
+
+            content_type = resp.headers.get("content-type", "")
+            if not content_type.startswith("image/"):
+                raise Invalid("Image proxy target is not an image")
+            if len(resp.content) > _IMAGE_PROXY_MAX_BYTES:
+                raise Invalid("Image proxy target exceeds size limit")
+            return resp.content, content_type
+
+    raise Invalid("Image proxy exceeded max redirects")

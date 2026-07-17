@@ -303,7 +303,7 @@ function WorkspaceSection() {
         </button>
       </Card>
 
-      <Card title="Calendar" desc="Connect Google or Outlook so Sema can read your availability.">
+      <Card title="Calendar" desc="Connect Google so Sema can read your availability.">
         <button
           onClick={() => navigate('/settings/calendar')}
           className="flex w-full items-center gap-3 !rounded-[10px] !border-[var(--c-line-strong)] !bg-[var(--c-bg-1)] px-4 py-3 text-left"
@@ -313,7 +313,23 @@ function WorkspaceSection() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-[13.5px] font-semibold text-[var(--c-fg)]">Connected calendars</span>
-            <span className="block text-[12px] text-[var(--c-fg-muted)]">Manage Google / Outlook Calendar connections</span>
+            <span className="block text-[12px] text-[var(--c-fg-muted)]">Manage Google Calendar connections</span>
+          </span>
+          <ChevronRight className="h-4.5 w-4.5 text-[var(--c-fg-muted)]" />
+        </button>
+      </Card>
+
+      <Card title="Mail" desc="Read messages from every connected Gmail/Outlook account.">
+        <button
+          onClick={() => navigate('/mail')}
+          className="flex w-full items-center gap-3 !rounded-[10px] !border-[var(--c-line-strong)] !bg-[var(--c-bg-1)] px-4 py-3 text-left"
+        >
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--c-accent-soft)] text-[var(--c-accent)]">
+            <Mail className="h-4.5 w-4.5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13.5px] font-semibold text-[var(--c-fg)]">Inbox</span>
+            <span className="block text-[12px] text-[var(--c-fg-muted)]">Unified view across connected Gmail/Outlook accounts</span>
           </span>
           <ChevronRight className="h-4.5 w-4.5 text-[var(--c-fg-muted)]" />
         </button>

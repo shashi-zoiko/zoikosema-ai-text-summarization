@@ -229,6 +229,210 @@ def _meeting_detail_card(
             </table>"""
 
 
+def _format_duration(duration_minutes: int) -> str:
+    """"1 hour" / "90 min" / "2 hours" — matches the mockup's wording,
+    derived only from real duration_minutes, never guessed."""
+    if duration_minutes % 60 == 0:
+        hours = duration_minutes // 60
+        return f"{hours} hour" if hours == 1 else f"{hours} hours"
+    return f"{duration_minutes} min"
+
+
+def _localize(dt, tz_name: str | None):
+    """Convert a real tz-aware datetime into the meeting's configured
+    timezone (if any) before display — otherwise the date/time panel would
+    show it in whatever zone it happened to be stored/passed in (e.g. UTC),
+    not the timezone the organizer actually scheduled it for.
+
+    Returns (localized_dt, short_zone_label_or_None). Falls back to the
+    original dt and the raw IANA name if the zone can't be resolved.
+    """
+    if not tz_name:
+        return dt, None
+    try:
+        from zoneinfo import ZoneInfo
+        localized = dt.astimezone(ZoneInfo(tz_name))
+        return localized, localized.tzname() or tz_name
+    except Exception:
+        return dt, tz_name
+
+
+def _invite_detail_card(
+    *,
+    meeting_code: str,
+    scheduled_at_dt=None,
+    scheduled_at: str | None = None,
+    duration_minutes: int | None = None,
+    timezone: str | None = None,
+    organizer_name: str,
+    location: str | None,
+    description: str | None,
+) -> str:
+    """Invite-only detail card: a navy date panel (only when we have a real
+    scheduled datetime) beside a stacked list of every other piece of data
+    that's actually available. Each row is omitted outright (not shown
+    blank) when its value is missing, per the redesign's backend-only scope.
+    """
+    date_panel = ""
+    time_row = None
+    if scheduled_at_dt is not None:
+        local_dt, tz = _localize(scheduled_at_dt, timezone)
+        start_str = local_dt.strftime("%I:%M %p").lstrip("0")
+        if duration_minutes:
+            from datetime import timedelta
+            end_str = (local_dt + timedelta(minutes=duration_minutes)).strftime("%I:%M %p").lstrip("0")
+            time_value = f"{start_str} – {end_str}"
+        else:
+            time_value = start_str
+        if tz:
+            time_value = f"{time_value} {tz}"
+        time_row = ("\U0001F550", "Time", time_value)
+
+        weekday = local_dt.strftime("%A").upper()
+        month_day = local_dt.strftime("%b %d").upper()
+        year = local_dt.strftime("%Y")
+        date_panel = f"""
+              <td width="118" style="background:#242f8f;border-radius:14px 0 0 14px;padding:20px 14px;vertical-align:middle;text-align:center;">
+                <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:#aab6f5;">{weekday}</div>
+                <div style="margin-top:6px;font-size:21px;font-weight:800;color:#ffffff;line-height:1.15;">{month_day}</div>
+                <div style="margin-top:2px;font-size:13px;font-weight:600;color:#c7d0f8;">{year}</div>
+              </td>"""
+    elif scheduled_at:
+        # Fallback used only when a caller has no real datetime object, just a
+        # pre-formatted string — keeps this function backward-compatible.
+        time_row = ("\U0001F550", "When", f"{scheduled_at} ({timezone})" if timezone else scheduled_at)
+
+    rows = []
+    if time_row:
+        rows.append(time_row)
+    if duration_minutes:
+        rows.append(("⏱", "Duration", _format_duration(duration_minutes)))
+    rows.append(("\U0001F464", "Organizer", organizer_name))
+    if location:
+        rows.append(("\U0001F4CD", "Location", location))
+    rows.append(("#", "Meeting ID", meeting_code))
+    if description:
+        rows.append(("\U0001F4DD", "Description", description))
+
+    row_html = "".join(
+        f"""
+              <tr>
+                <td style="padding:8px 0;border-top:1px solid #e4e9f7;width:26px;vertical-align:top;font-size:13px;">{icon}</td>
+                <td style="padding:8px 0;border-top:1px solid #e4e9f7;vertical-align:top;">
+                  <span style="font-size:11px;font-weight:700;color:#5c6a94;text-transform:uppercase;letter-spacing:0.04em;">{label}:</span>
+                  <span style="margin-left:4px;font-size:13.5px;font-weight:600;color:#1a2452;">{value}</span>
+                </td>
+              </tr>"""
+        for icon, label, value in rows
+    )
+    row_html = row_html.replace("border-top:1px solid #e4e9f7;", "border-top:none;", 1)
+
+    info_column = f"""
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                {row_html}
+              </table>"""
+
+    if date_panel:
+        return f"""
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e1e6f7;border-radius:14px;">
+              <tr>
+                {date_panel}
+                <td style="background:#f6f8fd;border-radius:0 14px 14px 0;padding:14px 18px;vertical-align:middle;">
+                  {info_column}
+                </td>
+              </tr>
+            </table>"""
+
+    return f"""
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f8fd;border:1px solid #e1e6f7;border-radius:14px;padding:2px 18px;">
+              {info_column}
+            </table>"""
+
+
+def _invite_email_html(
+    *,
+    heading: str,
+    subheading: str,
+    card_html: str,
+    join_url: str,
+    ics_download_url: str | None,
+) -> str:
+    """ZoikoSema-blue invite email shell — separate from ``_meeting_email_html``
+    (which reminder/cancelled/rsvp keep using unmodified) so this redesign
+    can't change how those other emails render.
+
+    Join Meeting is the primary CTA (solid blue); Add to Calendar (only
+    rendered when a download URL is available) is secondary and sits beside
+    it in a two-column table row that collapses to full-width stacked
+    buttons on narrow clients via the media query below.
+    """
+    s = get_settings()
+    logo_url = s.brand_email_invite_logo_url
+
+    add_to_calendar_cell = ""
+    join_cell_width = "100%"
+    if ics_download_url:
+        join_cell_width = "50%"
+        add_to_calendar_cell = f"""
+              <td class="btn-cell" width="50%" align="center" style="padding:0 0 0 8px;">
+                <a href="{ics_download_url}" style="display:block;background:#ffffff;color:#242f8f;text-decoration:none;padding:11px 0;border:1.5px solid #242f8f;border-radius:10px;font-weight:700;font-size:14px;">Add to Calendar</a>
+              </td>"""
+
+    return f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    @media (max-width:480px) {{
+      .btn-cell {{ display:block !important; width:100% !important; padding:0 0 10px !important; }}
+    }}
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#eef1f8;">
+  <div style="background:#eef1f8;padding:28px 16px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;">
+      <tr><td>
+        <div style="background:#ffffff;border-radius:18px;border:1px solid #e2e7f5;box-shadow:0 20px 50px -30px rgba(13,45,110,0.3);overflow:hidden;">
+          <!-- Header: left-aligned wordmark + heading, flat white (matches mockup, no colored band) -->
+          <div style="padding:26px 26px 4px;text-align:left;">
+            <img src="{logo_url}" alt="ZoikoSema" width="170" style="display:inline-block;width:170px;max-width:60%;height:auto;border:0;outline:none;text-decoration:none;" />
+          </div>
+          <div style="padding:14px 26px 0;text-align:left;">
+            <h1 style="margin:0 0 4px;font-size:22px;line-height:1.3;color:#101a3d;font-weight:800;letter-spacing:-0.01em;">{heading}</h1>
+            <p style="margin:0;font-size:14px;line-height:1.5;color:#5c6a94;">{subheading}</p>
+          </div>
+          <!-- Detail card -->
+          <div style="padding:18px 26px 4px;">
+            {card_html}
+          </div>
+          <!-- CTAs -->
+          <div style="padding:18px 26px 6px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td class="btn-cell" width="{join_cell_width}" align="center" style="padding:0;">
+                  <a href="{join_url}" style="display:block;background:#242f8f;color:#ffffff;text-decoration:none;padding:12px 0;border-radius:10px;font-weight:700;font-size:15px;">Join Meeting</a>
+                </td>{add_to_calendar_cell}
+              </tr>
+            </table>
+          </div>
+          <!-- RSVP explainer -->
+          <div style="margin:6px 26px 0;padding:14px 16px;background:#f6f8fd;border:1px solid #e1e6f7;border-radius:12px;">
+            <p style="margin:0;font-size:12.5px;line-height:1.6;color:#4a5b7a;">Need to respond? Just open the calendar invite attached to this email — Accept, Decline, or Tentative right from your calendar app.</p>
+          </div>
+          <!-- Footer -->
+          <div style="padding:18px 0 22px;text-align:center;">
+            <p style="margin:0;font-size:12px;line-height:1.5;color:#8b96b8;">Powered by ZoikoSema</p>
+          </div>
+        </div>
+      </td></tr>
+    </table>
+  </div>
+</body>
+</html>"""
+
+
 def send_meeting_invite_email(
     to_email: str,
     inviter_name: str,
@@ -237,22 +441,42 @@ def send_meeting_invite_email(
     join_url: str | None,
     scheduled_at: str | None = None,
     ics_data: bytes | None = None,
+    organizer_email: str | None = None,
+    description: str | None = None,
+    location: str | None = None,
+    duration_minutes: int | None = None,
+    timezone: str | None = None,
+    ics_download_url: str | None = None,
+    scheduled_at_dt=None,
 ) -> bool:
-    """Send a meeting invite email with optional .ics attachment."""
-    card = _meeting_detail_card(
-        title=meeting_title,
-        icon_emoji="📅",
-        code=meeting_code,
-        meta_label="Scheduled for:" if scheduled_at else None,
-        meta_value=scheduled_at if scheduled_at else None,
+    """Send a meeting invite email with optional .ics attachment.
+
+    ``organizer_email``, ``description``, ``location``, ``duration_minutes``,
+    ``timezone``, ``ics_download_url``, and ``scheduled_at_dt`` are optional
+    and additive — every existing caller that doesn't pass them keeps getting
+    the same rows it did before (organizer_email is accepted for future
+    use/consistency with other send_* signatures but isn't rendered
+    separately since organizer_name already appears in the card).
+    ``scheduled_at_dt`` (a real tz-aware datetime, not a fake one) drives the
+    navy date-split panel; when absent, the card falls back to a single
+    "When" row built from the ``scheduled_at`` string, same as before.
+    """
+    card = _invite_detail_card(
+        meeting_code=meeting_code,
+        scheduled_at_dt=scheduled_at_dt,
+        scheduled_at=scheduled_at,
+        duration_minutes=duration_minutes,
+        timezone=timezone,
+        organizer_name=inviter_name,
+        location=location,
+        description=description,
     )
-    html = _meeting_email_html(
-        hero="invite",
-        heading="You&rsquo;re invited to a meeting",
-        subheading=f"{inviter_name} invited you to join",
+    html = _invite_email_html(
+        heading=meeting_title,
+        subheading="Join your ZoikoSema meeting",
         card_html=card,
-        button_url=join_url,
-        button_label="Join Meeting",
+        join_url=join_url,
+        ics_download_url=ics_download_url,
     )
 
     attachments = []

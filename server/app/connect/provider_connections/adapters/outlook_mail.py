@@ -28,8 +28,10 @@ from urllib.parse import urlencode
 import httpx
 
 from app.connect.provider_connections.adapters.shared import (
+    AttachmentMeta,
     ExchangedTokens,
     RawMessage,
+    RawMessageBody,
     RefreshedAccessToken,
 )
 from app.connect.shared.errors import Invalid
@@ -233,3 +235,86 @@ async def list_messages(
             items.extend(more_items)
 
     return [_item_to_raw_message(item, delta_link=delta_link) for item in items]
+
+
+async def get_message_body(access_token: str, message_id: str) -> RawMessageBody:
+    """Single-message full-body fetch (Phase 3 slice 4). Unlike Gmail, Graph
+    normalizes the body server-side — `body.contentType` is always "html" or
+    "text", no MIME tree to walk. Attachment metadata is a separate call
+    ($select excludes contentBytes so bytes are never pulled into memory
+    server-side — metadata-only is this slice's whole point)."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        msg_resp = await client.get(
+            f"{_GRAPH}/me/messages/{message_id}",
+            params={"$select": "body"},
+            headers=headers,
+        )
+        if msg_resp.status_code != 200:
+            raise Invalid(f"Graph get message body failed: {msg_resp.text}")
+        body = msg_resp.json().get("body") or {}
+        content_type = (body.get("contentType") or "").lower()
+        content = body.get("content")
+
+        att_resp = await client.get(
+            f"{_GRAPH}/me/messages/{message_id}/attachments",
+            params={"$select": "id,name,size,contentType"},
+            headers=headers,
+        )
+        if att_resp.status_code != 200:
+            raise Invalid(f"Graph list attachments failed: {att_resp.text}")
+        attachments = [
+            AttachmentMeta(
+                provider_attachment_id=a["id"],
+                filename=a.get("name", ""),
+                size_bytes=int(a.get("size", 0)),
+                content_type=a.get("contentType", ""),
+            )
+            for a in att_resp.json().get("value", [])
+        ]
+
+    html = content if content_type == "html" else None
+    text = content if content_type == "text" else None
+    return RawMessageBody(html=html, text=text, attachments=attachments)
+
+
+async def send_message(
+    access_token: str, *, to_emails: list[str], subject: str, body_text: str,
+    thread_id: str | None = None, in_reply_to_message_id: str | None = None,
+) -> str:
+    """Graph POST /me/sendMail (Phase 3 slice 9) — the first WRITE this
+    adapter makes; every function above is read-only per slice 3's own
+    scope. Requires Mail.Send, a widening beyond _SCOPE above that
+    re-triggers Microsoft admin consent review (same real, external
+    dependency as Gmail's send-scope widening) — an existing Mail.Read-only
+    connection's stored access_token will 403 here until reconnected with
+    the wider scope; that reconnect flow isn't built here, same deliberate
+    deferral as gmail.py's send_message.
+
+    thread_id/in_reply_to_message_id are accepted for call-shape parity
+    with the Gmail adapter but unused: Graph's sendMail has no equivalent
+    of Gmail's raw-MIME In-Reply-To/threadId — a true Graph "reply" goes
+    through POST /me/messages/{id}/reply instead, which needs the
+    provider's own message id, not this codebase's internal thread_id.
+    Add that path when a real reply-in-thread caller needs it.
+
+    Known API quirk: Graph's sendMail returns 202 with an EMPTY body — no
+    provider message id is available from this call, unlike Gmail's
+    messages.send. Callers must not assume a non-empty return value.
+    """
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": body_text},
+            "toRecipients": [{"emailAddress": {"address": e}} for e in to_emails],
+        },
+        "saveToSentItems": True,
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            f"{_GRAPH}/me/sendMail", json=payload,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if resp.status_code != 202:
+        raise Invalid(f"Graph sendMail failed: {resp.text}")
+    return ""

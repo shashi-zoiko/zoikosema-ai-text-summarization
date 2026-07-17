@@ -10,6 +10,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
+from app.connect.calendar_service import service as calendar_service
 from app.connect.provider_connections import service
 from app.connect.provider_connections.adapters import get_adapter
 from app.connect.shared.errors import DomainError
@@ -148,5 +149,19 @@ async def oauth_callback(
     except DomainError as e:
         log.warning("provider connect callback failed: %s", e.message)
         return RedirectResponse(f"{return_url}?error={e.code}")
+
+    if provider in ("google_calendar", "microsoft_calendar"):
+        # Best-effort initial pull so events already on the provider's
+        # calendar show up immediately instead of waiting for whatever next
+        # calls POST /calendar/sync — a connect with no events synced yet
+        # otherwise looks broken even though the connection itself worked.
+        # Never fails the redirect: the connection succeeded regardless of
+        # whether this first sync does, same "don't let a best-effort
+        # side-call break the primary flow" precedent as this codebase's
+        # Redis publish() calls.
+        try:
+            await calendar_service.sync_calendar(db, ctx, provider=provider)
+        except DomainError as e:
+            log.warning("post-connect initial calendar sync failed: %s", e.message)
 
     return RedirectResponse(f"{return_url}?connected={provider}")

@@ -352,6 +352,32 @@ export default function CalendarView() {
     return () => clearInterval(t)
   }, [])
 
+  // Pull fresh events from any connected calendar provider once per mount —
+  // sync_calendar only ever runs when something calls POST .../calendar/sync
+  // (the OAuth callback now does this once right after connect, but that
+  // doesn't cover events added to the provider's calendar afterward). Not
+  // per view-range change: that would fire a provider API call on every
+  // prev/next click for no benefit, since sync always pulls the same fixed
+  // ±7/90-day window regardless of what's currently on screen.
+  const [syncVersion, setSyncVersion] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    api('/api/connect/provider-connections')
+      .then((connections) => {
+        const calendarProviders = connections
+          .filter((c) => ['google_calendar', 'microsoft_calendar'].includes(c.provider) && c.status === 'active')
+          .map((c) => c.provider)
+        return Promise.all(
+          calendarProviders.map((provider) =>
+            api('/api/connect/calendar/sync', { method: 'POST', body: { provider } }).catch(() => null),
+          ),
+        )
+      })
+      .then(() => { if (!cancelled) setSyncVersion((v) => v + 1) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
   const viewDays = useMemo(() => {
     if (mode === 'day') {
       return [new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate())]
@@ -375,7 +401,7 @@ export default function CalendarView() {
       .catch((err) => { if (!cancelled) { setError(err.message); setEvents([]) } })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, cursor])
+  }, [mode, cursor, syncVersion])
 
   // Calendar-invite email deep link (/calendar/:versionChainId) — fetches the
   // one event by ID rather than relying on it already being in the currently

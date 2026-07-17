@@ -50,6 +50,19 @@ class ReviewNoteIn(BaseModel):
     note: str | None = None
 
 
+class ReasoningTraceOut(BaseModel):
+    id: str
+    queue_item_id: str
+    rationale: str | None
+    source_nodes: list[Any]
+    tool_chain: list[Any]
+    model: str | None
+    confidence: float | None
+    uncertainty_markers: list[Any]
+    redacted: bool
+    created_at: str | None
+
+
 class ReviewQueueItemOut(BaseModel):
     id: str
     action_type: str
@@ -118,6 +131,19 @@ def get_item(
     except DomainError as e:
         raise _to_http(e) from e
     return _orm_to_out(item)
+
+
+@router.get("/items/{item_id}/reasoning-trace", response_model=ReasoningTraceOut | None)
+def get_reasoning_trace(
+    item_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        trace = service.get_reasoning_trace(db, ctx, item_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return ReasoningTraceOut(**trace) if trace else None
 
 
 @router.post("/items/{item_id}/approve", response_model=ReviewQueueItemOut)

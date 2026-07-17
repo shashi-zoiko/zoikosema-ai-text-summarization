@@ -49,6 +49,9 @@
   --color-warn-soft: var(--c-warn-soft);
   --color-danger: var(--c-danger);
   --color-danger-soft: var(--c-danger-soft);
+
+  --color-agent-violet: var(--c-agent-violet);
+  --color-agent-violet-soft: var(--c-agent-violet-soft);
 }
 
 /* ============== THEME: Midnight Graphite (default) ============== */
@@ -87,6 +90,12 @@
   --c-warn-soft: rgba(245, 158, 11, 0.14);
   --c-danger: #ef4444;
   --c-danger-soft: rgba(239, 68, 68, 0.14);
+
+  /* Spec §"visual language": violet marks agent/AI-touched objects (proposed
+     events, drafted emails, queue items, AI summaries) — distinct from the
+     brand-blue accent so agent involvement reads at a glance. */
+  --c-agent-violet: #8b7cf6;
+  --c-agent-violet-soft: rgba(90, 69, 214, 0.18);
 
   /* Home hero — themed green panels (adapt per theme so text stays legible) */
   --hero-bg: linear-gradient(150deg, #11281e 0%, #0d1c17 50%, #0f131c 100%);
@@ -140,6 +149,10 @@
   --c-warn-soft: #fffbeb;
   --c-danger: #ef4444;
   --c-danger-soft: #fef2f2;
+
+  /* Spec §"visual language": violet marks agent/AI-touched objects. */
+  --c-agent-violet: #5a45d6;
+  --c-agent-violet-soft: #efecfd;
 
   /* Home hero — themed green panels (adapt per theme so text stays legible) */
   --hero-bg: linear-gradient(150deg, #e9f6ef 0%, #f3faf6 45%, #ffffff 100%);

@@ -7,7 +7,7 @@ prohibits per-feature queue fragmentation, so this table is generic
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Column, DateTime, String, text
+from sqlalchemy import BigInteger, Column, DateTime, Float, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.connect.shared.base import ConnectBase
@@ -39,3 +39,25 @@ class ReviewQueueItem(ConnectBase):
     correlation_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class ReasoningTrace(ConnectBase):
+    """connect_reasoning_traces — structured agent rationale for an
+    agent-originated queue item (spec §5.1/§5.4). See migrations/
+    connect_v3_023_reasoning_traces.sql. Append-only: written once at
+    staging time, never edited after — `ReviewQueueItem.reasoning_trace_ref`
+    points at this table's `id`.
+    """
+    __tablename__ = "connect_reasoning_traces"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(UUID(as_uuid=False), primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    queue_item_id = Column(UUID(as_uuid=False), nullable=False)
+    rationale = Column(String, nullable=True)
+    source_nodes = Column(JSONB, nullable=False, default=list)
+    tool_chain = Column(JSONB, nullable=False, default=list)
+    model = Column(String, nullable=True)
+    confidence = Column(Float, nullable=True)
+    uncertainty_markers = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))

@@ -21,4 +21,5 @@ livekit-api>=0.8.0        # AccessToken + room admin (server-side only)
 httpx>=0.27.0             # provider adapter HTTP calls (Sema Calendar & Mail)
 python-dateutil>=2.9.0    # RFC 5545 RRULE/EXDATE/RDATE expansion (rruleset) — native calendar recurrence
 tzdata>=2024.1            # IANA tz database for zoneinfo; Windows/slim-Linux ship none of their own
+nh3>=0.2.18                # server-side HTML sanitizer (Rust/Ammonia) — mail body rendering, Phase 3 slice 4
 
