@@ -146,7 +146,15 @@ async def draft_reply(db: DbSession, ctx: TenantContext, *, thread_id: str, inst
             action_type=MAIL_DRAFT_PROPOSE_ACTION,
             action_payload=payload,
             policy_verdicts={"autonomy": resolved.level, "dlp_verdict": dlp_verdict.verdict},
-            reasoning_trace_ref=f"ai_draft_reply:{draft.get('_model')}",
+            reasoning_trace={
+                "rationale": f"Drafted a reply on thread {thread_id} per instruction: {instruction[:200]!r}",
+                "source_nodes": [{"node_type": "email", "node_id": thread_id}],
+                "tool_chain": ["core.ai.ai_draft_reply", "mail_service.mail_ai.draft_reply"],
+                "model": draft.get("_model"),
+                "uncertainty_markers": (
+                    ["dlp_warn"] if dlp_verdict.verdict == "warn" else []
+                ),
+            },
             rollback_descriptor="no_rollback",  # acknowledging/staging a draft mutates nothing to roll back
             proposed_by_agent="ai_draft_reply",
             policy_version_id=policy_engine.get_current_version_id(db, ctx, category="mail"),

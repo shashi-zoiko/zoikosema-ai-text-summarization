@@ -76,7 +76,15 @@ async def generate_agenda(
             action_type=CALENDAR_AGENDA_PROPOSE_ACTION,
             action_payload={"version_chain_id": version_chain_id, "agenda_items": agenda["agenda_items"]},
             policy_verdicts={"autonomy": resolved.level},
-            reasoning_trace_ref=f"ai_generate_agenda:{agenda.get('_model')}",
+            reasoning_trace={
+                "rationale": (
+                    f"Generated agenda for '{event.title}' from {len(event.attendees or [])} "
+                    f"attendee(s)" + (" with supplied context notes." if context_notes else ".")
+                ),
+                "source_nodes": [{"node_type": "calendar_event", "node_id": event.version_chain_id}],
+                "tool_chain": ["core.ai.ai_generate_agenda", "calendar_service.ai_workflows.generate_agenda"],
+                "model": agenda.get("_model"),
+            },
             rollback_descriptor="no_rollback",
             proposed_by_agent="ai_generate_agenda",
             policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),
@@ -142,7 +150,18 @@ async def generate_followup_tasks(
             action_type=TASKS_CREATE_ACTION,
             action_payload={"version_chain_id": version_chain_id, "tasks": task_payloads},
             policy_verdicts={"autonomy": resolved.level},
-            reasoning_trace_ref=f"ai_generate_followup_tasks:{generated.get('_model')}",
+            reasoning_trace={
+                "rationale": (
+                    f"Generated {len(task_payloads)} follow-up task(s) for '{event.title}' "
+                    f"from post-meeting context notes."
+                ),
+                "source_nodes": [{"node_type": "calendar_event", "node_id": event.version_chain_id}],
+                "tool_chain": [
+                    "core.ai.ai_generate_followup_tasks",
+                    "calendar_service.ai_workflows.generate_followup_tasks",
+                ],
+                "model": generated.get("_model"),
+            },
             rollback_descriptor="no_rollback",
             proposed_by_agent="ai_generate_followup_tasks",
             policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),

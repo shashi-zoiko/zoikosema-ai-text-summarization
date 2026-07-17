@@ -42,6 +42,48 @@ function VerdictBadge({ label, verdict }) {
   return <Badge tone={tone} size="sm">{label}: {String(verdict)}</Badge>
 }
 
+function ReasoningTracePanel({ itemId }) {
+  const [trace, setTrace] = useState(undefined) // undefined = loading
+
+  useEffect(() => {
+    let cancelled = false
+    api(`/api/connect/action-review/items/${itemId}/reasoning-trace`)
+      .then((t) => { if (!cancelled) setTrace(t) })
+      .catch(() => { if (!cancelled) setTrace(null) })
+    return () => { cancelled = true }
+  }, [itemId])
+
+  if (trace === undefined) return <p className="text-[12px] text-[var(--c-fg-muted)]">Loading reasoning trace…</p>
+  if (!trace) return null
+
+  return (
+    <div className="space-y-1.5 rounded-lg border border-[color-mix(in_srgb,var(--c-agent-violet)_28%,var(--c-line))] bg-[var(--c-agent-violet-soft)] p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-[var(--c-agent-violet)]">Reasoning trace</span>
+        {trace.model && <Badge tone="agent" size="sm">{trace.model}</Badge>}
+      </div>
+      {trace.rationale && <p className="text-[12px] text-[var(--c-fg-dim)]">{trace.rationale}</p>}
+      {trace.redacted && <p className="text-[11.5px] italic text-[var(--c-fg-muted)]">Rationale redacted for your role — ask a workspace admin for full detail.</p>}
+      {!!trace.source_nodes?.length && (
+        <p className="text-[11.5px] text-[var(--c-fg-muted)]">
+          Source: {trace.source_nodes.map((n) => `${n.node_type}:${n.node_id}`).join(', ')}
+        </p>
+      )}
+      {!!trace.tool_chain?.length && (
+        <p className="font-mono text-[11px] text-[var(--c-fg-muted)]">{trace.tool_chain.join(' → ')}</p>
+      )}
+      {trace.confidence != null && (
+        <p className="text-[11.5px] text-[var(--c-fg-muted)]">Confidence: {Math.round(trace.confidence * 100)}%</p>
+      )}
+      {!!trace.uncertainty_markers?.length && (
+        <div className="flex flex-wrap gap-1">
+          {trace.uncertainty_markers.map((m) => <Badge key={m} tone="warn" size="sm">{m}</Badge>)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function QueueItemCard({ item, onTransition, busy }) {
   const [expanded, setExpanded] = useState(false)
   const isPending = item.status === 'pending'
@@ -77,9 +119,7 @@ function QueueItemCard({ item, onTransition, busy }) {
             <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">Proposed action</div>
             <pre className="overflow-x-auto rounded-lg bg-[var(--c-bg-2)] p-3 text-[12px] text-[var(--c-fg-dim)]">{JSON.stringify(item.action_payload, null, 2)}</pre>
           </div>
-          {item.reasoning_trace_ref && (
-            <div className="text-[12px] text-[var(--c-fg-muted)]">Reasoning trace: <span className="font-mono">{item.reasoning_trace_ref}</span></div>
-          )}
+          {item.reasoning_trace_ref && <ReasoningTracePanel itemId={item.id} />}
           {!!Object.keys(item.policy_verdicts || {}).length && (
             <div>
               <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">Policy verdicts</div>
