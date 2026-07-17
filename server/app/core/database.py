@@ -190,6 +190,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # Meet Summarizer room-wide on/off (host/co-host controlled, broadcast to
     # everyone — see signaling.py's "set-summarizer" handler).
     ("meetings", "summarizer_on", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    # Billing plan for AI gateway rate limiting and feature gating
+    ("users", "plan", "VARCHAR(32) DEFAULT 'free' NOT NULL"),
     # Saved "raw conversation log" file URL — the (possibly narrower) slice
     # shown on the summary page, separate from transcript_file_url which
     # always feeds the AI summary itself. See models/meeting.py for why.
