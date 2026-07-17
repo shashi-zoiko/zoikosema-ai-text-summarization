@@ -560,41 +560,48 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     {"type": "peer-left", "peer_id": ghost_info["peer_id"]},
                 )
 
-        await websocket.send_json({
-            "type": "welcome",
-            "self": {
-                "peer_id": peer_id,
-                "user_id": user.id,
-                "name": user.name,
-                "color": user.avatar_color,
-                "is_guest": user.is_guest,
-            },
-            "peers": existing,
-            "is_host": is_host,
-            "role": participant.role,
-            "meeting": {
-                "title": meeting.title,
-                "waiting_room_enabled": meeting.waiting_room_enabled,
-                "locked": meeting.locked,
-                "chat_enabled": meeting.chat_enabled,
-                "screenshare_enabled": meeting.screenshare_enabled,
-                "summarizer_on": meeting.summarizer_on,
-                "theme": meeting.theme or "forest",
-            },
-        })
-
-        # Notify everyone else
-        await meet_manager.broadcast(
-            room,
-            {"type": "peer-joined", "peer": _conn_info[websocket]},
-            exclude=websocket,
-        )
-
-        # If host just joined, send them the waiting list
-        if host_or_cohost:
-            await _send_waiting_list(room, meeting, db)
-
+        # The welcome handshake and the receive loop share one try/finally. The
+        # socket is already registered (meet_manager.join + _conn_info above), and
+        # the welcome send_json below is the FIRST write to the client — so a peer
+        # that drops mid-handshake must still reach the finally cleanup. Left
+        # outside the try, that send raises WebSocketDisconnect uncaught,
+        # meet_manager.leave never runs, and the peer lingers as a ghost (live
+        # room registration + an ADMITTED participant row that never clears).
         try:
+            await websocket.send_json({
+                "type": "welcome",
+                "self": {
+                    "peer_id": peer_id,
+                    "user_id": user.id,
+                    "name": user.name,
+                    "color": user.avatar_color,
+                    "is_guest": user.is_guest,
+                },
+                "peers": existing,
+                "is_host": is_host,
+                "role": participant.role,
+                "meeting": {
+                    "title": meeting.title,
+                    "waiting_room_enabled": meeting.waiting_room_enabled,
+                    "locked": meeting.locked,
+                    "chat_enabled": meeting.chat_enabled,
+                    "screenshare_enabled": meeting.screenshare_enabled,
+                    "summarizer_on": meeting.summarizer_on,
+                    "theme": meeting.theme or "forest",
+                },
+            })
+
+            # Notify everyone else
+            await meet_manager.broadcast(
+                room,
+                {"type": "peer-joined", "peer": _conn_info[websocket]},
+                exclude=websocket,
+            )
+
+            # If host just joined, send them the waiting list
+            if host_or_cohost:
+                await _send_waiting_list(room, meeting, db)
+
             while True:
                 # Release the pooled DB connection back to the pool while we
                 # idle waiting for the next client frame. Without this, every

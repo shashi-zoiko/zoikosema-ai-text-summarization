@@ -731,7 +731,14 @@ async def issue_media_token(
     ).first()
     if not participant:
         raise HTTPException(status_code=403, detail="Call POST /join first")
-    if participant.status != STATUS_ADMITTED:
+    # DISCONNECTED means "was admitted, connection dropped" — a reconnecting
+    # participant is still authorized, and both POST /join and the control-WS
+    # already re-admit it. Refusing it here alone created a reconnect race: a
+    # transient control-WS close (dev StrictMode double-mount, network blip)
+    # marks the row DISCONNECTED, and the client's media-token retry then 403'd
+    # with "status is 'disconnected', not 'admitted'". Only PENDING (waiting
+    # room), DENIED/KICKED (removed), and LEFT (voluntarily gone) are refused.
+    if participant.status not in (STATUS_ADMITTED, STATUS_DISCONNECTED):
         raise HTTPException(
             status_code=403,
             detail=f"Participant status is '{participant.status}', not 'admitted'",
