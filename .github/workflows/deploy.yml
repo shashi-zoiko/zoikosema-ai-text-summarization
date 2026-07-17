@@ -1,10 +1,14 @@
 name: CI/CD Deploy
 
-# Auto-deploy-on-push disabled here: this fork has no GCP_SA_KEY / DATABASE_URL
-# / LIVEKIT_* secrets configured, so every push to main was failing at the
-# auth step. Still runnable manually (Actions tab -> CI/CD Deploy -> Run
-# workflow) once those secrets exist, for whoever actually deploys this.
+# Auto-deploy on push to main, plus manual trigger. This REQUIRES the deploy
+# secrets (GCP_SA_KEY / DATABASE_URL / LIVEKIT_* / etc.) to be configured in the
+# repo — without them every push run fails at the "Authenticate to Google Cloud"
+# step (red X on the commit, prod untouched). Push a branch and open a PR to
+# main; the deploy fires when it merges. Use the manual trigger (Actions tab ->
+# CI/CD Deploy -> Run workflow) to deploy a non-main branch or re-run on demand.
 on:
+  push:
+    branches: [main]
   workflow_dispatch: {}
 
 env:
@@ -130,7 +134,7 @@ jobs:
             MICROSOFT_CALENDAR_TENANT=${{ secrets.MICROSOFT_CALENDAR_TENANT }}
             TOKEN_VAULT_KEY=${{ secrets.TOKEN_VAULT_KEY }}
             REDIS_URL=${{ secrets.REDIS_URL }}
-            DB_POOL_SIZE=15
+            DB_POOL_SIZE=25
             DB_MAX_OVERFLOW=10
           # STEADY-STATE AUTOSCALING. The single-instance pin that used to live
           # here (min=max=1) was a TEMPORARY hold for one large scheduled event,
@@ -145,17 +149,21 @@ jobs:
           # long-lived requests and each holds a concurrency slot for the whole
           # meeting), taking down even the SPA's root document load.
           #
-          # max-instances=5 is bounded by the DB, not the CPU: each instance opens
-          # up to DB_POOL_SIZE + DB_MAX_OVERFLOW (=25, set above) connections to
-          # the Supabase transaction pooler, so 5 x 25 = 125 max — comfortably
-          # under the pooler. Raising max-instances REQUIRES lowering that
-          # per-instance pool in lockstep or the pooler throws EMAXCONN and every
-          # DB route 500s. concurrency=80 keeps a typical meeting's sockets
-          # co-located (less fanout/admission-poll chatter) while still scaling
-          # out under real load. timeout=3600 is the Cloud Run max and MUST stay
-          # high: it bounds WebSocket lifetime, so a low value silently drops
-          # every meeting socket on that interval. Prereq for >1 instance: the
-          # REDIS_URL secret must actually be populated (fanout no-ops if empty).
+          # max-instances=4 is bounded by the DB, not the CPU: each instance opens
+          # up to DB_POOL_SIZE + DB_MAX_OVERFLOW (=35, set above) connections to
+          # the Supabase transaction pooler, so 4 x 35 = 140 max — safe under the
+          # pooler (the old single instance ran fine on ~60). Raising max-instances
+          # REQUIRES lowering that per-instance pool in lockstep or the pooler
+          # throws EMAXCONN and every DB route 500s. 2Gi (not 1Gi) gives each box
+          # headroom for ~80 sockets + uvicorn without GC-thrash or OOM restarts,
+          # which under min-instances=1 would strand every request during the cold
+          # gap. concurrency=80 keeps a typical meeting's sockets co-located (less
+          # fanout/admission-poll chatter) while still scaling out well before the
+          # old single-box saturation that returned "429 Rate exceeded.".
+          # timeout=3600 is the Cloud Run max and MUST stay high: it bounds
+          # WebSocket lifetime, so a low value silently drops every meeting socket
+          # on that interval. Prereq for >1 instance: the REDIS_URL secret must
+          # actually be populated (fanout no-ops if empty).
           # --allow-unauthenticated grants allUsers the Cloud Run Invoker role so
           # the public SPA/API is reachable in a browser. A fresh service (new
           # region) defaults to REQUIRE-auth and returns 403 "client does not have
@@ -165,9 +173,9 @@ jobs:
           flags: |
             --allow-unauthenticated
             --min-instances=1
-            --max-instances=5
+            --max-instances=4
             --cpu=2
-            --memory=1Gi
+            --memory=2Gi
             --concurrency=80
             --timeout=3600
             --cpu-boost
