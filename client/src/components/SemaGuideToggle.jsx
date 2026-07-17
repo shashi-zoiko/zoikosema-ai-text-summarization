@@ -5,67 +5,53 @@ import { useAuth } from '../context/AuthContext'
 import favicon from '../assets/zoikosema-icon.svg'
 import '../features/sema-guide/styles.css'
 
-const floatTransition = {
+const yTransition = {
   y: { duration: 3.2, repeat: Infinity, ease: 'easeInOut' },
-  boxShadow: { duration: 3.2, repeat: Infinity, ease: 'easeInOut' },
-}
-
-const glowTransition = {
-  duration: 2.8,
-  repeat: Infinity,
-  ease: 'easeInOut',
 }
 
 export default function SemaGuideToggle() {
-  const { open, isMinimized, toggle, restore } = useSemaGuide()
+  const { open, isMinimized, toggle, restore, unreadCount } = useSemaGuide()
   const { user, loading } = useAuth()
 
   if (loading || !user) return null
 
   const isOpen = open && !isMinimized
 
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      ;(isMinimized ? restore : toggle)()
+    }
+  }
+
   return (
     <>
       <motion.button
         type="button"
         onClick={isMinimized ? restore : toggle}
-        aria-label="Open Sema Guide"
+        onKeyDown={handleKeyDown}
+        aria-label={isMinimized ? 'Restore Sema Guide' : 'Open Sema Guide'}
         className="sg-launcher fixed bottom-6 right-6 z-40"
         animate={isOpen
           ? { opacity: 0, scale: 0.92, transition: { duration: 0.24, ease: 'easeOut' } }
           : { opacity: 1, scale: 1, transition: { duration: 0.24, ease: 'easeOut', delay: 0.08 } }
         }
         initial={false}
-        whileTap={!isOpen ? { scale: 0.95, transition: { duration: 0.1 } } : undefined}
-        whileHover={!isOpen ? { scale: 1.06, transition: { duration: 0.18 } } : undefined}
       >
         <motion.div
-          className="pointer-events-none absolute inset-0 rounded-[18px]"
-          animate={!isOpen ? { opacity: [0.15, 0.35, 0.15] } : { opacity: 0 }}
-          transition={glowTransition}
-          style={{ boxShadow: '0 0 24px 12px rgba(91,76,230,.18)', willChange: 'opacity' }}
-        />
-
-        <motion.div
-          className="sg-launcher-inner"
+          className={`sg-launcher-inner${!isOpen ? ' sg-launcher-breathe' : ''}`}
           animate={!isOpen
-            ? {
-                y: [0, -4, 0],
-                boxShadow: [
-                  '0 10px 24px rgba(0,0,0,.18)',
-                  '0 18px 36px rgba(91,76,230,.25)',
-                  '0 10px 24px rgba(0,0,0,.18)',
-                ],
-              }
-            : {
-                y: 0,
-                boxShadow: '0 10px 24px rgba(0,0,0,.18)',
-              }
+            ? { y: [0, -4, 0] }
+            : { y: 0 }
           }
-          transition={floatTransition}
-          style={{ willChange: 'transform' }}
+          transition={yTransition}
         >
           <img src={favicon} alt="" width={32} height={32} />
+          {unreadCount > 0 && !isOpen && (
+            <span className="sg-badge" aria-label={`${unreadCount} unread messages`}>
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
         </motion.div>
       </motion.button>
 

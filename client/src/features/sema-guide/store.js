@@ -11,6 +11,7 @@ const WELCOME_ACTIONS_DEFAULTS = [
 export const useSemaGuide = create((set, get) => ({
   open: false,
   isMinimized: false,
+  unreadCount: 0,
   messages: [],
   input: '',
   loading: false,
@@ -33,16 +34,16 @@ export const useSemaGuide = create((set, get) => ({
 
   toggle: () => {
     const nextOpen = !get().open
-    set({ open: nextOpen, isMinimized: false, overflowOpen: false, secondaryView: null })
+    set({ open: nextOpen, isMinimized: false, overflowOpen: false, secondaryView: null, unreadCount: nextOpen ? 0 : get().unreadCount })
     if (nextOpen) get().loadConversation()
   },
   openPanel: () => {
-    set({ open: true })
+    set({ open: true, unreadCount: 0 })
     get().loadConversation()
   },
   closePanel: () => set({ open: false, isMinimized: false, overflowOpen: false, secondaryView: null, privacyData: null, aboutData: null }),
   minimize: () => set({ isMinimized: true }),
-  restore: () => set({ isMinimized: false }),
+  restore: () => set({ isMinimized: false, unreadCount: 0 }),
   setSecondaryView: (view) => set({ secondaryView: view, overflowOpen: false }),
   clearSecondaryView: () => set({ secondaryView: null, privacyData: null, aboutData: null, privacyError: null, aboutError: null }),
 
@@ -219,6 +220,7 @@ export const useSemaGuide = create((set, get) => ({
           },
         ],
         loading: false,
+        unreadCount: s.open && !s.isMinimized ? s.unreadCount : s.unreadCount + 1,
       }))
       get().persistConversation()
     } catch (e) {
