@@ -377,7 +377,7 @@ export default function Home() {
               <StatTile icon={<Users2 />} tone="purple" value={stats?.total_participants ?? 0} label="Participants" sub="Hosted" />
               <StatTile icon={<Activity />} tone="amber" value={stats?.total_recordings ?? 0} label="Recordings" sub="Saved" />
             </div>
-            <button onClick={() => navigate('/dashboard')} className="mt-4 inline-flex items-center gap-1 text-[13px] font-semibold text-[var(--c-brand)] transition hover:gap-1.5">
+            <button onClick={() => navigate('/ai-summaries')} className="mt-4 inline-flex items-center gap-1 text-[13px] font-semibold text-[var(--c-brand)] transition hover:gap-1.5">
               View analytics <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </Panel>

@@ -1,4 +1,5 @@
-"""AI assistant service powered by Anthropic Claude."""
+"""AI assistant service — chat/intelligence powered by Anthropic Claude,
+post-meeting transcript summarization powered by Groq (see bottom of file)."""
 import json
 import logging
 import re
@@ -195,6 +196,37 @@ def ai_suggest_actions(
 
 # ── Structured meeting intelligence ────────────────────────────────────────
 
+# The 3 fixed table types every intelligence/summary payload always carries,
+# in display order. Columns are fixed per type — only `rows` varies per
+# meeting. Unlike the old single-auto-picked-table design, all 3 always show
+# on the summary page's Table view so users can see at a glance which aspects
+# of project management this meeting did/didn't cover.
+_TABLE_DEFS = [
+    ("task_tracker", "Task Tracker", [
+        {"key": "task", "label": "Task"},
+        {"key": "assignee", "label": "Assignee"},
+        {"key": "deadline", "label": "Deadline"},
+    ]),
+    ("resource_allocation", "Resource Allocation", [
+        {"key": "member", "label": "Team Member"},
+        {"key": "hours", "label": "Hours Allocated"},
+        {"key": "cost", "label": "Cost"},
+    ]),
+    ("risk_matrix", "Risk Matrix", [
+        {"key": "risk", "label": "Project Risk"},
+        {"key": "impact", "label": "Impact"},
+        {"key": "solution", "label": "Solution"},
+    ]),
+]
+
+
+def _empty_tables() -> list[dict]:
+    return [
+        {"type": t, "type_label": label, "columns": cols, "rows": []}
+        for t, label, cols in _TABLE_DEFS
+    ]
+
+
 # Schema string is embedded in the prompt so the model knows exactly what
 # JSON shape to produce. Kept in lockstep with `_EMPTY_INTELLIGENCE` so the
 # UI never has to special-case "missing key" vs "empty list".
@@ -235,7 +267,12 @@ _INTELLIGENCE_SCHEMA = """{
   "contradictions": [
     {"summary": "what conflicts", "between": ["statement A", "statement B"]}
   ],
-  "knowledge_nuggets": ["facts/decisions worth saving to the org wiki"]
+  "knowledge_nuggets": ["facts/decisions worth saving to the org wiki"],
+  "tables": [
+    {"type": "task_tracker", "type_label": "Task Tracker", "columns": [{"key": "task", "label": "Task"}, {"key": "assignee", "label": "Assignee"}, {"key": "deadline", "label": "Deadline"}], "rows": [{"task": "string", "assignee": "string", "deadline": "string"}]},
+    {"type": "resource_allocation", "type_label": "Resource Allocation", "columns": [{"key": "member", "label": "Team Member"}, {"key": "hours", "label": "Hours Allocated"}, {"key": "cost", "label": "Cost"}], "rows": []},
+    {"type": "risk_matrix", "type_label": "Risk Matrix", "columns": [{"key": "risk", "label": "Project Risk"}, {"key": "impact", "label": "Impact"}, {"key": "solution", "label": "Solution"}], "rows": [{"risk": "string", "impact": "string", "solution": "string"}]}
+  ]
 }"""
 
 
@@ -260,6 +297,7 @@ def _empty_intelligence() -> dict:
         "follow_ups": {"emails": [], "slack": [], "tasks": []},
         "contradictions": [],
         "knowledge_nuggets": [],
+        "tables": _empty_tables(),
     }
 
 
@@ -313,6 +351,60 @@ def _format_chat_log(chat_log: list[dict], limit: int = 800) -> str:
             continue
         lines.append(f"[{t}] {name}: {body}")
     return "\n".join(lines) if lines else "(no chat activity)"
+
+
+def _auto_table(result: dict):
+    """Ensure `tables` is always exactly the 3 fixed types (task_tracker,
+    resource_allocation, risk_matrix), in order, with fixed columns.
+
+    Backfills any row list the model left out using data it already
+    extracted elsewhere in the SAME response (action_items -> task_tracker,
+    risks -> risk_matrix) — reusing already-grounded fields, never
+    fabricating new content. Resource Allocation has no such source field
+    in the schema, so a missing/empty result for it is left as an empty
+    table (a correct, expected outcome when the meeting never discussed
+    budget/staffing) rather than invented.
+
+    `key_takeaways` (present on the transcript-summary schema, which has no
+    `action_items`/`risks` fields at all) is a second fallback source for
+    task_tracker, used only when action_items didn't already supply rows —
+    the transcript prompt requires every takeaway to carry a real assignee,
+    so a takeaway with both `text` and `assignee` is exactly as grounded as
+    an action item and safe to reuse the same way.
+    """
+    by_type = {}
+    existing = result.get("tables")
+    if isinstance(existing, list):
+        for t in existing:
+            if isinstance(t, dict) and t.get("type"):
+                by_type[t["type"]] = t
+
+    items = result.get("action_items") or []
+    risks = result.get("risks") or []
+    takeaways = result.get("key_takeaways") or []
+    task_tracker_rows = [
+        {"task": i.get("task", ""), "assignee": i.get("owner", ""), "deadline": i.get("due", "")}
+        for i in items if i.get("task")
+    ] or [
+        {"task": t.get("text", ""), "assignee": t.get("assignee", ""), "deadline": ""}
+        for t in takeaways if t.get("text") and t.get("assignee")
+    ]
+    fallback_rows = {
+        "task_tracker": task_tracker_rows,
+        "resource_allocation": [],
+        "risk_matrix": [
+            {"risk": r.get("title", ""), "impact": r.get("severity", ""), "solution": r.get("rationale", "")}
+            for r in risks if r.get("title")
+        ],
+    }
+
+    tables = []
+    for ttype, label, cols in _TABLE_DEFS:
+        found = by_type.get(ttype)
+        rows = found.get("rows") if isinstance(found, dict) and found.get("rows") else fallback_rows[ttype]
+        columns = found.get("columns") if isinstance(found, dict) and found.get("columns") else cols
+        tables.append({"type": ttype, "type_label": label, "columns": columns, "rows": rows})
+    result["tables"] = tables
 
 
 def _call_structured_ai(system: str, user_prompt: str, default_shape: dict, *, max_tokens: int = 1024) -> dict:
@@ -539,16 +631,18 @@ def ai_generate_intelligence(
     meeting_title: str = "Meeting",
     participants: list[dict] | None = None,
     duration_seconds: int | None = None,
+    language: str = "english",
 ) -> dict:
     """Produce a structured meeting-intelligence payload.
 
+    Supports both Anthropic Claude (default) and Groq (when AI_PROVIDER=groq).
     Returns a dict shaped like `_empty_intelligence()`, plus metadata keys
     `_model`, `_input_tokens`, `_output_tokens`, `_latency_ms`, `_error`.
 
     Failure modes are surfaced via `_error`; callers should still persist the
     row so the UI can show "generation failed — retry".
     """
-    client = _get_client()
+    client = _get_ai_client()
     started = time.monotonic()
     result: dict = _empty_intelligence()
     meta = {
@@ -560,7 +654,7 @@ def ai_generate_intelligence(
     }
 
     if not client:
-        meta["_error"] = "Anthropic API key not configured."
+        meta["_error"] = "AI API key not configured. Set ANTHROPIC_API_KEY (Claude) or AI_API_KEY (Groq)."
         result.update(meta)
         return result
 
@@ -594,7 +688,37 @@ def ai_generate_intelligence(
         "  Never invent names that don't appear in the chat log.\n"
         "- Score fields are 0-100 integers; calibrate honestly.\n"
         "- Sentiment must be grounded in actual language — don't sugarcoat.\n"
-        "- tldr should read like a McKinsey one-liner: what was decided, why it matters."
+        "- tldr should read like a McKinsey one-liner: what was decided, why it matters.\n"
+        "- You MUST include \"tables\" in EVERY response: an array of EXACTLY 3 "
+        "objects, always in this order, each with these FIXED columns (never "
+        "rename, add, or remove columns):\n"
+        "  1. task_tracker — columns: Task, Assignee, Deadline. Best for project tracking.\n"
+        "  2. resource_allocation — columns: Team Member, Hours Allocated, Cost. Best for managers.\n"
+        "  3. risk_matrix — columns: Project Risk, Impact, Solution. Best for stakeholders.\n"
+        "- Populate each table's rows ONLY from things actually said in the chat log:\n"
+        "  • task_tracker rows come from real action items with real owners/deadlines.\n"
+        "  • resource_allocation rows require real names WITH real hours/cost/effort "
+        "actually discussed — if the meeting never covered budget or staffing hours, "
+        "leave its rows as an empty array. Do not estimate or invent numbers.\n"
+        "  • risk_matrix rows come from real risks or concerns actually raised.\n"
+        "- An empty rows array for a table is CORRECT and EXPECTED when the "
+        "meeting didn't cover that topic — never fabricate rows just to fill a table.\n"
+        "- Output ALL text fields (tldr, topics, decisions, action_items, risks, "
+        "speakers, sentiment, follow_ups, contradictions, knowledge_nuggets, "
+        "table labels and cell values) in the language specified. "
+        "Preserve participant names and proper nouns as-is — only translate "
+        "the analysis text itself.\n"
+        "- Use the CORRECT script for the target language: for Chinese use "
+        "Simplified Chinese characters (Hanzi), for Japanese use proper mix of "
+        "Kanji, Hiragana and Katakana, for Arabic and Hebrew use their native "
+        "right-to-left script, for Korean use Hangul, for Thai use Thai script, "
+        "for Greek use Greek alphabet, for Russian/Ukrainian use Cyrillic.\n"
+        f"- Language: {language}. ALL output text must be in {language}. "
+        "If the language requested is 'chinese', output in Simplified Chinese. "
+        "If 'japanese', output in Japanese (Kanji + Kana). "
+        "Do NOT fall back to English. If you cannot fluently produce text in "
+        "the requested language, output a clear statement in that language "
+        "saying you cannot comply."
     )
 
     user_prompt = (
@@ -606,30 +730,244 @@ def ai_generate_intelligence(
         "Return the JSON object now."
     )
 
+    is_groq = settings.ai_provider == "groq"
+
     try:
-        response = client.messages.create(
-            model=settings.ai_model,
-            max_tokens=4096,
-            system=system,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        meta["_model"] = settings.ai_model
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            meta["_input_tokens"] = getattr(usage, "input_tokens", None)
-            meta["_output_tokens"] = getattr(usage, "output_tokens", None)
-        text = response.content[0].text if response.content else ""
+        if is_groq:
+            response = client.chat.completions.create(
+                model=settings.ai_model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=4096,
+                response_format={"type": "json_object"},
+            )
+            meta["_model"] = settings.ai_model
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                meta["_input_tokens"] = getattr(usage, "prompt_tokens", None)
+                meta["_output_tokens"] = getattr(usage, "completion_tokens", None)
+            text = response.choices[0].message.content if response.choices else ""
+        else:
+            response = client.messages.create(
+                model=settings.ai_model,
+                max_tokens=4096,
+                system=system,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            meta["_model"] = settings.ai_model
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                meta["_input_tokens"] = getattr(usage, "input_tokens", None)
+                meta["_output_tokens"] = getattr(usage, "output_tokens", None)
+            text = response.content[0].text if response.content else ""
+
         parsed = _extract_json(text)
         if parsed is None:
             meta["_error"] = "Model did not return parseable JSON."
         else:
-            # Merge so any missing keys fall back to defaults.
             base = _empty_intelligence()
             for k, v in parsed.items():
                 base[k] = v
+            _auto_table(base)
             result = base
     except Exception as e:
         log.exception("ai_generate_intelligence failed")
+        meta["_error"] = f"AI request failed: {e}"
+
+    meta["_latency_ms"] = int((time.monotonic() - started) * 1000)
+    result.update(meta)
+    return result
+
+
+# ── Post-meeting transcript summarizer (Groq) ───────────────────────────────
+# Separate vendor from the Anthropic-based functions above, used specifically
+# for turning the in-meeting SPOKEN transcript (captured client-side via the
+# caption pipeline, never the text chat log) into a short recap once a
+# meeting ends. Kept in this module rather than a new file since it's the
+# same "lazy client + prompt + JSON-parse" shape as ai_generate_intelligence.
+
+def _groq_api_key(settings) -> str:
+    """Generic AI_API_KEY (when AI_PROVIDER=groq) wins, since that's the name
+    the deploy env actually sets; GROQ_API_KEY is the vendor-specific
+    fallback for anyone who configures it that way instead."""
+    if settings.ai_provider == "groq" and settings.ai_api_key:
+        return settings.ai_api_key
+    return settings.groq_api_key
+
+
+def _groq_model(settings) -> str:
+    """Same precedence as _groq_api_key: generic AI_MODEL wins when
+    AI_PROVIDER=groq, else the GROQ_MODEL default."""
+    if settings.ai_provider == "groq" and settings.ai_model:
+        return settings.ai_model
+    return settings.groq_model
+
+
+def _get_groq_client():
+    """Lazy-import groq to avoid startup crash if not installed."""
+    try:
+        import groq
+        settings = get_settings()
+        key = _groq_api_key(settings)
+        if not key:
+            return None
+        return groq.Groq(api_key=key)
+    except ImportError:
+        log.warning("groq package not installed — transcript summarizer disabled")
+        return None
+
+
+def _get_ai_client():
+    """Return the appropriate AI client based on ai_provider setting.
+    
+    Supports both Anthropic Claude (default) and Groq (when AI_PROVIDER=groq).
+    Returns None if the provider's API key is not configured.
+    """
+    settings = get_settings()
+    if settings.ai_provider == "groq":
+        return _get_groq_client()
+    return _get_client()
+
+
+def _empty_transcript_summary() -> dict:
+    """Default-shaped transcript summary. Returned when there's nothing
+    meaningful to summarize so the UI can always render the same structure."""
+    return {
+        "title": "", "summary": "", "key_takeaways": [],
+        "tables": _empty_tables(),
+    }
+
+
+def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meeting", language: str = "english") -> dict:
+    """Summarize a spoken-conversation transcript into {title, summary,
+    key_takeaways} using Groq.
+
+    `transcript` is the same {time, name, body}-shaped list `_format_chat_log`
+    already reads (with timestamp/sender/user/text/content fallback keys) —
+    the client builds it from the accumulated caption transcript, not chat.
+
+    Returns a dict shaped like `_empty_transcript_summary()`, plus metadata
+    keys `_model`, `_input_tokens`, `_output_tokens`, `_latency_ms`, `_error`
+    — mirrors `ai_generate_intelligence`'s error-surfacing convention so
+    callers/UI handle both the same way.
+    """
+    client = _get_groq_client()
+    started = time.monotonic()
+    result = _empty_transcript_summary()
+    meta = {
+        "_model": None,
+        "_input_tokens": None,
+        "_output_tokens": None,
+        "_latency_ms": None,
+        "_error": None,
+    }
+
+    if not client:
+        meta["_error"] = "Groq API key not configured."
+        result.update(meta)
+        return result
+
+    if not transcript:
+        meta["_error"] = "No transcript content available to summarize."
+        meta["_latency_ms"] = int((time.monotonic() - started) * 1000)
+        result.update(meta)
+        return result
+
+    settings = get_settings()
+    convo = _format_chat_log(transcript)
+
+    system = (
+        "You are ZoikoSema's post-meeting summarizer. Read a meeting's spoken "
+        "conversation transcript and produce a concise recap in pure JSON.\n\n"
+        "Rules:\n"
+        "- Output JSON ONLY. No prose before or after. No markdown code fences.\n"
+        '- Schema: {"title": string, "summary": string, "key_takeaways": '
+        '[{"assignee": string|null, "text": string}], '
+        '"tables": [{"type": string, "type_label": string, '
+        '"columns": [{"key": string, "label": string}], "rows": [dict]}]}\n'
+        '- "title" is a short (under ~8 words) headline for what this meeting '
+        "was about.\n"
+        '- "summary" is 2-4 sentences covering what was discussed and decided.\n'
+        '- "key_takeaways" must capture contributions FROM EVERY SPEAKER '
+        "mentioned in the transcript. Every single takeaway MUST include an "
+        '"assignee" — set it to the speaker who raised or owns that point '
+        "(exactly as their name appears in the transcript). Never use null "
+        "for assignee; assign every takeaway to a specific person.\n"
+        "- IMPORTANT: Identify ALL participants mentioned in the conversation "
+        "and ensure each one appears in at least one key takeaway if they "
+        "contributed substantively. Do not omit any speaker.\n"
+        "- Never invent names, tasks, or decisions that don't appear in the "
+        "transcript. If nothing substantive was discussed, say so plainly in "
+        '"summary" and return an empty "key_takeaways" array.\n'
+        "- You MUST include \"tables\" in EVERY response: an array of EXACTLY 3 "
+        "objects, always in this order, each with these FIXED columns (never "
+        "rename, add, or remove columns):\n"
+        "  1. task_tracker — columns: Task, Assignee, Deadline. Best for project tracking.\n"
+        "  2. resource_allocation — columns: Team Member, Hours Allocated, Cost. Best for managers.\n"
+        "  3. risk_matrix — columns: Project Risk, Impact, Solution. Best for stakeholders.\n"
+        "- Populate each table's rows ONLY from things actually said in the transcript:\n"
+        "  • task_tracker rows come from real action items with real owners/deadlines.\n"
+        "  • resource_allocation rows require real names WITH real hours/cost/effort "
+        "actually discussed — if the conversation never covered budget or staffing "
+        "hours, leave its rows as an empty array. Do not estimate or invent numbers.\n"
+        "  • risk_matrix rows come from real risks or concerns actually raised.\n"
+        "- An empty rows array for a table is CORRECT and EXPECTED when the "
+        "conversation didn't cover that topic — never fabricate rows just to fill a table.\n"
+        f"- Language: {language}. ALL output text (title, summary, key_takeaways "
+        "text, table labels and cell values) must be in {language}. "
+        "Preserve participant names and proper nouns as-is — only translate "
+        "the analysis content.\n"
+        "- Use the CORRECT script: for Chinese use Simplified Chinese characters "
+        "(Hanzi), for Japanese use Kanji+Hiragana+Katakana, for Korean use Hangul, "
+        "for Arabic/Hebrew use native right-to-left script, for Thai use Thai script, "
+        "for Greek use Greek alphabet, for Cyrillic languages use Cyrillic.\n"
+        "If the language requested is 'chinese', output in Simplified Chinese. "
+        "If 'japanese', output in Japanese (Kanji + Kana). "
+        "Do NOT fall back to English. If you cannot produce text in the requested "
+        "language, output a clear statement in that language saying so."
+    )
+    user_prompt = (
+        f"Meeting title: {meeting_title}\n\n"
+        f"Transcript (oldest first):\n{convo}\n\n"
+        "Return the JSON object now."
+    )
+
+    model = _groq_model(settings)
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_prompt},
+            ],
+            # 1024 was tight enough that a meeting with several speakers (each
+            # requiring an assignee-tagged key takeaway) could burn the whole
+            # budget before ever reaching the tables section, leaving
+            # task_tracker/risk_matrix empty even when the transcript had
+            # clearly actionable content. 2048 gives both room to complete.
+            max_tokens=2048,
+            response_format={"type": "json_object"},
+        )
+        meta["_model"] = model
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            meta["_input_tokens"] = getattr(usage, "prompt_tokens", None)
+            meta["_output_tokens"] = getattr(usage, "completion_tokens", None)
+        text = response.choices[0].message.content if response.choices else ""
+        parsed = _extract_json(text)
+        if parsed is None:
+            meta["_error"] = "Model did not return parseable JSON."
+        else:
+            base = _empty_transcript_summary()
+            for k in base:
+                if k in parsed:
+                    base[k] = parsed[k]
+            _auto_table(base)
+            result = base
+    except Exception as e:
+        log.exception("groq_summarize_transcript failed")
         meta["_error"] = f"AI request failed: {e}"
 
     meta["_latency_ms"] = int((time.monotonic() - started) * 1000)

@@ -1,7 +1,8 @@
 import logging
+import time
 
 from sqlalchemy import bindparam, create_engine, inspect, text
-from sqlalchemy.exc import ArgumentError
+from sqlalchemy.exc import ArgumentError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 
 from app.core.config import get_settings
@@ -185,6 +186,17 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("meeting_invites", "reminder_sent", "BOOLEAN DEFAULT FALSE NOT NULL"),
     # Host-cancelled scheduled meetings (drives the "cancelled" status).
     ("meetings", "cancelled_at", "TIMESTAMP WITH TIME ZONE"),
+    # Saved transcript file URL for transcript-based intelligence regeneration.
+    ("meeting_intelligence", "transcript_file_url", "VARCHAR(500)"),
+    # Meet Summarizer room-wide on/off (host/co-host controlled, broadcast to
+    # everyone — see signaling.py's "set-summarizer" handler).
+    ("meetings", "summarizer_on", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    # Billing plan for AI gateway rate limiting and feature gating
+    ("users", "plan", "VARCHAR(32) DEFAULT 'free' NOT NULL"),
+    # Saved "raw conversation log" file URL — the (possibly narrower) slice
+    # shown on the summary page, separate from transcript_file_url which
+    # always feeds the AI summary itself. See models/meeting.py for why.
+    ("meeting_intelligence", "raw_conversation_file_url", "VARCHAR(500)"),
 ]
 
 # (table, column) pairs whose NOT NULL constraint must be dropped so guest rows
@@ -195,70 +207,115 @@ _DROP_NOT_NULL: list[tuple[str, str]] = [
     ("users", "password_hash"),
 ]
 
+# A migration ALTER on a hot table (e.g. users) needs a brief ACCESS EXCLUSIVE
+# lock. Under live login traffic that lock starves: a queued ALTER blocks all
+# reads on the table until it hits the server statement_timeout, is cancelled
+# with the column never added, and every `SELECT users.*` then 500s on the
+# missing column. Bounding the lock wait (lock_timeout) keeps that read-blocking
+# window tiny and lets us retry into a gap between requests.
+_MIGRATION_MAX_ATTEMPTS = 5
+_MIGRATION_RETRY_DELAY = 1.0  # seconds, scaled by attempt for light backoff
+
+
+def _run_migration_ddl(sql: str, *, label: str, lock_bound: bool = True) -> bool:
+    """Execute one DDL statement in its OWN transaction, bounding the lock wait
+    so a starved lock fails fast and is retried rather than queuing behind live
+    traffic. Never raises — a migration that can't apply must not take startup
+    (and every login) down. Returns True on success."""
+    is_pg = engine.dialect.name == "postgresql"
+    for attempt in range(1, _MIGRATION_MAX_ATTEMPTS + 1):
+        try:
+            with engine.begin() as conn:
+                if is_pg and lock_bound:
+                    conn.execute(text("SET LOCAL lock_timeout = '3s'"))
+                    conn.execute(text("SET LOCAL statement_timeout = '15s'"))
+                conn.execute(text(sql))
+            return True
+        except OperationalError:
+            if attempt == _MIGRATION_MAX_ATTEMPTS:
+                log.exception(
+                    "migration DDL could not acquire lock after %s attempts (%s); "
+                    "queries that reference it will fail until it lands",
+                    _MIGRATION_MAX_ATTEMPTS, label,
+                )
+                return False
+            time.sleep(_MIGRATION_RETRY_DELAY * attempt)
+        except Exception:
+            log.exception("migration DDL failed (%s)", label)
+            return False
+    return False
+
 
 def _apply_additive_migrations() -> None:
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())
-    with engine.begin() as conn:
-        for table, column, pg_ddl in _ADDITIVE_COLUMNS:
-            if table not in existing_tables:
-                continue
-            cols = {c["name"] for c in insp.get_columns(table)}
-            if column in cols:
-                continue
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {pg_ddl}"))
-        # Relax NOT NULL on columns that guest rows leave empty. Only meaningful
-        # on Postgres; SQLite (test/in-memory) ignores DROP NOT NULL but also
-        # never enforced it via this path, so guard on the dialect.
-        if engine.dialect.name == "postgresql":
-            for table, column in _DROP_NOT_NULL:
-                if table not in existing_tables:
-                    continue
-                nullable = {c["name"]: c["nullable"] for c in insp.get_columns(table)}
-                if column in nullable and not nullable[column]:
-                    conn.execute(
-                        text(f"ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL")
-                    )
-        # Deduplicate meeting_participants, then enforce UNIQUE(meeting_id,
-        # user_id). Without the constraint, concurrent first-joins silently
-        # inserted duplicate rows and the IntegrityError recovery in join_meeting
-        # could never fire. Keep the highest id per pair — the row every read
-        # already treats as canonical (all use `order_by(id desc).first()`) — and
-        # drop the rest. Idempotent: the DELETE no-ops once deduped and the index
-        # uses IF NOT EXISTS. Postgres only (SQLite test DBs get it via create_all).
-        if "meeting_participants" in existing_tables and engine.dialect.name == "postgresql":
-            deduped = conn.execute(text(
-                "DELETE FROM meeting_participants a "
-                "USING meeting_participants b "
-                "WHERE a.meeting_id = b.meeting_id AND a.user_id = b.user_id "
-                "AND a.id < b.id"
-            ))
-            if deduped.rowcount:
-                log.warning(
-                    "deduped %s duplicate meeting_participants row(s) before adding "
-                    "UNIQUE(meeting_id, user_id)", deduped.rowcount,
-                )
-            try:
-                conn.execute(text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_meeting_participants_meeting_user "
-                    "ON meeting_participants (meeting_id, user_id)"
-                ))
-            except Exception:
-                log.exception("unique meeting_participants index could not be created")
+    is_pg = engine.dialect.name == "postgresql"
 
-        # Indexes ship after columns because some of them reference columns we
-        # may have just added (e.g. messages.deleted_at). All DDL uses
-        # `CREATE INDEX IF NOT EXISTS` so re-runs are no-ops.
-        for _index_name, table, ddl in _ADDITIVE_INDEXES:
+    # Each column add gets its own short, lock-bounded transaction. Sharing one
+    # transaction meant a single slow/failed ALTER (e.g. users.plan starving for
+    # its lock) rolled back the whole batch AND propagated out of init_db — the
+    # column never landed and every login 500'd on the missing column.
+    for table, column, pg_ddl in _ADDITIVE_COLUMNS:
+        if table not in existing_tables:
+            continue
+        if column in {c["name"] for c in insp.get_columns(table)}:
+            continue
+        _run_migration_ddl(
+            f"ALTER TABLE {table} ADD COLUMN {column} {pg_ddl}",
+            label=f"add {table}.{column}",
+        )
+
+    # Relax NOT NULL on columns that guest rows leave empty. Only meaningful on
+    # Postgres; SQLite (test/in-memory) ignores DROP NOT NULL but also never
+    # enforced it via this path, so guard on the dialect.
+    if is_pg:
+        for table, column in _DROP_NOT_NULL:
             if table not in existing_tables:
                 continue
-            try:
-                conn.execute(text(ddl))
-            except Exception:
-                # An existing same-named index with a different definition
-                # would error here; we log via the calling startup handler
-                # and continue so a single bad index can't take the app down.
-                log.exception("additive index failed: %s", _index_name)
+            nullable = {c["name"]: c["nullable"] for c in insp.get_columns(table)}
+            if column in nullable and not nullable[column]:
+                _run_migration_ddl(
+                    f"ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL",
+                    label=f"drop not null {table}.{column}",
+                )
+
+    # Deduplicate meeting_participants, then enforce UNIQUE(meeting_id,
+    # user_id). Without the constraint, concurrent first-joins silently
+    # inserted duplicate rows and the IntegrityError recovery in join_meeting
+    # could never fire. Keep the highest id per pair — the row every read
+    # already treats as canonical (all use `order_by(id desc).first()`) — and
+    # drop the rest. Idempotent: the DELETE no-ops once deduped and the index
+    # uses IF NOT EXISTS. Postgres only (SQLite test DBs get it via create_all).
+    if "meeting_participants" in existing_tables and is_pg:
+        try:
+            with engine.begin() as conn:
+                deduped = conn.execute(text(
+                    "DELETE FROM meeting_participants a "
+                    "USING meeting_participants b "
+                    "WHERE a.meeting_id = b.meeting_id AND a.user_id = b.user_id "
+                    "AND a.id < b.id"
+                ))
+                if deduped.rowcount:
+                    log.warning(
+                        "deduped %s duplicate meeting_participants row(s) before adding "
+                        "UNIQUE(meeting_id, user_id)", deduped.rowcount,
+                    )
+        except Exception:
+            log.exception("meeting_participants dedup failed")
+        _run_migration_ddl(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_meeting_participants_meeting_user "
+            "ON meeting_participants (meeting_id, user_id)",
+            label="unique meeting_participants index",
+        )
+
+    # Indexes ship after columns because some of them reference columns we may
+    # have just added (e.g. messages.deleted_at). All DDL uses `CREATE INDEX IF
+    # NOT EXISTS` so re-runs are no-ops. Each runs in its own transaction so one
+    # bad index can't abort (Postgres) the transaction the others share.
+    for _index_name, table, ddl in _ADDITIVE_INDEXES:
+        if table not in existing_tables:
+            continue
+        _run_migration_ddl(ddl, label=f"additive index {_index_name}")
 
 
 def _sync_admin_flags() -> None:
