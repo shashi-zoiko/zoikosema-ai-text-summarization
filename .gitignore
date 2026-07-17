@@ -87,3 +87,5 @@ CLAUDE.local.md
 
 # Local planning docs (dev-machine-local, never pushed)
 plans/
+# Local status/progress reports (dev-machine-local, never pushed)
+status/
