@@ -130,21 +130,32 @@ jobs:
             MICROSOFT_CALENDAR_TENANT=${{ secrets.MICROSOFT_CALENDAR_TENANT }}
             TOKEN_VAULT_KEY=${{ secrets.TOKEN_VAULT_KEY }}
             REDIS_URL=${{ secrets.REDIS_URL }}
-          # SINGLE INSTANCE (min=max=1) is REQUIRED, not just for cold starts:
-          # the meeting signaling manager (app/websocket/manager.py) keeps room
-          # membership in PROCESS memory with no Redis fanout, so every socket
-          # of one meeting must live on the SAME instance. With autoscaling,
-          # Cloud Run would split a 50-100 person meeting across instances and
-          # peers on different boxes would never receive each other's
-          # peer-joined / chat / media-state events. Pinning to one instance
-          # keeps the whole meeting coherent. concurrency=200 lets that one
-          # instance hold a full large meeting — each WebSocket is one
-          # long-lived request, so concurrency must exceed peak participants
-          # (was 40, which capped a single instance at ~40 sockets and forced
-          # a split). 2 CPU + 2Gi comfortably runs uvicorn + WS fanout for
-          # ~100 mostly-idle sockets. When you need MULTIPLE concurrent large
-          # meetings beyond one box, wire meeting fanout through the Redis the
-          # connect module already provisions, then raise max-instances again.
+            DB_POOL_SIZE=15
+            DB_MAX_OVERFLOW=10
+          # STEADY-STATE AUTOSCALING. The single-instance pin that used to live
+          # here (min=max=1) was a TEMPORARY hold for one large scheduled event,
+          # needed back when the signaling manager kept room membership in PROCESS
+          # memory with no fanout — a meeting split across instances would drop
+          # peer-joined / chat / media-state events. That constraint is GONE:
+          # app/websocket/manager.py now publishes every broadcast over Redis and
+          # each instance re-delivers to its local sockets (REDIS_URL is set
+          # above), so a meeting spanning instances stays coherent. Pinning to 1
+          # instead caused Cloud Run to reject requests it could not queue with
+          # "429 Rate exceeded." once the single box saturated (WebSockets are
+          # long-lived requests and each holds a concurrency slot for the whole
+          # meeting), taking down even the SPA's root document load.
+          #
+          # max-instances=5 is bounded by the DB, not the CPU: each instance opens
+          # up to DB_POOL_SIZE + DB_MAX_OVERFLOW (=25, set above) connections to
+          # the Supabase transaction pooler, so 5 x 25 = 125 max — comfortably
+          # under the pooler. Raising max-instances REQUIRES lowering that
+          # per-instance pool in lockstep or the pooler throws EMAXCONN and every
+          # DB route 500s. concurrency=80 keeps a typical meeting's sockets
+          # co-located (less fanout/admission-poll chatter) while still scaling
+          # out under real load. timeout=3600 is the Cloud Run max and MUST stay
+          # high: it bounds WebSocket lifetime, so a low value silently drops
+          # every meeting socket on that interval. Prereq for >1 instance: the
+          # REDIS_URL secret must actually be populated (fanout no-ops if empty).
           # --allow-unauthenticated grants allUsers the Cloud Run Invoker role so
           # the public SPA/API is reachable in a browser. A fresh service (new
           # region) defaults to REQUIRE-auth and returns 403 "client does not have
@@ -154,9 +165,9 @@ jobs:
           flags: |
             --allow-unauthenticated
             --min-instances=1
-            --max-instances=1
+            --max-instances=5
             --cpu=2
-            --memory=2Gi
-            --concurrency=200
+            --memory=1Gi
+            --concurrency=80
             --timeout=3600
             --cpu-boost
