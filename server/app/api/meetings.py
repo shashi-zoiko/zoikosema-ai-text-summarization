@@ -8,6 +8,7 @@ import logging
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -586,7 +587,10 @@ async def cancel_meeting(
 
     scheduled_str = None
     if meeting.scheduled_at:
-        scheduled_str = meeting.scheduled_at.strftime("%b %d, %Y at %I:%M %p")
+        local_scheduled_at = meeting.scheduled_at
+        if meeting.timezone_name:
+            local_scheduled_at = local_scheduled_at.astimezone(ZoneInfo(meeting.timezone_name))
+        scheduled_str = local_scheduled_at.strftime("%b %d, %Y at %I:%M %p")
         if meeting.timezone_name:
             scheduled_str += f" ({meeting.timezone_name})"
 
@@ -710,21 +714,6 @@ async def issue_media_token(
     Lazy-provisions the LiveKit room on first call.
     """
     settings = get_settings()
-    if settings.media_provider.lower() != "livekit":
-        # The lobby falls back to the mesh room when this 503s and the
-        # meeting's media_provider is not 'livekit'; this only fires when
-        # someone deep-links /room-lk on a deployment that hasn't enabled
-        # the SFU yet. Keep the detail actionable so the failure mode
-        # surfaces in admin/support tickets instead of a generic 500.
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "LiveKit is not enabled in this environment. "
-                "Set MEDIA_PROVIDER=livekit + LIVEKIT_* credentials on the "
-                "server (see infra/livekit/README.md) to enable the SFU room."
-            ),
-        )
-
     meeting = _get_meeting_or_404(code, db)
     if not meeting.is_active:
         raise HTTPException(status_code=410, detail="Meeting has ended")
@@ -742,7 +731,14 @@ async def issue_media_token(
     ).first()
     if not participant:
         raise HTTPException(status_code=403, detail="Call POST /join first")
-    if participant.status != STATUS_ADMITTED:
+    # DISCONNECTED means "was admitted, connection dropped" — a reconnecting
+    # participant is still authorized, and both POST /join and the control-WS
+    # already re-admit it. Refusing it here alone created a reconnect race: a
+    # transient control-WS close (dev StrictMode double-mount, network blip)
+    # marks the row DISCONNECTED, and the client's media-token retry then 403'd
+    # with "status is 'disconnected', not 'admitted'". Only PENDING (waiting
+    # room), DENIED/KICKED (removed), and LEFT (voluntarily gone) are refused.
+    if participant.status not in (STATUS_ADMITTED, STATUS_DISCONNECTED):
         raise HTTPException(
             status_code=403,
             detail=f"Participant status is '{participant.status}', not 'admitted'",

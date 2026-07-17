@@ -367,3 +367,61 @@ def activity_feed(
 
     events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
     return events[:limit]
+
+
+# ── Sema Guide admin policy ────────────────────────────────────────────────
+
+_GUIDE_POLICY = {
+    "ai_enabled": True,
+    "quick_actions_enabled": True,
+    "human_handoff_enabled": True,
+    "confidential_mode_enabled": True,
+    "max_actions": 6,
+    "allowed_intents": ["getting_started", "schedule", "join", "recordings", "billing", "invite", "help_center", "diagnose", "status", "admin", "security"],
+    "rate_limit_per_minute": 60,
+    "cost_ceiling_tokens": 4096,
+    "model": "claude-sonnet-4-20250514",
+    "training_opt_out": True,
+    "retention_days": 90,
+}
+
+
+@router.get("/sema-guide/policy")
+def get_guide_policy(
+    user: User = Depends(get_current_user),
+):
+    _require_admin(user)
+    return _GUIDE_POLICY
+
+
+@router.put("/sema-guide/policy")
+def update_guide_policy(
+    data: dict,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_admin(user)
+    allowed_keys = {"ai_enabled", "quick_actions_enabled", "human_handoff_enabled",
+                    "confidential_mode_enabled", "max_actions", "allowed_intents",
+                    "rate_limit_per_minute", "cost_ceiling_tokens", "model",
+                    "training_opt_out", "retention_days"}
+    for k, v in data.items():
+        if k in allowed_keys:
+            _GUIDE_POLICY[k] = v
+    return _GUIDE_POLICY
+
+
+@router.get("/sema-guide/stats")
+def get_guide_stats(
+    user: User = Depends(get_current_user),
+):
+    _require_admin(user)
+    return {
+        "total_conversations": 0,
+        "conversations_today": 0,
+        "handoffs_initiated": 0,
+        "handoffs_completed": 0,
+        "avg_response_time_ms": 0,
+        "top_intents": [],
+        "ai_enabled": _GUIDE_POLICY["ai_enabled"],
+    }

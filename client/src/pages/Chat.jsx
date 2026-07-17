@@ -629,13 +629,7 @@ export default function Chat() {
     return () => clearInterval(t)
   }, [])
 
-  // Auto-grow composer
-  useEffect(() => {
-    const el = composerRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px'
-  }, [draft])
+  // Auto-grow composer — disabled. Fixed height keeps the layout stable.
 
   // POST the message and reconcile the optimistic bubble with the persisted
   // row. Sending is REST-only on purpose: a flaky/closed WebSocket can never
@@ -1456,7 +1450,7 @@ export default function Chat() {
                 rows={1}
                 disabled={isRecording}
                 className="!min-h-[46px] !resize-none !rounded-[14px] !border-line-strong !bg-bg-1 !px-3.5 !py-3 !text-[14.5px] !leading-[1.55] !shadow-[0_1px_2px_color-mix(in_srgb,var(--c-fg)_4%,transparent)] focus:!border-accent focus:!bg-surface-2 focus:!shadow-[0_0_0_3px_var(--c-accent-ring)]"
-                style={{ maxHeight: 180 }}
+                style={{ overflowY: 'auto' }}
               />
 
               <button

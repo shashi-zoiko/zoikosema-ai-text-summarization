@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
-import { useDataChannel } from '@livekit/components-react'
+import { useDataChannel, useRoomContext } from '@livekit/components-react'
+import { ConnectionState } from 'livekit-client'
 import { CAPTION_CONFIG } from './config'
 import { useMeetingCrypto } from '../e2ee/MeetingCryptoProvider.jsx'
 import { resolveIdentity, identityFromParts } from './captionIdentity'
@@ -34,6 +35,7 @@ const decoder = new TextDecoder()
  */
 export default function useCaptionTransport({ onCaption } = {}) {
   const { encrypt, decrypt } = useMeetingCrypto()
+  const room = useRoomContext()
 
   const { send } = useDataChannel(CAPTION_CONFIG.topic, (msg) => {
     if (!onCaption) return
@@ -75,9 +77,18 @@ export default function useCaptionTransport({ onCaption } = {}) {
 
   const publish = useCallback(
     async (payload) => {
+      // CRITICAL: never call publishData before the room is fully Connected.
+      // LiveKit caches the publisher-connection promise on the FIRST
+      // publishData; if that first call happens before the engine's pcManager is
+      // ready, it caches a REJECTED promise ("PC manager is closed") that is
+      // cleared only on publisher close/disconnect/fail — NEVER on connect. So a
+      // single premature publish poisons every later caption send for the whole
+      // session. Waiting for Connected guarantees the first publish caches a
+      // resolved promise.
+      if (room?.state !== ConnectionState.Connected) return
       try {
         const c = await encrypt(payload.text)
-        send(
+        await send(
           encoder.encode(
             JSON.stringify({
               c,
@@ -94,11 +105,11 @@ export default function useCaptionTransport({ onCaption } = {}) {
           },
         )
       } catch {
-        // Not connected yet (or send raced a reconnect). Dropping is fine — the
+        // Transport not ready (or send raced a reconnect). Dropping is fine — the
         // next interim/final frame carries the latest text anyway.
       }
     },
-    [send, encrypt],
+    [send, encrypt, room],
   )
 
   return { publish }

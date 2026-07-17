@@ -189,3 +189,4 @@ if (!gotLock) {
     if (process.platform !== 'darwin') app.quit()
   })
 }
+ 
