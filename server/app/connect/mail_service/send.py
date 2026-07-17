@@ -45,30 +45,42 @@ from app.connect.shared.ids import uuid7_str
 from app.connect.shared.telemetry import get_correlation_id
 from app.connect.shared.tenant import TenantContext
 
-DEFAULT_BUFFER_MINUTES = 5
-MIN_BUFFER_MINUTES = 0
-MAX_BUFFER_MINUTES = 30
+# Fallback defaults when a tenant has never configured MailGovernanceSettings
+# (Governance.jsx's mail settings panel) — canonical bounds now live in
+# policy_engine.service (DEFAULT_BUFFER_MIN/MAX/DEFAULT_MINUTES), re-exported
+# here for callers that imported these names before tenant config existed.
+DEFAULT_BUFFER_MINUTES = policy_engine.DEFAULT_BUFFER_DEFAULT_MINUTES
+MIN_BUFFER_MINUTES = policy_engine.DEFAULT_BUFFER_MIN_MINUTES
+MAX_BUFFER_MINUTES = policy_engine.DEFAULT_BUFFER_MAX_MINUTES
 
 # Autonomy floor required for this feature to run at all (spec §4's L3 row).
 _REQUIRED_AUTONOMY = 3
 
 
-def _validate_buffer(buffer_minutes: int) -> None:
-    if not (MIN_BUFFER_MINUTES <= buffer_minutes <= MAX_BUFFER_MINUTES):
-        raise Invalid(f"buffer_minutes must be between {MIN_BUFFER_MINUTES} and {MAX_BUFFER_MINUTES}")
+def _validate_buffer(buffer_minutes: int, *, min_minutes: int, max_minutes: int) -> None:
+    if not (min_minutes <= buffer_minutes <= max_minutes):
+        raise Invalid(f"buffer_minutes must be between {min_minutes} and {max_minutes}")
 
 
 async def stage_send(
     db: DbSession, ctx: TenantContext, *,
     provider: str, to_emails: list[str], subject: str, body_text: str,
     thread_id: str | None = None, in_reply_to_message_id: str | None = None,
-    buffer_minutes: int = DEFAULT_BUFFER_MINUTES,
+    buffer_minutes: int | None = None,
 ) -> dict[str, Any]:
     if not to_emails:
         raise Invalid("to_emails is required")
     if not body_text or not body_text.strip():
         raise Invalid("body_text is required")
-    _validate_buffer(buffer_minutes)
+
+    mail_settings = policy_engine.get_effective_mail_governance_settings(db, ctx)
+    if buffer_minutes is None:
+        buffer_minutes = mail_settings["buffer_default_minutes"]
+    _validate_buffer(
+        buffer_minutes,
+        min_minutes=mail_settings["buffer_min_minutes"],
+        max_minutes=mail_settings["buffer_max_minutes"],
+    )
 
     resolved = policy_engine.resolve_effective_autonomy(
         db, ctx, category="mail", dlp_scan_input={"body_text": body_text},

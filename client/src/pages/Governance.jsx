@@ -154,6 +154,137 @@ function CategoryPanel({ category, label }) {
   )
 }
 
+function MailGovernanceSettingsPanel() {
+  const { toast } = useToast()
+  const [current, setCurrent] = useState(undefined) // undefined = loading, null = never set
+  const [history, setHistory] = useState(null)
+  const [keywordsText, setKeywordsText] = useState('')
+  const [minMinutes, setMinMinutes] = useState('')
+  const [maxMinutes, setMaxMinutes] = useState('')
+  const [defaultMinutes, setDefaultMinutes] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  const load = async () => {
+    try {
+      const [c, h] = await Promise.all([
+        api('/api/connect/policy/mail-governance-settings'),
+        api('/api/connect/policy/mail-governance-settings/history'),
+      ])
+      setCurrent(c)
+      setHistory(h)
+      if (c) {
+        setKeywordsText(c.sensitive_keywords.join(', '))
+        setMinMinutes(String(c.buffer_min_minutes))
+        setMaxMinutes(String(c.buffer_max_minutes))
+        setDefaultMinutes(String(c.buffer_default_minutes))
+      }
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const submit = async () => {
+    const min = parseInt(minMinutes, 10)
+    const max = parseInt(maxMinutes, 10)
+    const def = parseInt(defaultMinutes, 10)
+    if ([min, max, def].some((n) => Number.isNaN(n))) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api('/api/connect/policy/mail-governance-settings', {
+        method: 'POST',
+        body: {
+          sensitive_keywords: keywordsText.split(',').map((k) => k.trim()).filter(Boolean),
+          buffer_min_minutes: min, buffer_max_minutes: max, buffer_default_minutes: def,
+        },
+      })
+      toast('Mail governance settings updated')
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="p-0">
+      <div className="flex items-center justify-between border-b border-[var(--c-line)] p-5">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-[15px] font-semibold tracking-tight text-[var(--c-fg)]">Mail settings</h3>
+            {!!current && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-[var(--c-bg-3)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--c-fg-dim)]">
+                <Lock className="h-3 w-3" /> Managed by Zoiko Group
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-[12.5px] text-[var(--c-fg-muted)]">
+            DLP sensitive-keyword list and the delayed-send buffer's allowed range (spec §5.3, §10.2).
+            {current === null && ' Not yet configured — every tenant shares the built-in defaults until set here.'}
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-4 border-b border-[var(--c-line)] p-5">
+        <Field label="Sensitive keywords" hint="Comma-separated. Matched case-insensitively against outbound mail body text.">
+          <input
+            value={keywordsText} onChange={(e) => setKeywordsText(e.target.value)}
+            placeholder="do not forward, internal only"
+            className="h-11 w-full rounded-xl border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] px-3.5 text-[14px] text-[var(--c-fg)] outline-none focus:border-[var(--c-accent)]"
+          />
+        </Field>
+        <div className="flex items-end gap-2">
+          <Field label="Min buffer (min)" hint="0-1440">
+            <input
+              type="number" min={0} max={1440} value={minMinutes} onChange={(e) => setMinMinutes(e.target.value)}
+              className="h-11 w-28 rounded-xl border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] px-3 text-[14px] text-[var(--c-fg)] outline-none focus:border-[var(--c-accent)]"
+            />
+          </Field>
+          <Field label="Default buffer (min)">
+            <input
+              type="number" min={0} max={1440} value={defaultMinutes} onChange={(e) => setDefaultMinutes(e.target.value)}
+              className="h-11 w-28 rounded-xl border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] px-3 text-[14px] text-[var(--c-fg)] outline-none focus:border-[var(--c-accent)]"
+            />
+          </Field>
+          <Field label="Max buffer (min)">
+            <input
+              type="number" min={0} max={1440} value={maxMinutes} onChange={(e) => setMaxMinutes(e.target.value)}
+              className="h-11 w-28 rounded-xl border border-[var(--c-line-strong)] bg-[var(--c-bg-1)] px-3 text-[14px] text-[var(--c-fg)] outline-none focus:border-[var(--c-accent)]"
+            />
+          </Field>
+          <Button variant="primary" size="sm" disabled={busy || current === undefined} onClick={submit}>
+            {busy ? 'Saving…' : 'Update'}
+          </Button>
+        </div>
+        {error && <p className="text-[12.5px] text-[var(--c-danger)]">{error}</p>}
+      </div>
+
+      <div className="p-5">
+        <div className="mb-2 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">
+          <History className="h-3 w-3" /> Version history
+        </div>
+        {history === null && <p className="text-[12.5px] text-[var(--c-fg-muted)]">Loading…</p>}
+        {history?.length === 0 && <p className="text-[12.5px] text-[var(--c-fg-muted)]">No changes yet — built-in defaults are in effect.</p>}
+        <div className="space-y-1.5">
+          {history?.map((v) => (
+            <div key={v.id} className="flex items-center justify-between gap-2 rounded-lg border border-[var(--c-line)] px-3 py-2 text-[12.5px]">
+              <span>
+                v{v.version} — buffer {v.buffer_min_minutes}-{v.buffer_max_minutes}m (default {v.buffer_default_minutes}m), {v.sensitive_keywords.length} keyword(s)
+                {v.diff_ref && <span className="text-[var(--c-fg-muted)]"> ({v.diff_ref})</span>}
+              </span>
+              <span className="text-[11px] text-[var(--c-fg-muted)]">{new Date(v.effective_at).toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 export default function Governance() {
   const navigate = useNavigate()
 
@@ -180,6 +311,7 @@ export default function Governance() {
 
       <div className="space-y-5">
         {CATEGORIES.map((c) => <CategoryPanel key={c.key} category={c.key} label={c.label} />)}
+        <MailGovernanceSettingsPanel />
       </div>
     </div>
   )

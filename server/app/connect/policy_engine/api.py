@@ -62,6 +62,35 @@ class ResolvedAutonomyOut(BaseModel):
     inputs: dict[str, int]
 
 
+class SetMailGovernanceSettingsIn(BaseModel):
+    sensitive_keywords: list[str]
+    buffer_min_minutes: int = Field(ge=0, le=1440)
+    buffer_max_minutes: int = Field(ge=0, le=1440)
+    buffer_default_minutes: int = Field(ge=0, le=1440)
+    diff_ref: str | None = None
+
+
+class MailGovernanceSettingsOut(BaseModel):
+    id: str
+    version: int
+    sensitive_keywords: list[str]
+    buffer_min_minutes: int
+    buffer_max_minutes: int
+    buffer_default_minutes: int
+    author_user_id: int
+    diff_ref: str | None
+    effective_at: datetime
+
+
+def _mail_settings_to_out(row) -> MailGovernanceSettingsOut:
+    return MailGovernanceSettingsOut(
+        id=row.id, version=row.version, sensitive_keywords=list(row.sensitive_keywords),
+        buffer_min_minutes=row.buffer_min_minutes, buffer_max_minutes=row.buffer_max_minutes,
+        buffer_default_minutes=row.buffer_default_minutes, author_user_id=row.author_user_id,
+        diff_ref=row.diff_ref, effective_at=row.effective_at,
+    )
+
+
 def _to_out(row) -> PolicyVersionOut:
     return PolicyVersionOut(
         id=row.id, category=row.category, version=row.version, autonomy_ceiling=row.autonomy_ceiling,
@@ -110,3 +139,43 @@ async def set_ceiling(
     except DomainError as e:
         raise _to_http(e) from e
     return _to_out(row)
+
+
+@router.get("/mail-governance-settings", response_model=MailGovernanceSettingsOut | None)
+def get_mail_governance_settings(
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    row = service.get_current_mail_governance_settings_row(db, ctx)
+    return _mail_settings_to_out(row) if row else None
+
+
+@router.get("/mail-governance-settings/history", response_model=list[MailGovernanceSettingsOut])
+def mail_governance_settings_history(
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    rows = service.list_mail_governance_settings_history(db, ctx)
+    return [_mail_settings_to_out(r) for r in rows]
+
+
+@router.post("/mail-governance-settings", response_model=MailGovernanceSettingsOut, status_code=201)
+async def set_mail_governance_settings(
+    data: SetMailGovernanceSettingsIn,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    if ctx.role not in _ADMIN_ROLES:
+        raise _to_http(Forbidden("Only workspace owners/admins can change mail governance settings"))
+    try:
+        row = await service.set_mail_governance_settings(
+            db, ctx,
+            sensitive_keywords=data.sensitive_keywords,
+            buffer_min_minutes=data.buffer_min_minutes,
+            buffer_max_minutes=data.buffer_max_minutes,
+            buffer_default_minutes=data.buffer_default_minutes,
+            diff_ref=data.diff_ref,
+        )
+    except DomainError as e:
+        raise _to_http(e) from e
+    return _mail_settings_to_out(row)

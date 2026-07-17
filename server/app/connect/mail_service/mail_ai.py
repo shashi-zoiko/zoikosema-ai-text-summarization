@@ -117,7 +117,11 @@ async def draft_reply(db: DbSession, ctx: TenantContext, *, thread_id: str, inst
     )
     draft = ai_draft_reply(thread_text, instruction)
 
-    dlp_verdict = dlp.scan(body_text=draft.get("body_text", ""))
+    mail_settings = policy_engine.get_effective_mail_governance_settings(db, ctx)
+    dlp_verdict = dlp.scan(
+        body_text=draft.get("body_text", ""),
+        sensitive_keywords=tuple(mail_settings["sensitive_keywords"]),
+    )
     if dlp_verdict.verdict == "fail":
         raise Invalid(
             "Drafted reply failed DLP preflight — regenerate with a different instruction",

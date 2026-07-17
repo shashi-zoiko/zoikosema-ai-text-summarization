@@ -67,9 +67,9 @@ def _contains_secret_key(text: str) -> bool:
     return any(prefix in text for prefix in _SECRET_KEY_PREFIXES)
 
 
-def _matched_keyword(text: str) -> str | None:
+def _matched_keyword(text: str, keywords: tuple[str, ...]) -> str | None:
     lowered = text.lower()
-    for kw in DEFAULT_SENSITIVE_KEYWORDS:
+    for kw in keywords:
         if kw.lower() in lowered:
             return kw
     return None
@@ -84,7 +84,10 @@ class DlpVerdict:
     matched_rules: list[str] = field(default_factory=list)
 
 
-def scan(*, body_text: str, attachments: list[dict[str, Any]] | None = None) -> DlpVerdict:
+def scan(
+    *, body_text: str, attachments: list[dict[str, Any]] | None = None,
+    sensitive_keywords: tuple[str, ...] | None = None,
+) -> DlpVerdict:
     """Rule-based scan of outbound mail body text.
 
     `attachments` is accepted for call-shape parity with the spec's stated
@@ -92,6 +95,12 @@ def scan(*, body_text: str, attachments: list[dict[str, Any]] | None = None) -> 
     scanned — attachment content scanning (e.g. an SSN embedded in a PDF)
     needs a real content-extraction pipeline this MVP doesn't have. A real,
     disclosed gap, not a silent one.
+
+    `sensitive_keywords` defaults to DEFAULT_SENSITIVE_KEYWORDS (every
+    tenant's fallback) — pass a tenant's configured list (Governance.jsx's
+    mail settings panel, via policy_engine.get_effective_mail_governance_settings)
+    to scan against real per-tenant keywords instead. This module stays
+    stateless/DB-free on purpose; callers resolve tenant config, not this one.
     """
     matched: list[str] = []
 
@@ -105,7 +114,8 @@ def scan(*, body_text: str, attachments: list[dict[str, Any]] | None = None) -> 
     if matched:
         return DlpVerdict(verdict="fail", matched_rules=matched)
 
-    if _matched_keyword(body_text) is not None:
+    keywords = sensitive_keywords if sensitive_keywords is not None else DEFAULT_SENSITIVE_KEYWORDS
+    if _matched_keyword(body_text, keywords) is not None:
         return DlpVerdict(verdict="warn", matched_rules=["sensitive_keyword"])
 
     return DlpVerdict(verdict="pass", matched_rules=[])

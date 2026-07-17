@@ -32,7 +32,7 @@ from app.connect.dlp import service as dlp
 from app.connect.events import types as etypes
 from app.connect.events.bus import publish
 from app.connect.events.outbox import enqueue
-from app.connect.policy_engine.models import CATEGORIES, PolicyVersion
+from app.connect.policy_engine.models import CATEGORIES, MailGovernanceSettings, PolicyVersion
 from app.connect.shared.envelope import EventEnvelope
 from app.connect.shared.errors import Invalid
 from app.connect.shared.ids import uuid7_str
@@ -46,6 +46,15 @@ from app.connect.shared.tenant import TenantContext
 # govern them.
 DEFAULT_AUTONOMY_CEILING = 1
 MAX_AUTONOMY_LEVEL = 4
+
+# Delayed-send buffer bounds (spec §5.3: admin-configurable 0-30 min range,
+# default 5). Canonical home is here (not mail_service/send.py) because
+# Governance.jsx's mail settings panel and dlp.scan()'s keyword list are
+# both tenant-configurable from this one module now — send.py imports
+# these as its own defaults when a tenant hasn't set MailGovernanceSettings.
+DEFAULT_BUFFER_MIN_MINUTES = 0
+DEFAULT_BUFFER_MAX_MINUTES = 30
+DEFAULT_BUFFER_DEFAULT_MINUTES = 5
 
 # Stubbed inputs with no real signal source yet — always resolve to "no
 # restriction" until the feature that produces a real verdict exists.
@@ -168,6 +177,104 @@ async def set_autonomy_ceiling(
     return row
 
 
+def _latest_mail_settings_row(db: DbSession, tenant_id: str) -> MailGovernanceSettings | None:
+    return (
+        db.query(MailGovernanceSettings)
+        .filter(MailGovernanceSettings.tenant_id == tenant_id)
+        .order_by(MailGovernanceSettings.version.desc())
+        .first()
+    )
+
+
+def get_current_mail_governance_settings_row(db: DbSession, ctx: TenantContext) -> MailGovernanceSettings | None:
+    """The raw current row (id/version/author included), or None if the
+    tenant has never set one. Used by the API layer for the full record;
+    get_effective_mail_governance_settings below is for callers that just
+    need the resolved values with defaults already filled in."""
+    return _latest_mail_settings_row(db, ctx.tenant_id)
+
+
+def get_effective_mail_governance_settings(db: DbSession, ctx: TenantContext) -> dict[str, Any]:
+    """Tenant's configured DLP sensitive-keyword list + delayed-send buffer
+    bounds, or the conservative shared defaults if the tenant has never set
+    one. Read by dlp.scan() callers (keywords) and mail_service.send.py
+    (buffer bounds) so both are tenant-configurable from one Governance.jsx
+    settings panel, without either module owning storage for the other's
+    concern."""
+    row = _latest_mail_settings_row(db, ctx.tenant_id)
+    if row is None:
+        return {
+            "sensitive_keywords": list(dlp.DEFAULT_SENSITIVE_KEYWORDS),
+            "buffer_min_minutes": DEFAULT_BUFFER_MIN_MINUTES,
+            "buffer_max_minutes": DEFAULT_BUFFER_MAX_MINUTES,
+            "buffer_default_minutes": DEFAULT_BUFFER_DEFAULT_MINUTES,
+        }
+    return {
+        "sensitive_keywords": list(row.sensitive_keywords),
+        "buffer_min_minutes": row.buffer_min_minutes,
+        "buffer_max_minutes": row.buffer_max_minutes,
+        "buffer_default_minutes": row.buffer_default_minutes,
+    }
+
+
+def list_mail_governance_settings_history(db: DbSession, ctx: TenantContext) -> list[MailGovernanceSettings]:
+    return (
+        db.query(MailGovernanceSettings)
+        .filter(MailGovernanceSettings.tenant_id == ctx.tenant_id)
+        .order_by(MailGovernanceSettings.version.desc())
+        .all()
+    )
+
+
+async def set_mail_governance_settings(
+    db: DbSession, ctx: TenantContext, *,
+    sensitive_keywords: list[str], buffer_min_minutes: int, buffer_max_minutes: int,
+    buffer_default_minutes: int, diff_ref: str | None = None,
+) -> MailGovernanceSettings:
+    if not (0 <= buffer_min_minutes <= buffer_default_minutes <= buffer_max_minutes <= 1440):
+        raise Invalid("buffer bounds must satisfy 0 <= min <= default <= max <= 1440")
+    keywords = [k.strip() for k in sensitive_keywords if k and k.strip()]
+
+    prior = _latest_mail_settings_row(db, ctx.tenant_id)
+    next_version = (prior.version + 1) if prior else 1
+
+    row = MailGovernanceSettings(
+        id=uuid7_str(),
+        tenant_id=ctx.tenant_id,
+        version=next_version,
+        sensitive_keywords=keywords,
+        buffer_min_minutes=buffer_min_minutes,
+        buffer_max_minutes=buffer_max_minutes,
+        buffer_default_minutes=buffer_default_minutes,
+        author_user_id=ctx.user_id,
+        diff_ref=diff_ref,
+        correlation_id=get_correlation_id(),
+    )
+    db.add(row)
+    db.flush()
+
+    audit.log(
+        db, type="settings.mail_governance.versioned", tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.user_id, resource_type="mail_governance_settings", resource_id=row.id,
+        metadata={
+            "version": next_version, "sensitive_keywords": keywords,
+            "buffer_min_minutes": buffer_min_minutes, "buffer_max_minutes": buffer_max_minutes,
+            "buffer_default_minutes": buffer_default_minutes, "diff_ref": diff_ref,
+        },
+    )
+    env = EventEnvelope(
+        type=etypes.SETTINGS_MAIL_GOVERNANCE_VERSIONED,
+        tenant_id=ctx.tenant_id,
+        correlation_id=get_correlation_id(),
+        actor_user_id=ctx.user_id,
+        payload={"mail_governance_settings_id": row.id, "version": next_version},
+    )
+    enqueue(db, env)
+    db.commit()
+    await publish(env, topic=f"tenant:{ctx.tenant_id}")
+    return row
+
+
 def resolve_effective_autonomy(
     db: DbSession, ctx: TenantContext, *, category: str, dlp_scan_input: dict[str, Any] | None = None,
 ) -> ResolvedAutonomy:
@@ -209,9 +316,11 @@ def resolve_effective_autonomy(
     dlp_verdict: dlp.DlpVerdict | None = None
     if category == "mail" and dlp_scan_input is not None:
         try:
+            settings = get_effective_mail_governance_settings(db, ctx)
             dlp_verdict = dlp.scan(
                 body_text=dlp_scan_input.get("body_text", ""),
                 attachments=dlp_scan_input.get("attachments"),
+                sensitive_keywords=tuple(settings["sensitive_keywords"]),
             )
         except Exception:  # noqa: BLE001 — "DLP unavailability fails closed", never silently pass
             dlp_verdict = dlp.DlpVerdict(verdict="fail", matched_rules=["dlp_scan_error"])
