@@ -14,10 +14,10 @@ USAGE
     #    guests are admitted straight through with no host in the loop.
     # 2. Point this at a RUNNING server (local uvicorn or the Cloud Run URL):
     python server/tests/load/websocket_load_test.py \
-        --base-url http://localhost:8001 --code ABC123 --users 100
+        --base-url http://localhost:8002 --code ABC123 --users 100
 
     # Watch pool/socket usage in another terminal while it runs:
-    #   watch -n1 curl -s http://localhost:8001/api/health/metrics
+    #   watch -n1 curl -s http://localhost:8002/api/health/metrics
 
 NOTES
   * 100 guests from one IP is under the 250/IP/hr guest cap, so a single run is
@@ -128,7 +128,7 @@ def _pct(values: list[float], p: float) -> float:
 
 async def main() -> None:
     ap = argparse.ArgumentParser(description="Concurrent WS load test for one meeting")
-    ap.add_argument("--base-url", required=True, help="e.g. http://localhost:8001")
+    ap.add_argument("--base-url", required=True, help="e.g. http://localhost:8002")
     ap.add_argument("--code", required=True, help="meeting code (waiting room OFF)")
     ap.add_argument("--users", type=int, default=100)
     ap.add_argument("--duration", type=float, default=30.0, help="seconds each VU stays")

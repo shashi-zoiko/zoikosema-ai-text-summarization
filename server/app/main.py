@@ -325,9 +325,9 @@ else:
 
 
 if __name__ == "__main__":
-    # Local dev entrypoint: `python -m app.main`. Defaults to 8001 because the
+    # Local dev entrypoint: `python -m app.main`. Defaults to 8002 because the
     # client (client/.env.local VITE_API_BASE + Vite proxy in vite.config.js)
-    # and docker-compose's host mapping (8001:8080) all expect the API on 8001.
+    # and docker-compose's host mapping (8002:8080) all expect the API on 8002.
     # Running manual uvicorn on any other port → the browser gets "Failed to
     # fetch". Containers set PORT=8080 explicitly, so this respects that too.
     import uvicorn
@@ -335,6 +335,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8001")),
+        port=int(os.getenv("PORT", "8002")),
         reload=True,
     )

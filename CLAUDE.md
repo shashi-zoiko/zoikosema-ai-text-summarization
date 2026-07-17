@@ -21,7 +21,7 @@ npm run electron:dev      # Vite + Electron together (desktop dev)
 
 Server (run from `server/`, inside the venv):
 ```
-uvicorn app.main:app --reload --port 8001
+uvicorn app.main:app --reload --port 8002
 pytest                     # run tests (server/tests/)
 ```
 
