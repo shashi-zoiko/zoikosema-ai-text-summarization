@@ -567,12 +567,18 @@ def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str)
     is_confidential = event.confidentiality_class == "confidential"
 
     for email in emails:
-        placehold = is_confidential and _is_external_attendee(db, event, email)
+        is_external = _is_external_attendee(db, event, email)
+        placehold = is_confidential and is_external
         title = CONFIDENTIAL_PLACEHOLDER_TITLE if placehold else event.title
         description = CONFIDENTIAL_PLACEHOLDER_DESCRIPTION if placehold else event.description
+        # The /calendar/{id} view is behind org auth (Phase 2 slice 9's
+        # CalendarView) with no public/guest mode yet — an external attendee
+        # clicking it hits a 403, not a working page. Keep the .ics attachment
+        # (their own calendar app still works) but drop the dead web link.
+        attendee_join_url = None if is_external else join_url
 
         ics_data = generate_ics(
-            title=title, meeting_code=event.version_chain_id, join_url=join_url,
+            title=title, meeting_code=event.version_chain_id, join_url=attendee_join_url,
             scheduled_at=event.start_at, duration_minutes=duration_minutes,
             organizer_name=organizer_name, organizer_email=organizer_email,
             attendee_email=email, description=description,
@@ -586,7 +592,7 @@ def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str)
         else:
             send_meeting_invite_email(
                 to_email=email, inviter_name=organizer_name, meeting_title=title,
-                meeting_code=event.version_chain_id, join_url=join_url,
+                meeting_code=event.version_chain_id, join_url=attendee_join_url,
                 scheduled_at=scheduled_str, ics_data=ics_data,
             )
 

@@ -220,6 +220,7 @@ export default function App() {
           <Route path="/ai-summaries" element={<Dashboard />} />
           <Route path="/scheduled" element={<ScheduledMeetings />} />
           <Route path="/calendar" element={<CalendarView />} />
+          <Route path="/calendar/:versionChainId" element={<CalendarView />} />
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
           <Route path="/settings" element={<Settings />} />
