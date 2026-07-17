@@ -106,14 +106,14 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8001:8080"
+      - "8002:8080"
     volumes:
       - zoiko_uploads:/app/uploads
       - zoiko_recordings:/app/recordings
 
   client:
     # Production-style nginx serving the built React bundle. In dev you should
-    # `npm run dev` from ./client (Vite at :5173 with proxy to :8001) — this
+    # `npm run dev` from ./client (Vite at :5173 with proxy to :8002) — this
     # container is gated behind the `prod-like` profile so `docker compose up`
     # doesn't try to bind :8080 in the dev workflow.
     profiles: ["prod-like"]

@@ -111,13 +111,28 @@ function RedirectIfAuthed({ children }) {
   return children
 }
 
+// Meeting codes look like xxx-xxxx-xxx (lowercase + hyphens) — same shape
+// GlobalSearch.jsx uses to recognize them. /:code, /:code/room-lk,
+// /:code/left, /:code/intelligence and the legacy /meet/:code… aliases are
+// all "in the meet", not the dashboard, so Sema Guide is hidden there.
+const MEETING_CODE_RE = /^[a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3}$/i
+
+function isMeetingRoute(pathname) {
+  const segments = pathname.split('/').filter(Boolean)
+  const first = segments[0] === 'meet' ? segments[1] : segments[0]
+  return !!first && MEETING_CODE_RE.test(first)
+}
+
 export default function App() {
+  const location = useLocation()
+  const inMeeting = isMeetingRoute(location.pathname)
+
   return (
     <>
     <UpdateToast />
     <CallOverlay />
-    <SemaGuidePanel />
-    <SemaGuideToggle />
+    {!inMeeting && <SemaGuidePanel />}
+    {!inMeeting && <SemaGuideToggle />}
     <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route

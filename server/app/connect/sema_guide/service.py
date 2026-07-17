@@ -15,18 +15,20 @@ log = logging.getLogger(__name__)
 
 
 def _get_client():
+    """Return a Groq client (official SDK — same one core/ai.py's transcript
+    summarizer uses, already a real dependency, unlike the openai package)."""
     settings = get_settings()
     if settings.ai_provider != "groq":
         return None
     try:
-        from openai import OpenAI
-        key = settings.ai_api_key or settings.groq_api_key
-        if not key:
-            return None
-        return OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
+        import groq
     except ImportError:
-        log.warning("openai package not installed — Sema Guide AI disabled for Groq")
+        log.warning("groq package not installed — Sema Guide AI disabled")
         return None
+    key = settings.ai_api_key or settings.groq_api_key
+    if not key:
+        return None
+    return groq.Groq(api_key=key)
 
 
 def chat(
@@ -53,7 +55,7 @@ def chat(
     client = _get_client()
     if not client:
         return GuideChatResponse(
-            response="Sema Guide is not configured. Please set AI_API_KEY (Groq) in the server environment.",
+            response="Sema Guide is not configured. Please set AI_API_KEY (or GROQ_API_KEY) in the server environment.",
             verified=False,
         )
 

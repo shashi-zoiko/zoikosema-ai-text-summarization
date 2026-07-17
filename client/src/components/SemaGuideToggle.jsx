@@ -31,6 +31,7 @@ export default function SemaGuideToggle() {
         onClick={isMinimized ? restore : toggle}
         onKeyDown={handleKeyDown}
         aria-label={isMinimized ? 'Restore Sema Guide' : 'Open Sema Guide'}
+        data-sema-guide-toggle
         className="sg-launcher fixed bottom-6 right-6 z-40"
         animate={isOpen
           ? { opacity: 0, scale: 0.92, transition: { duration: 0.24, ease: 'easeOut' } }
@@ -65,6 +66,7 @@ export default function SemaGuideToggle() {
             type="button"
             onClick={toggle}
             aria-label="Close Sema Guide"
+            data-sema-guide-toggle
             className="fixed bottom-6 z-50 grid h-10 w-10 place-items-center rounded-xl bg-[var(--c-bg-3)] text-[var(--c-fg-dim)] shadow-lg transition hover:bg-[var(--c-bg-2)] hover:text-[var(--c-fg)]"
             style={{ right: 412 }}
           >
