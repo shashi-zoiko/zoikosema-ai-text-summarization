@@ -23,7 +23,7 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_' }],
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]|^motion$', argsIgnorePattern: '^_' }],
       // Silent-fail catches are an intentional pattern throughout the codebase
       // (e.g. best-effort localStorage writes, optional server calls on logout).
       'no-empty': ['error', { allowEmptyCatch: true }],

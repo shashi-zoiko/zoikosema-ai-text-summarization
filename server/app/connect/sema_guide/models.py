@@ -116,6 +116,10 @@ class GuideChatRequest(BaseModel):
     page_route: str | None = None
 
 
+class SaveConversationRequest(BaseModel):
+    conversation: list[dict]
+
+
 class Source(BaseModel):
     label: str
     url: str | None = None
