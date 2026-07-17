@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, History, ShieldCheck } from 'lucide-react'
+import { ChevronLeft, History, Lock, ShieldCheck } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { Card } from '../components/ui/Card'
@@ -80,7 +80,14 @@ function CategoryPanel({ category, label }) {
     <Card className="p-0">
       <div className="flex items-center justify-between border-b border-[var(--c-line)] p-5">
         <div>
-          <h3 className="text-[15px] font-semibold tracking-tight text-[var(--c-fg)]">{label}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-[15px] font-semibold tracking-tight text-[var(--c-fg)]">{label}</h3>
+            {!!history?.length && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-[var(--c-bg-3)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--c-fg-dim)]">
+                <Lock className="h-3 w-3" /> Managed by Zoiko Group
+              </span>
+            )}
+          </div>
           <p className="mt-0.5 text-[12.5px] text-[var(--c-fg-muted)]">
             Current ceiling: <Badge tone="accent" size="sm">{LEVEL_LABELS[currentCeiling] || currentCeiling}</Badge>
           </p>
