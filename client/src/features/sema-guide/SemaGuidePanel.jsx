@@ -102,10 +102,8 @@ export default function SemaGuidePanel() {
                         <AiMessage
                           key={i}
                           content={msg.content}
-                          sources={msg.sources}
                           verified={msg.verified}
                           actionPreview={msg.action_preview}
-                          timestamp={msg.timestamp}
                         />
                       )
                     )

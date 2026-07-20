@@ -4,26 +4,37 @@ import re
 log = logging.getLogger(__name__)
 
 INJECTION_PATTERNS = [
-    re.compile(r"ignore\s+(all\s+)?(previous|prior|the\s+above)\s+(instructions|rules|prompts|directives)", re.I),
-    re.compile(r"(you\s+are\s+(now|free)|act\s+as|pretend\s+to\s+be)\s+.*(dan|jailbreak|unfiltered|ungoverned)", re.I),
-    re.compile(r"(bypass|circumvent|override)\s+(your\s+)?(safety|guardrails|restrictions|limits|rules)", re.I),
-    re.compile(r"output\s+(raw\s+)?(json|markdown|code|text)\s+without\s+(any\s+)?(formatting|filtering)", re.I),
+    re.compile(r"ignore\s+(all\s+)?(previous|prior|the\s+above|your)\s+(instructions|rules|prompts|directives|system|prompt)", re.I),
+    re.compile(r"(you\s+are\s+(now|free)|act\s+as|pretend\s+to\s+be)\s+.*(dan|jailbreak|unfiltered|ungoverned|gpt|hypothetical)", re.I),
+    re.compile(r"(bypass|circumvent|override|disable|remove)\s+(your\s+)?(safety|guardrails|restrictions|limits|rules|filter|content.policy)", re.I),
+    re.compile(r"output\s+(raw\s+)?(json|markdown|code|text)\s+without\s+(any\s+)?(formatting|filtering|restrictions)", re.I),
+    re.compile(r"(new\s+)?(chat|conversation|session)\s*(:|is)\s*(starting|beginning|reset)", re.I),
+    re.compile(r"(now|from\s+now\s+on|henceforth)\s*(,|:)?\s*(you|respond|answer)\s+(will|must|shall)", re.I),
+    re.compile(r"(remember|recall|retrieve)\s+(all|every|any)\s+(previous|prior|past)\s+(instruction|rule|prompt)", re.I),
 ]
 
 DISALLOWED_TOPICS = [
     re.compile(r"(hack|crack|exploit|breach|intrude)\s+(into|the\s+)?", re.I),
-    re.compile(r"steal|theft|rob|scam|fraud", re.I),
+    re.compile(r"steal|theft|rob|scam|fraud|stolen", re.I),
     re.compile(r"(phish|social.engineer|spoof)\w*", re.I),
-    re.compile(r"(malware|ransomware|trojan|keylogger|backdoor|rootkit)", re.I),
+    re.compile(r"(malware|ransomware|trojan|keylogger|backdoor|rootkit|virus)", re.I),
     re.compile(r"(sql|command|code)\s*(injection|exploit)", re.I),
-    re.compile(r"dump\s+(database|credentials|passwords|tables)", re.I),
-    re.compile(r"(ddos|dos)\s+(attack|amplification)", re.I),
-    re.compile(r"crack\s+(password|hash|credential|auth)", re.I),
-    re.compile(r"(find|get|fetch|extract)\s+(all\s+)?(users?|emails?|passwords?|admins?)", re.I),
-    re.compile(r"list\s+(all\s+)?(users|admins|customers|accounts)", re.I),
-    re.compile(r"(source\s+code|codebase|repository)\s+(of|for|dump|give)", re.I),
-    re.compile(r"(internal|private)\s+(api|endpoint|url|ip|network)", re.I),
-    re.compile(r"(env|environment)\s*(variable|file)", re.I),
+    re.compile(r"dump\s+(database|credentials|passwords|tables|data)", re.I),
+    re.compile(r"(ddos|dos)\s+(attack|amplification|flood)", re.I),
+    re.compile(r"(brute\s*force|crack)\s+(password|hash|credential|auth|login|admin)", re.I),
+    re.compile(r"(find|get|fetch|extract|grab|scrape)\s+(all\s+)?(users?|emails?|passwords?|admins?|data)", re.I),
+    re.compile(r"list\s+(all\s+)?(users|admins|customers|accounts|records)", re.I),
+    re.compile(r"(source\s+code|codebase|repository)\s+(of|for|dump|give|show|reveal)", re.I),
+    re.compile(r"(internal|private|secret|confidential)\s+(api|endpoint|url|ip|network|key|config)", re.I),
+    re.compile(r"(env|environment)\s*(variable|file|config)", re.I),
+    re.compile(r"(docker.compose|dockerfile|kubernetes|k8s|deployment)\s*(config|configuration|secrets|yml|yaml)", re.I),
+    re.compile(r"(access|enter|bypass|penetrate)\s+(admin|administrator|panel|dashboard)\s+(without|no)\s+(admin|permission|auth|account)", re.I),
+    re.compile(r"(unauthorized|unauthenticated)\s+(access|entry|login|entry)", re.I),
+    re.compile(r"(intercept|eavesdrop|sniff|tap)\s+(meeting|call|video|stream|traffic)", re.I),
+    re.compile(r"(spoof|impersonate|masquerade)\s+(as|the|a)\s+(host|participant|admin|user)", re.I),
+    re.compile(r"(extract|exfiltrate|export|download)\s+(customer|user|credit.card|payment)\s+(data|info|details)", re.I),
+    re.compile(r"unlimited\s+(free|premium|pro)\s+(accounts|access|features)", re.I),
+    re.compile(r"(bypass|evade|avoid)\s+(payment|billing|subscription|paywall)", re.I),
 ]
 
 CREDENTIAL_PATTERNS = [

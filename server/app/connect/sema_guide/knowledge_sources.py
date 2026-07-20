@@ -21,52 +21,52 @@ _HELP_CENTER_ARTICLES = [
     {
         "title": "Joining a meeting",
         "content": "Users can join meetings via the Meetings tab or an invite link. Enter the meeting code or click the link. No account required for guest join. Hosts must start the meeting before participants can join.",
-        "source_url": "/help/joining-meetings",
+        "source_url": "https://zoikosema.com/help-center",
     },
     {
         "title": "Microphone not working",
         "content": "Check OS microphone permissions for Zoiko Sema. In the app, select the correct mic from the audio settings dropdown. Test mic in a private meeting. If using Bluetooth, disconnect and reconnect.",
-        "source_url": "/help/audio-troubleshooting",
+        "source_url": "https://zoikosema.com/help-center",
     },
     {
         "title": "Camera not working",
         "content": "Ensure camera permissions are granted to Zoiko Sema in your OS settings. Close other apps using the camera. Select the correct camera in video settings. Restart the app if the issue persists.",
-        "source_url": "/help/video-troubleshooting",
+        "source_url": "https://zoikosema.com/help-center",
     },
     {
         "title": "Plans and pricing",
         "content": "Free plan includes unlimited 1-on-1 meetings (40-min limit), up to 10 participants. Pro ($15/mo) removes time limits, adds recording and 100 participants. Business ($25/mo) adds admin controls, SSO, and 300 participants. Enterprise has custom pricing.",
-        "source_url": "/help/plans",
+        "source_url": "https://zoikosema.com/pricing",
     },
     {
         "title": "Recording meetings",
         "content": "Recording is available on Pro and higher plans. Host can start/stop recording from the meeting controls. Recordings are saved to the cloud and accessible from the Recordings tab. Participants are notified when recording is active.",
-        "source_url": "/help/recordings",
+        "source_url": "https://zoikosema.com/help-center",
     },
     {
         "title": "Screen sharing",
         "content": "Share your entire screen, a specific window, or a browser tab. Presenter can switch sharing sources during the meeting. Optimize for video or text content. Available on all plans.",
-        "source_url": "/help/screen-sharing",
+        "source_url": "https://zoikosema.com/help-center",
     },
     {
         "title": "Inviting participants",
         "content": "Copy the meeting invite link from the meeting window or share the meeting code. Invites can be sent via email, chat, or calendar integration. Workspace members can be added directly from the directory.",
-        "source_url": "/help/inviting-participants",
+        "source_url": "https://zoikosema.com/help-center",
     },
     {
         "title": "Workspace administration",
         "content": "Admins can manage users, set security policies, configure SSO, and view usage analytics from the Admin panel. Role-based access: Owner, Admin, Member, and Guest roles available.",
-        "source_url": "/help/admin",
+        "source_url": "https://zoikosema.com/help-center",
     },
     {
         "title": "Audio/video diagnostics",
         "content": "Run a pre-meeting device check from Settings > Audio & Video. Test speaker, microphone, and camera. View signal strength and network quality indicators during meetings.",
-        "source_url": "/help/diagnostics",
+        "source_url": "https://zoikosema.com/help-center",
     },
     {
         "title": "Meeting chat and reactions",
         "content": "Use in-meeting chat for text communication. Send emoji reactions, raise hand, or use live captions. Chat is saved with the recording for Pro plans.",
-        "source_url": "/help/meeting-chat",
+        "source_url": "https://zoikosema.com/help-center",
     },
 ]
 
@@ -74,27 +74,27 @@ _PRODUCT_DOC_ARTICLES = [
     {
         "title": "Sema Guide — AI assistant",
         "content": "Sema Guide is Zoiko's AI support agent integrated into the platform. It answers product questions, troubleshoots common issues, and can request human handoff when needed. It has access to workspace policy, account context, and conversation history. Meeting content is never accessed unless explicitly authorized.",
-        "source_url": "/docs/sema-guide",
+        "source_url": "https://zoikosema.com/sema-meet",
     },
     {
         "title": "Confidential Mode",
         "content": "When enabled during a meeting, Confidential Mode restricts Sema Guide to shell-only access. Meeting audio, video, chat, and screen content are isolated. No AI processing of meeting content occurs. Participants see a visible indicator when Confidential Mode is active.",
-        "source_url": "/docs/confidential-mode",
+        "source_url": "https://zoikosema.com/products",
     },
     {
         "title": "Privacy and data handling",
         "content": "Conversation messages are retained for 30 days after the last message. Security records may be kept up to 12 months. Processing occurs in European data centers. Users can download, delete, or request portability of their data at any time from the Privacy & Data panel.",
-        "source_url": "/docs/privacy",
+        "source_url": "https://zoikosema.com/products",
     },
     {
         "title": "Action execution",
         "content": "Sema Guide can propose workspace actions based on user requests. Consequential changes require explicit user confirmation. The action preview card shows the target, current value, proposed change, people affected, and reversibility. Users can confirm, edit, or cancel proposed actions.",
-        "source_url": "/docs/actions",
+        "source_url": "https://zoikosema.com/products",
     },
     {
         "title": "Handoff to human support",
         "content": "Users can request a human specialist from the overflow menu or by asking Sema Guide. When requested, the session enters a queue and a specialist is assigned. Estimated wait time is shown. The user retains the ability to send messages during the queue.",
-        "source_url": "/docs/handoff",
+        "source_url": "https://zoikosema.com/products",
     },
 ]
 
