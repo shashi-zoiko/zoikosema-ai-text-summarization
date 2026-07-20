@@ -36,6 +36,8 @@ import { getCameraProfile, readCameraCapability } from './videoQuality.js'
 // Lazy-loaded so the TipTap editor bundle isn't in the initial meeting load.
 const PrivateNotebook = lazy(() => import('./notebook/PrivateNotebook.jsx'))
 import RoomErrorBoundary from './components/RoomErrorBoundary.jsx'
+import { OverlayHostProvider } from './more/OverlayHost.jsx'
+import { ViewControlsProvider } from './more/ViewControlsContext.jsx'
 import useMeetingControlWs from './hooks/useMeetingControlWs.js'
 import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
 import { useLocalParticipant, useMediaDeviceSelect, useRoomContext } from '@livekit/components-react'
@@ -344,8 +346,31 @@ function MeetRoom() {
   // panel scrolls its waiting section into view.
   const [waitingScrollSignal, setWaitingScrollSignal] = useState(0)
   const [settingsTab, setSettingsTab] = useState('audio') // active tab when sidebar==='settings'
-  // Per-viewer grid/speaker preference (local only, never synced).
-  const [layout, setLayout] = useState('grid') // 'grid' | 'speaker'
+  // Per-viewer view mode (local only, never synced): 'adaptive'|'grid'|'speaker'|
+  // 'presenter'. The legacy dock only ever produces grid/speaker (via toggleLayout);
+  // Adaptive/Presenter are reachable only through the More Menu v2. `layout`
+  // (grid/speaker) is DERIVED so <Stage> and the legacy dock stay unchanged.
+  // Preferred view mode persists account+device (§16) via the app's existing
+  // direct-localStorage pattern (no new storage abstraction). Presenter is
+  // meeting-scoped (Appendix A) so it is never persisted; an absent/invalid stored
+  // value migrates safely to the 'grid' default.
+  const [viewMode, setViewMode] = useState(() => {
+    try {
+      const v = localStorage.getItem('zoiko_meet_view_mode')
+      return v === 'adaptive' || v === 'grid' || v === 'speaker' ? v : 'grid'
+    } catch { return 'grid' }
+  })
+  const layout = viewMode === 'speaker' || viewMode === 'presenter' ? 'speaker' : 'grid'
+  // Personal, local view prefs surfaced by the More Menu v2. Defaults preserve the
+  // legacy experience while `meeting.more_v2` is OFF. Focus is session-runtime only;
+  // self-view persists account+device (§16).
+  const [focusMode, setFocusMode] = useState(false)
+  const [showSelfView, setShowSelfView] = useState(() => {
+    try { return localStorage.getItem('zoiko_meet_self_view') !== '0' } catch { return true }
+  })
+  // Remembers the last open Meeting Center panel so the v2 "Meeting Center" toggle
+  // restores it instead of always defaulting to People.
+  const lastPanelRef = useRef('people')
 
   // Virtual background — LOCAL per-participant camera effect (blur / image),
   // applied via a LiveKit track processor. Persisted across sessions.
@@ -696,8 +721,47 @@ function MeetRoom() {
   const promoteUser = useCallback((uid) => ctrlSend({ type: 'promote', user_id: uid }), [ctrlSend])
   const setLock = useCallback((locked) => ctrlSend({ type: 'lock', locked }), [ctrlSend])
   const toggleLayout = useCallback(() => {
-    setLayout((l) => (l === 'grid' ? 'speaker' : 'grid'))
+    // Legacy dock: flip grid↔speaker within the single view model.
+    setViewMode((m) => (m === 'speaker' || m === 'presenter' ? 'grid' : 'speaker'))
   }, [])
+  // More Menu v2 view actions — mutate only the existing shell view state.
+  // Idempotent: re-selecting the current mode returns the same state value, so
+  // React bails out — no re-render, no shell update.
+  const requestViewMode = useCallback((mode) => setViewMode((m) => (m === mode ? m : mode)), [])
+  const toggleFocus = useCallback(() => setFocusMode((v) => !v), [])
+  const toggleSelfView = useCallback(() => setShowSelfView((v) => !v), [])
+  const toggleMeetingCenter = useCallback(() => {
+    setSidebar((s) => (s ? null : lastPanelRef.current || 'people'))
+  }, [])
+  // Route to the existing Audio & Video / Backgrounds settings surface — opens the
+  // shared SettingsDrawer at a tab. No second settings dialog.
+  const openSettings = useCallback((tab) => { setSettingsTab(tab); setSidebar('settings') }, [])
+  // Remember the last open panel so Meeting Center can restore it.
+  useEffect(() => { if (sidebar) lastPanelRef.current = sidebar }, [sidebar])
+  // Persist personal view prefs (account+device, §16). Runtime state stays in the
+  // useState above; these effects only mirror it to localStorage. Presenter is
+  // meeting-scoped, so it's not written (falls back to the stored/base mode).
+  useEffect(() => {
+    if (viewMode === 'presenter') return
+    try { localStorage.setItem('zoiko_meet_view_mode', viewMode) } catch { /* storage blocked */ }
+  }, [viewMode])
+  useEffect(() => {
+    try { localStorage.setItem('zoiko_meet_self_view', showSelfView ? '1' : '0') } catch { /* storage blocked */ }
+  }, [showSelfView])
+  // Live view model exposed to the More Menu v2 (via context, so the portaled
+  // panel's checked state tracks actual app state). Exposes existing shell state
+  // only — it is not a second view manager.
+  const viewControls = useMemo(() => ({
+    mode: viewMode,
+    requestMode: requestViewMode,
+    meetingCenterOpen: sidebar != null,
+    toggleMeetingCenter,
+    focus: focusMode,
+    toggleFocus,
+    selfView: showSelfView,
+    toggleSelfView,
+    openSettings,
+  }), [viewMode, requestViewMode, sidebar, toggleMeetingCenter, focusMode, toggleFocus, showSelfView, toggleSelfView, openSettings])
   // Background is local-only (no WS broadcast). Persist the choice; the
   // VirtualBackgroundController inside <LiveKitRoom> applies it to the camera.
   const changeBgEffect = useCallback((preset) => {
@@ -866,9 +930,14 @@ function MeetRoom() {
   }
 
   return (
-    // Dark token scope for the whole room subtree — bare elements (scrollbars,
-    // any un-classed control) resolve to the dark design tokens, and the global
-    // base `button` rule paints from the dark palette instead of light.
+    // Single overlay host for the room subtree. Mounted OUTSIDE <LiveKitRoom> so it
+    // never touches media props/lifecycle; inert until an overlay opens (no portal,
+    // no listeners). See features/meeting/more/OverlayHost.jsx.
+    <ViewControlsProvider value={viewControls}>
+    <OverlayHostProvider>
+    {/* Dark token scope for the whole room subtree — bare elements (scrollbars,
+        any un-classed control) resolve to the dark design tokens, and the global
+        base `button` rule paints from the dark palette instead of light. */}
     <div data-theme="midnight" className="contents">
     <LiveKitRoom
       room={e2eeRoom?.room}
@@ -918,8 +987,10 @@ function MeetRoom() {
 
       <div className="relative flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
-          <Stage layout={layout} onOpenPeople={openPeople} />
-          <PresenterBanner />
+          <Stage layout={layout} showSelfView={showSelfView} onOpenPeople={openPeople} />
+          {/* Focus mode hides non-essential chrome; status (header), captions,
+              dock and Leave remain (§7). */}
+          {!focusMode && <PresenterBanner />}
           <PresenterPiP />
           <ReactionOverlay events={reactions} />
           <CaptionOverlay />
@@ -1037,6 +1108,8 @@ function MeetRoom() {
       </MeetingCryptoProvider>
     </LiveKitRoom>
     </div>
+    </OverlayHostProvider>
+    </ViewControlsProvider>
   )
 }
 

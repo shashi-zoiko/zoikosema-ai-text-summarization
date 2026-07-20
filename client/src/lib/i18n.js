@@ -90,6 +90,12 @@ const LOCALES = {
 
 let _locale = 'en'
 
+// Merge a feature package's message fixtures into a locale at load time, so
+// features can co-locate their strings without forking a second i18n system.
+export function registerMessages(locale, messages) {
+  LOCALES[locale] = { ...(LOCALES[locale] || {}), ...messages }
+}
+
 export function setLocale(locale) {
   if (LOCALES[locale]) {
     _locale = locale

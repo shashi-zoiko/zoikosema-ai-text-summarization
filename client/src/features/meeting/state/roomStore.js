@@ -20,6 +20,13 @@ export const useRoomStore = create((set) => ({
   setHeroActive: (v) =>
     set((s) => (s.heroActive === !!v ? s : { heroActive: !!v })),
 
+  // presenting: true whenever a screen-share is on stage. Published by <Stage>
+  // and read (via selector) to resolve the More Menu's "Presenter" view mode
+  // availability — no camera/track state, purely "is there shared content".
+  presenting: false,
+  setPresenting: (v) =>
+    set((s) => (s.presenting === !!v ? s : { presenting: !!v })),
+
   // waiting: authoritative waiting-room list [{user_id,name,color,is_guest,email,avatar_url,joined_at}].
   // Lives here (not in <MeetRoomLivekit> local state) so the header admit-chip,
   // the People panel and the dock badge read the same slice via selectors
@@ -82,6 +89,7 @@ export const useRoomStore = create((set) => ({
     set({
       pinnedIdentity: null,
       heroActive: false,
+      presenting: false,
       waiting: [],
       raisedHands: new Set(),
       reactions: [],
