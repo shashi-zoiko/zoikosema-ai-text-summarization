@@ -35,10 +35,11 @@ function accentIndex(identity) {
  *
  * Hero priority:  screen share  >  pinned  >  active speaker (speaker layout).
  */
-function Stage({ layout = 'grid', onOpenPeople }) {
+function Stage({ layout = 'grid', showSelfView = true, onOpenPeople }) {
   const pinnedIdentity = useRoomStore((s) => s.pinnedIdentity)
   const setPinned = useRoomStore((s) => s.setPinned)
   const setHeroActive = useRoomStore((s) => s.setHeroActive)
+  const setPresenting = useRoomStore((s) => s.setPresenting)
   const activeSpeaker = useActiveSpeaker()
   const recentSpeakers = useRecentSpeakers()
 
@@ -160,6 +161,13 @@ function Stage({ layout = 'grid', onOpenPeople }) {
     return () => setHeroActive(false)
   }, [hero, setHeroActive])
 
+  // Publish whether shared content is on stage (drives the More Menu "Presenter"
+  // availability). Screen-share presence only — not camera hero.
+  useEffect(() => {
+    setPresenting(!!screen)
+    return () => setPresenting(false)
+  }, [screen, setPresenting])
+
   // ── Drop a stale pin when the pinned participant leaves ─────────────────────
   useEffect(() => {
     if (!pinnedIdentity) return
@@ -207,7 +215,12 @@ function Stage({ layout = 'grid', onOpenPeople }) {
   // Screen share floats the pinned participant to the front of the filmstrip so
   // they stay prominent next to the shared content.
   const items = useMemo(() => {
-    const list = [...cams]
+    // Show-self-view OFF hides only the LOCAL camera tile (never stops the camera
+    // or upstream video). Kept if pinned, since that's the only path to it being
+    // the hero. Screen-share (incl. the local share) is unaffected.
+    const list = [...cams].filter(
+      (t) => showSelfView || !t.participant.isLocal || t.participant.identity === pinnedIdentity,
+    )
     if (screen && pinnedIdentity) {
       list.sort(
         (a, b) =>
@@ -232,7 +245,7 @@ function Stage({ layout = 'grid', onOpenPeople }) {
       })
     }
     return tiles
-  }, [cams, screen, pinnedIdentity, accentByIdentity])
+  }, [cams, screen, pinnedIdentity, accentByIdentity, showSelfView])
 
   // ── Priority order: WHO keeps a tile when the room overflows ────────────────
   // A full ranking of every camera tile, most-important first. StageLayout keeps
