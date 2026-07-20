@@ -116,13 +116,9 @@ function tablesToHtml(tables) {
   const parts = []
   for (const t of list) {
     const cols = t?.columns || []
-    if (!cols.length) continue
-    parts.push(`<h2>${escHtml(t.type_label || 'Table')}</h2>`)
     const rows = t?.rows || []
-    if (!rows.length) {
-      parts.push('<p><em>No data found in this meeting.</em></p>')
-      continue
-    }
+    if (!cols.length || !rows.length) continue // only tables that actually have data
+    parts.push(`<h2>${escHtml(t.type_label || 'Table')}</h2>`)
     parts.push('<table><thead><tr>')
     for (const c of cols) parts.push(`<th>${escHtml(c.label)}</th>`)
     parts.push('</tr></thead><tbody>')
@@ -291,15 +287,69 @@ function intelToHtmlDoc(meetingTitle, code, payload, scope = 'summary') {
   return htmlWrap(parts.join('\n'))
 }
 
-function transcriptToHtmlDoc(meetingTitle, code, payload, scope = 'summary') {
+// {date, time, tz} for the "Meeting <date> at <time> <tz>" heading, matching
+// how Google Meet's own Gemini notes title an export — formatted from when
+// the summary was generated (intel.created_at), the closest timestamp we
+// have to the meeting itself.
+function meetingDateTimeParts(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+  const tz = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+    .formatToParts(d)
+    .find((p) => p.type === 'timeZoneName')?.value || ''
+  return { date, time, tz }
+}
+
+// The full {time, name, body} log rendered as its own "<title> - Transcript"
+// section, appended after the Summary/Details. Groups consecutive lines under
+// one timestamp heading whenever the time actually changes (no invented
+// chapter boundaries — just whatever granularity the underlying caption data
+// has), closing with an "ended after" marker and the same disclaimer note any
+// auto-generated transcript needs.
+function transcriptSectionHtml(heading, conversation) {
+  const esc = escHtml
+  const list = Array.isArray(conversation) ? conversation : []
+  if (!list.length) return ''
+
+  const parts = [`<h1>${esc(heading)} - Transcript</h1>`]
+  let lastTime = null
+  for (const m of list) {
+    if (m.time && m.time !== lastTime) {
+      parts.push(`<h2 class="doc-timestamp">${esc(m.time)}</h2>`)
+      lastTime = m.time
+    }
+    parts.push(`<p class="doc-line"><strong>${esc(m.name || 'Unknown')}:</strong> ${esc(m.body)}</p>`)
+  }
+
+  const endedAt = list[list.length - 1]?.time
+  if (endedAt) parts.push(`<h2 class="doc-timestamp">Transcription ended after ${esc(endedAt)}</h2>`)
+  parts.push('<p class="doc-disclaimer"><em>This transcript was computer generated and might contain errors.</em></p>')
+
+  return parts.join('\n')
+}
+
+function transcriptToHtmlDoc(meetingTitle, code, payload, scope = 'summary', createdAt, conversation) {
   if (!payload) return ''
   const esc = escHtml
-  const parts = [`<h1>${esc(payload.title || meetingTitle || 'Meeting')} — Summary</h1><p><em>${esc(code)}</em></p>`]
+  const dt = meetingDateTimeParts(createdAt)
+  const heading = dt ? `Meeting ${dt.date} at ${dt.time}${dt.tz ? ` ${dt.tz}` : ''}` : (payload.title || meetingTitle || 'Meeting')
+  const transcriptUrl = `${window.location.origin}/${code}/intelligence`
+
+  const parts = [
+    dt ? `<p class="doc-date">${esc(dt.date)}</p>` : '',
+    `<h1>${esc(heading)}</h1>`,
+    `<p class="doc-meta">Meeting records: <a href="${esc(transcriptUrl)}">Transcript</a></p>`,
+  ]
 
   if (scope !== 'tables') {
+    parts.push('<h2>Summary</h2>')
     if (payload.summary) parts.push(`<p>${esc(payload.summary)}</p>`)
+
     if (payload.key_takeaways?.length) {
-      parts.push('<h2>Key Takeaways</h2><ul>')
+      parts.push('<h2>Details</h2><ul>')
       for (const t of payload.key_takeaways) {
         parts.push(`<li>${t.assignee ? `<strong>${esc(t.assignee)}:</strong> ` : ''}${esc(t.text)}</li>`)
       }
@@ -311,7 +361,41 @@ function transcriptToHtmlDoc(meetingTitle, code, payload, scope = 'summary') {
     parts.push(...tablesToHtml(payload.tables))
   }
 
-  return htmlWrap(parts.join('\n'))
+  const transcriptSection = transcriptSectionHtml(heading, conversation)
+  if (transcriptSection) parts.push(transcriptSection)
+
+  parts.push('<p class="doc-disclaimer"><em>This summary was AI-generated and may contain mistakes. Verify important details before relying on them.</em></p>')
+
+  return transcriptHtmlWrap(parts.join('\n'))
+}
+
+// Separate from htmlWrap() (used by intelToHtmlDoc) so restyling the
+// Meeting Summary export doesn't change the still-unstyled Meeting
+// Intelligence export.
+function transcriptHtmlWrap(body) {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Meeting Summary</title>
+<style>
+body{font-family:Arial,Helvetica,sans-serif;max-width:800px;margin:2em auto;padding:0 1em;color:#202124;line-height:1.6}
+.doc-date{font-size:12px;color:#5f6368;margin:0 0 4px}
+h1{font-size:24px;font-weight:600;margin:0 0 16px}
+.doc-meta{font-size:13px;color:#3c4043;margin:0 0 28px}
+h2{font-size:18px;font-weight:700;margin-top:28px;margin-bottom:10px}
+p,li{font-size:13.5px}
+ul{padding-left:22px;margin-top:8px}
+li{margin-bottom:10px}
+a{color:#1a73e8;text-decoration:underline}
+strong{color:#000}
+table{border-collapse:collapse;width:100%;margin-top:8px}
+th,td{border:1px solid #ccc;padding:6px 10px;font-size:13px;text-align:left}
+th{background:#f3f3f3}
+.doc-timestamp{font-size:14px;font-weight:700;margin-top:24px;margin-bottom:8px}
+.doc-line{margin:0 0 6px}
+.doc-disclaimer{color:#5f6368;margin-top:20px}
+</style>
+</head>
+<body>${body}</body></html>`
 }
 
 function htmlWrap(body) {
@@ -694,7 +778,7 @@ export default function MeetingIntelligence() {
 
   const exportDoc = (scope = 'summary') => {
     const html = isTranscript
-      ? transcriptToHtmlDoc(intel?.meeting_title, code, payload, scope)
+      ? transcriptToHtmlDoc(intel?.meeting_title, code, payload, scope, intel?.created_at, intel?.conversation)
       : intelToHtmlDoc(intel?.meeting_title, code, payload, scope)
     if (html) downloadBlob(html, `${slug}${scopeSuffix(scope)}.doc`, 'application/msword')
   }

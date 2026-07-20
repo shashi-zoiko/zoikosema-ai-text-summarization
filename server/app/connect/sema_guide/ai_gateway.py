@@ -27,10 +27,10 @@ class AIGateway:
         now = time.time()
 
         plan_limits = {
-            "free": {"requests_per_minute": 10, "max_tokens": 2048},
-            "pro": {"requests_per_minute": 60, "max_tokens": 4096},
-            "business": {"requests_per_minute": 120, "max_tokens": 8192},
-            "enterprise": {"requests_per_minute": 300, "max_tokens": 16384},
+            "free": {"requests_per_minute": 10, "max_tokens": 1024},
+            "pro": {"requests_per_minute": 60, "max_tokens": 2048},
+            "business": {"requests_per_minute": 120, "max_tokens": 2048},
+            "enterprise": {"requests_per_minute": 300, "max_tokens": 2048},
         }
         limits = plan_limits.get(plan, plan_limits["free"])
 
