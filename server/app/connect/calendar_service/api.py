@@ -636,3 +636,46 @@ def update_task(
     except DomainError as e:
         raise _to_http(e) from e
     return _task_to_out(task)
+
+
+class TaskVersionOut(BaseModel):
+    id: str
+    version_number: int
+    title: str
+    status: str
+    priority: str
+    assignee_email: str | None
+    created_at: datetime | None
+
+
+def _task_version_to_out(v) -> TaskVersionOut:
+    return TaskVersionOut(
+        id=v.id, version_number=v.version_number, title=v.title, status=v.status,
+        priority=v.priority, assignee_email=v.assignee_email, created_at=v.created_at,
+    )
+
+
+@router.get("/tasks/{task_id}/versions", response_model=list[TaskVersionOut])
+def list_task_versions(
+    task_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        versions = tasks_service.list_task_versions(db, ctx, task_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return [_task_version_to_out(v) for v in versions]
+
+
+@router.post("/tasks/{task_id}/restore", response_model=TaskOut)
+def restore_task_version(
+    task_id: str,
+    db: DbSession = Depends(get_db),
+    ctx: TenantContext = Depends(_ctx),
+):
+    try:
+        task = tasks_service.restore_previous_task_version(db, ctx, task_id)
+    except DomainError as e:
+        raise _to_http(e) from e
+    return _task_to_out(task)

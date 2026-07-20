@@ -162,6 +162,10 @@ class HandoffRequest(BaseModel):
 
 
 class HandoffState(BaseModel):
-    state: Literal["queued", "connecting", "human_assigned", "failed"]
+    # None means "no active handoff session" — matches the frontend's
+    # `res.state || null` contract (client/src/features/sema-guide/store.js),
+    # which treats any falsy state as idle. A literal "idle" string would be
+    # truthy there and trip the panel's polling effect into running forever.
+    state: Literal["queued", "connecting", "human_assigned", "failed"] | None = None
     estimated_wait_seconds: int | None = None
     specialist_name: str | None = None

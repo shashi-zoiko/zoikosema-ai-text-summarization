@@ -3,8 +3,8 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BarChart3, Calendar, CheckCircle2, ChevronDown, ChevronsUpDown,
-  ClipboardCheck, CreditCard, HelpCircle, Home, LogOut, Menu, MessageSquareText,
-  PlayCircle, Settings, ShieldCheck, Sparkles, Users, Video, X,
+  ClipboardCheck, CreditCard, HelpCircle, Home, LogOut, Mail, Menu, MessageSquareText,
+  PlayCircle, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Users, Video, X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
@@ -58,6 +58,7 @@ const WORKSPACE_NAV = [
   { key: 'meetings',   label: 'Meetings',    icon: Video,             to: '/scheduled' },
   { key: 'chat',       label: 'Chat',        icon: MessageSquareText, to: '/chat', countTone: 'danger' },
   { key: 'calendar',   label: 'Calendar',    icon: Calendar,          to: '/calendar' },
+  { key: 'mail',       label: 'Mail',        icon: Mail,              to: '/mail' },
   { key: 'summaries',  label: 'AI Summaries', icon: Sparkles,         to: '/ai-summaries' },
   { key: 'actions',    label: 'Actions',     icon: CheckCircle2,      to: '/actions' },
   { key: 'review-queue', label: 'Review Queue', icon: ClipboardCheck, to: '/review-queue' },
@@ -69,10 +70,11 @@ const WORKSPACE_NAV = [
 // settings"), so it was a redundant duplicate route. The footer Settings link
 // is the universal entry (Manage is admin-only), so that's the one kept.
 const MANAGE_NAV = [
-  { key: 'people',    label: 'People',    icon: Users,       to: '/admin' },
-  { key: 'security',  label: 'Security',  icon: ShieldCheck, to: '/security' },
-  { key: 'analytics', label: 'Analytics', icon: BarChart3,   to: '/analytics', badge: { text: 'Soon' } },
-  { key: 'billing',   label: 'Billing',   icon: CreditCard,  to: '/billing' },
+  { key: 'people',      label: 'People',      icon: Users,             to: '/admin' },
+  { key: 'security',    label: 'Security',    icon: ShieldCheck,       to: '/security' },
+  { key: 'governance',  label: 'Governance',  icon: SlidersHorizontal, to: '/governance' },
+  { key: 'analytics',   label: 'Analytics',   icon: BarChart3,         to: '/analytics', badge: { text: 'Soon' } },
+  { key: 'billing',     label: 'Billing',     icon: CreditCard,        to: '/billing' },
 ]
 
 function UserMenu() {

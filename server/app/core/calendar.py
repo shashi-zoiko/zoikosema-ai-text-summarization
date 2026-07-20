@@ -7,7 +7,7 @@ from app.core.config import get_settings
 def generate_ics(
     title: str,
     meeting_code: str,
-    join_url: str,
+    join_url: str | None,
     scheduled_at: datetime,
     duration_minutes: int = 60,
     organizer_name: str = "ZoikoSema",
@@ -52,7 +52,8 @@ def generate_ics(
     def fmt(dt: datetime) -> str:
         return dt.strftime("%Y%m%dT%H%M%SZ")
 
-    desc = description or f"Join the meeting: {join_url}\\nMeeting code: {meeting_code}"
+    default_desc = f"Join the meeting: {join_url}\\nMeeting code: {meeting_code}" if join_url else f"Meeting code: {meeting_code}"
+    desc = description or default_desc
     status = "CANCELLED" if method == "CANCEL" else "CONFIRMED"
 
     lines = [
@@ -69,10 +70,11 @@ def generate_ics(
         f"DTEND:{fmt(end)}",
         f"SUMMARY:{_escape(title)}",
         f"DESCRIPTION:{_escape(desc)}",
-        f"URL:{join_url}",
         f"ORGANIZER;CN={_escape(organizer_name)}:mailto:{organizer_email}",
         f"STATUS:{status}",
     ]
+    if join_url:
+        lines.append(f"URL:{join_url}")
     if rrule:
         # Bare value, no leading "RRULE:" in the stored/passed string — this
         # mirrors how native_events.py stores it (a plain "FREQ=...;..."

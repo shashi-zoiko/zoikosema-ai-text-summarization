@@ -22,10 +22,24 @@ export default function SemaGuidePanel() {
   } = useSemaGuide()
   const endRef = useRef(null)
   const pollRef = useRef(null)
+  const panelRef = useRef(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading, processing])
+
+  useEffect(() => {
+    if (!open) return
+
+    const handleClickOutside = (e) => {
+      if (panelRef.current && panelRef.current.contains(e.target)) return
+      if (e.target.closest?.('[data-sema-guide-toggle]')) return
+      closePanel()
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [open, closePanel])
 
   useEffect(() => {
     const shouldPoll = handoffState && handoffState !== 'human_assigned' && handoffState !== 'failed'
@@ -49,6 +63,7 @@ export default function SemaGuidePanel() {
       {open && (
         <>
           <motion.aside
+            ref={panelRef}
             initial={{ opacity: 0, scale: 0.92, y: 12 }}
             animate={isMinimized
               ? { opacity: 0, scale: 0.92, y: 12, transition: { duration: 0.24, ease: 'easeOut' } }

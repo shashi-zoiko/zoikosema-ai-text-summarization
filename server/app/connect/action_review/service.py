@@ -20,7 +20,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session as DbSession
 
-from app.connect.action_review.models import ROLLBACK_DESCRIPTORS, ReviewQueueItem
+from app.connect.action_review.models import ROLLBACK_DESCRIPTORS, ReasoningTrace, ReviewQueueItem
 from app.connect.audit import service as audit
 from app.connect.events import types as etypes
 from app.connect.events.bus import publish
@@ -43,13 +43,35 @@ async def stage_action(
     blast_radius: dict[str, Any] | None = None,
     rollback_descriptor: str = "no_rollback",
     reasoning_trace_ref: str | None = None,
+    reasoning_trace: dict[str, Any] | None = None,
     proposed_by_agent: str | None = None,
     idempotency_key: str | None = None,
+    policy_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Returns the serialized item (already committed) — same dict-return
     convention as messaging_service.send_message, so an idempotent replay
     and a fresh write both hand the API layer the same shape without a
-    second DB round-trip or reconstructing a partial ORM instance."""
+    second DB round-trip or reconstructing a partial ORM instance.
+
+    `policy_version_id` (Work Graph governed_by edge, spec §3.2: "Point-in-
+    time policy evidence"): the tenant's current PolicyVersion for this
+    action's category, from policy_engine.get_current_version_id — passed
+    in by the caller since resolving autonomy already happens there right
+    before staging. None if the tenant has never set an explicit ceiling
+    (still on the default, no versioned row to point at) — no edge is
+    written in that case, not a stub edge to nothing.
+
+    `reasoning_trace` (spec §5.1/§5.4): structured agent rationale — pass
+    `{"rationale": ..., "source_nodes": [...], "tool_chain": [...],
+    "model": ..., "confidence": ..., "uncertainty_markers": [...]}` for an
+    agent-originated proposal. Written as its own connect_reasoning_traces
+    row (append-only) and this item's reasoning_trace_ref is set to that
+    row's id, superseding the plain `reasoning_trace_ref` string param
+    (kept for a caller with no structured trace to attach, e.g. a manual
+    human-staged item). Only `rationale` need be non-empty; the rest
+    default to empty/None when a caller genuinely has no signal for them
+    (e.g. no confidence score exists until ai.py's prompts are changed to
+    elicit one — a disclosed gap, not a fabricated number)."""
     if rollback_descriptor not in ROLLBACK_DESCRIPTORS:
         raise Invalid(f"Unknown rollback_descriptor: {rollback_descriptor}")
 
@@ -74,6 +96,35 @@ async def stage_action(
     )
     db.add(item)
     db.flush()  # populate created_at server_default for the envelope/output
+
+    if reasoning_trace is not None:
+        trace = ReasoningTrace(
+            id=uuid7_str(),
+            tenant_id=ctx.tenant_id,
+            queue_item_id=item.id,
+            rationale=reasoning_trace.get("rationale"),
+            source_nodes=reasoning_trace.get("source_nodes") or [],
+            tool_chain=reasoning_trace.get("tool_chain") or [],
+            model=reasoning_trace.get("model"),
+            confidence=reasoning_trace.get("confidence"),
+            uncertainty_markers=reasoning_trace.get("uncertainty_markers") or [],
+        )
+        db.add(trace)
+        db.flush()
+        item.reasoning_trace_ref = trace.id
+
+    if policy_version_id:
+        # Local import: work_graph/service.py imports calendar_service's
+        # native_events/tasks at top level, and those import this module
+        # (action_review) at top level — importing work_graph back in here
+        # at module scope would cycle. Same pattern native_events.py's own
+        # Work Graph linking helpers already established.
+        from app.connect.work_graph import service as work_graph
+        work_graph.create_edge(
+            db, ctx, edge_type="governed_by",
+            from_node_type="agent_action", from_node_id=item.id,
+            to_node_type="policy_version", to_node_id=policy_version_id,
+        )
 
     audit.log(
         db, type="agent.action.created", tenant_id=ctx.tenant_id,
@@ -115,6 +166,42 @@ def get_item(db: DbSession, ctx: TenantContext, item_id: str) -> ReviewQueueItem
     return item
 
 
+_REDACTED_ROLES = {"member"}  # spec §5.4 "redactable per reviewer access" — full rationale is owner/admin/personal only
+
+
+def get_reasoning_trace(db: DbSession, ctx: TenantContext, item_id: str) -> dict[str, Any] | None:
+    """The structured trace for a queue item, or None if it's human-
+    proposed (no trace was ever attached). `rationale`/`source_nodes`/
+    `tool_chain` are redacted to None/[] for a plain 'member' role — a
+    reviewer without admin standing sees that a trace exists (model,
+    confidence, uncertainty markers) but not the underlying rationale
+    detail, per spec §5.4. owner/admin/personal see everything."""
+    item = get_item(db, ctx, item_id)
+    if not item.reasoning_trace_ref:
+        return None
+    trace = (
+        db.query(ReasoningTrace)
+        .filter(ReasoningTrace.tenant_id == ctx.tenant_id, ReasoningTrace.id == item.reasoning_trace_ref)
+        .first()
+    )
+    if trace is None:
+        return None
+
+    redact = ctx.role in _REDACTED_ROLES
+    return {
+        "id": trace.id,
+        "queue_item_id": trace.queue_item_id,
+        "rationale": None if redact else trace.rationale,
+        "source_nodes": [] if redact else list(trace.source_nodes or []),
+        "tool_chain": [] if redact else list(trace.tool_chain or []),
+        "model": trace.model,
+        "confidence": trace.confidence,
+        "uncertainty_markers": list(trace.uncertainty_markers or []),
+        "redacted": redact,
+        "created_at": trace.created_at.isoformat() if trace.created_at else None,
+    }
+
+
 async def _transition(
     db: DbSession, ctx: TenantContext, item_id: str, *,
     new_status: str, event_type: str, audit_type: str, note: str | None,
@@ -128,6 +215,19 @@ async def _transition(
     item.reviewed_at = datetime.now(timezone.utc)
     item.review_note = note
     db.flush()
+
+    # Work Graph reviewed_by edge (spec §3.2: "Human approval evidence") —
+    # written on every transition (approve/reject/redraft/escalate), not
+    # just approve: a reject or escalation is equally real evidence a human
+    # reviewed this item, matching the column this already writes
+    # (reviewed_by_user_id) rather than a narrower reading of the edge name.
+    # Local import — see stage_action's own comment for why.
+    from app.connect.work_graph import service as work_graph
+    work_graph.create_edge(
+        db, ctx, edge_type="reviewed_by",
+        from_node_type="agent_action", from_node_id=item.id,
+        to_node_type="person", to_node_id=str(ctx.user_id),
+    )
 
     audit.log(
         db, type=audit_type, tenant_id=ctx.tenant_id,

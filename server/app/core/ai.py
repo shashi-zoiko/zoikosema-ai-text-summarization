@@ -535,6 +535,97 @@ def ai_generate_followup_tasks(meeting_title: str, context_notes: str) -> dict:
     return _call_structured_ai(system, user_prompt, default, max_tokens=800)
 
 
+# ── Sema Calendar & Mail — thread summaries / reply drafts (Phase 3 slice 8) ─
+# Spec §13.1 Phase 3 AI workflow row / §13.2. Mail's equivalent of the Phase 2
+# slice 8 functions above — same shape, same reason for living here rather
+# than in app/connect/mail_service (pure "call Claude, get structured JSON
+# back," no DB, no policy/governance decisions).
+
+def ai_summarize_thread(messages: list[dict]) -> dict:
+    """messages: [{"from_email", "subject", "body_text"}, ...] oldest-first.
+    {"summary", "key_points": [...]} + metadata."""
+    default = {"summary": "", "key_points": []}
+    if not messages:
+        return {**default, "_model": None, "_input_tokens": None, "_output_tokens": None, "_latency_ms": None, "_error": "No messages to summarize."}
+    thread_text = "\n\n".join(
+        f"From: {m.get('from_email', 'unknown')}\nSubject: {m.get('subject') or '(no subject)'}\n{m.get('body_text', '')}"
+        for m in messages
+    )
+    system = (
+        "You are Zoiko Sema's email thread summarization assistant. Given the "
+        "messages in an email thread (oldest first), produce a short, neutral "
+        "summary in pure JSON.\n"
+        "Rules: Output JSON ONLY, no prose, no markdown fences. Match the schema "
+        "exactly. Do not invent facts not present in the thread — if a message's "
+        "content is unclear or truncated, summarize only what's actually there."
+    )
+    user_prompt = (
+        f"Thread ({len(messages)} message{'s' if len(messages) != 1 else ''}):\n{thread_text}\n\n"
+        '\nSchema:\n{"summary": "string", "key_points": ["string"]}\n'
+        "Return the JSON object now."
+    )
+    return _call_structured_ai(system, user_prompt, default, max_tokens=800)
+
+
+def ai_draft_reply(thread_context: str, instruction: str) -> dict:
+    """thread_context: the same oldest-first thread text ai_summarize_thread
+    builds. instruction: the user's free-text steering ("decline politely",
+    "confirm and ask for the deck", etc.).
+    {"subject", "body_text"} + metadata."""
+    default = {"subject": "", "body_text": ""}
+    system = (
+        "You are Zoiko Sema's email reply-drafting assistant. Given an email "
+        "thread and the user's instruction for how to reply, draft a reply in "
+        "pure JSON.\n"
+        "Rules: Output JSON ONLY, no prose, no markdown fences. Match the schema "
+        "exactly. body_text is plain text (no HTML). Write only what the "
+        "instruction asks for — do not add commitments, dates, or facts the "
+        "thread/instruction didn't provide. This draft is reviewed by a human "
+        "before it is ever sent, and separately scanned for sensitive content — "
+        "still, never fabricate specifics you weren't given."
+    )
+    user_prompt = (
+        f"Thread:\n{thread_context}\n\nInstruction: {instruction}\n\n"
+        '\nSchema:\n{"subject": "string", "body_text": "string"}\n'
+        "Return the JSON object now."
+    )
+    return _call_structured_ai(system, user_prompt, default, max_tokens=800)
+
+
+# ── Sema Calendar & Mail — executive briefing across Work Graph (Phase 4
+# slice 4) ───────────────────────────────────────────────────────────────
+# Spec §13.1 Phase 4 AI workflow row. The first AI feature reading a
+# cross-category context (calendar + tasks + mail) assembled by the Work
+# Graph rather than one node type at a time — see app/connect/briefing/
+# service.py for the assembly; this stays "call Claude, get structured
+# output back," same as every function above.
+
+def ai_generate_executive_briefing(context: str) -> dict:
+    """context: pre-assembled free text describing upcoming events, open
+    tasks, and mail assigned to the user, each annotated with its real
+    Work Graph provenance where one exists.
+    {"headline", "priorities": [...], "at_risk_items": [...]} + metadata."""
+    default = {"headline": "", "priorities": [], "at_risk_items": []}
+    system = (
+        "You are Zoiko Sema's executive briefing assistant. Given a user's "
+        "upcoming calendar events, open tasks, and mail items assigned to "
+        "them (with cross-references where one item was derived from "
+        "another), produce a short briefing in pure JSON.\n"
+        "Rules: Output JSON ONLY, no prose, no markdown fences. Match the "
+        "schema exactly. headline is one sentence. priorities are the 3-5 "
+        "most time-sensitive items, referencing their real titles/subjects "
+        "from the context. at_risk_items are things with no clear owner or "
+        "next step, or empty if none. Do not invent items not present in "
+        "the context."
+    )
+    user_prompt = (
+        f"Context:\n{context}\n\n"
+        '\nSchema:\n{"headline": "string", "priorities": ["string"], "at_risk_items": ["string"]}\n'
+        "Return the JSON object now."
+    )
+    return _call_structured_ai(system, user_prompt, default, max_tokens=800)
+
+
 def ai_generate_intelligence(
     chat_log: list[dict],
     meeting_title: str = "Meeting",

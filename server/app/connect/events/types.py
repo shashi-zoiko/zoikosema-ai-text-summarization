@@ -56,6 +56,11 @@ MAIL_MESSAGE_SYNCED = "mail.message.synced.v1"
 # /service.py). Add one when a real consumer needs it.
 SETTINGS_POLICY_VERSIONED = "settings.policy.versioned.v1"
 
+# Mail governance settings (DLP keyword list + delayed-send buffer bounds,
+# Phase 4 slice) — same "no real Observability consumer yet" precedent as
+# SETTINGS_POLICY_VERSIONED above; still emitted for parity/future use.
+SETTINGS_MAIL_GOVERNANCE_VERSIONED = "settings.mail_governance.versioned.v1"
+
 # Action Review Queue plane (Sema Calendar & Mail, spec §12.2 — Phase 2
 # slice 2). AGENT_ACTION_CREATED matches spec's canonical name even though
 # this MVP's staged items may be human- or agent-drafted — the queue
@@ -68,3 +73,24 @@ ACTION_REVIEW_APPROVED = "action_review.approved.v1"
 ACTION_REVIEW_REJECTED = "action_review.rejected.v1"
 ACTION_REVIEW_REDRAFT_REQUESTED = "action_review.redraft_requested.v1"
 ACTION_REVIEW_ESCALATED = "action_review.escalated.v1"
+
+# Mail send plane (Sema Calendar & Mail, spec §12.2 — Phase 3 slice 9, the
+# first L3 feature: agent/human sends within a cancellable delay window).
+MAIL_SEND_BUFFERED = "mail.send.buffered.v1"
+MAIL_SEND_CANCELLED = "mail.send.cancelled.v1"
+MAIL_SEND_RELEASED = "mail.send.released.v1"
+MAIL_SEND_FAILED = "mail.send.failed.v1"
+
+# Mail AI plane (Sema Calendar & Mail, spec §12.2 — Phase 3 slice 8). Fires
+# whenever a reply draft is prepared (L1 direct-return or L2 staged) — spec
+# names this event explicitly; this is its first real producer.
+MAIL_DRAFT_PREPARED = "mail.draft.prepared.v1"
+
+# Shared mailbox / delegated access plane (spec §10.1 — Phase 4 slice 1).
+MAILBOX_DELEGATE_GRANTED = "mailbox_delegate.granted.v1"
+MAILBOX_DELEGATE_REVOKED = "mailbox_delegate.revoked.v1"
+
+# Mail assignment / internal notes plane (spec §1.2 — Phase 4 slice 2).
+MAIL_ASSIGNMENT_CREATED = "mail.assignment.created.v1"
+MAIL_ASSIGNMENT_STATUS_CHANGED = "mail.assignment.status_changed.v1"
+MAIL_NOTE_ADDED = "mail.note.added.v1"

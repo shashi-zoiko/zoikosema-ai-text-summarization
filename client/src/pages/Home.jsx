@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom'
 import { meetingPath, meetingUrl, meetingShareText } from '../lib/meetingUrls.js'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  Activity, ArrowRight, Calendar, Check, CheckCircle2, ChevronDown, Copy,
-  Info, Link2, Lock, Plus, Sparkles, Users2, Video,
+  Activity, AlertTriangle, ArrowRight, Calendar, Check, CheckCircle2, ChevronDown, Copy,
+  Info, Link2, ListChecks, Lock, Plus, Sparkles, Users2, Video,
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -456,6 +456,18 @@ export default function Home() {
         </motion.div>
       </motion.section>
 
+      {/* ============ Executive briefing (Phase 4 slice 4) ============ */}
+      <motion.section
+        variants={stagger(0.06)}
+        initial="initial"
+        animate="animate"
+        className="mt-4"
+      >
+        <motion.div variants={fadeUp}>
+          <ExecutiveBriefingPanel />
+        </motion.div>
+      </motion.section>
+
       {/* ============ New-meeting dropdown (portal) ============ */}
       {createPortal(
         <AnimatePresence>
@@ -661,6 +673,76 @@ function EmptyHint({ icon, text }) {
       </span>
       <p className="text-[12.5px] text-[var(--c-fg-muted)]">{text}</p>
     </div>
+  )
+}
+
+/* Executive briefing (Phase 4 slice 4, spec §13.1) — the first AI feature
+ * reading across Work Graph node types (calendar + tasks + mail) rather
+ * than one at a time. Pure read, on-demand (no scheduled digest — see the
+ * slice's own "explicitly out of scope"), fetched once per Home visit. */
+function ExecutiveBriefingPanel() {
+  const [state, setState] = useState({ loading: true, data: null, error: null })
+
+  useEffect(() => {
+    let cancelled = false
+    api('/api/connect/briefing/executive')
+      .then((data) => { if (!cancelled) setState({ loading: false, data, error: null }) })
+      .catch((err) => { if (!cancelled) setState({ loading: false, data: null, error: err.message }) })
+    return () => { cancelled = true }
+  }, [])
+
+  return (
+    <Panel>
+      <div className="flex items-center gap-2">
+        <Sparkles className="h-[18px] w-[18px] text-[var(--c-brand)]" />
+        <span className="text-[15px] font-semibold tracking-tight">Executive briefing</span>
+      </div>
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--c-fg-muted)]">
+        Upcoming meetings, open tasks, and mail assigned to you — with real provenance where one item came from another.
+      </p>
+
+      {state.loading && <div className="mt-4 text-[12.5px] text-[var(--c-fg-muted)]">Loading…</div>}
+      {!state.loading && state.error && (
+        <div className="mt-4 text-[12.5px] text-[var(--c-danger)]">{state.error}</div>
+      )}
+      {!state.loading && state.data && (
+        <div className="mt-3 space-y-3">
+          {state.data.headline && (
+            <p className="text-[13.5px] font-medium text-[var(--c-fg)]">{state.data.headline}</p>
+          )}
+          {state.data._error && (
+            <p className="text-[12px] text-[var(--c-fg-muted)]">({state.data._error})</p>
+          )}
+          {state.data.priorities?.length > 0 && (
+            <div>
+              <div className="mb-1 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">
+                <ListChecks className="h-3 w-3" /> Priorities
+              </div>
+              <ul className="space-y-1">
+                {state.data.priorities.map((p, i) => (
+                  <li key={i} className="text-[12.5px] text-[var(--c-fg-dim)]">{p}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {state.data.at_risk_items?.length > 0 && (
+            <div>
+              <div className="mb-1 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--c-fg-muted)]">
+                <AlertTriangle className="h-3 w-3" /> At risk
+              </div>
+              <ul className="space-y-1">
+                {state.data.at_risk_items.map((p, i) => (
+                  <li key={i} className="text-[12.5px] text-[var(--c-fg-dim)]">{p}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {!state.data.headline && !state.data.priorities?.length && !state.data.at_risk_items?.length && (
+            <EmptyHint icon={<Sparkles />} text="Nothing needs your attention right now." />
+          )}
+        </div>
+      )}
+    </Panel>
   )
 }
 

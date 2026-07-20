@@ -161,7 +161,15 @@ async def create_event(
     timezone_name: str = "UTC", description: str | None = None, location: str | None = None,
     attendees: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None,
     confidentiality_class: str = "standard", rrule: str | None = None,
+    source_message_id: str | None = None,
 ) -> dict[str, Any]:
+    """`source_message_id` (Phase 3 slice 10): set when this create is a
+    governed email-to-meeting conversion — carried through the L2 staged
+    payload (if staging applies) so the Work Graph derived_from edge
+    (Email->CalendarEvent) can still be written once a staged proposal is
+    approved and materialized, not just on the direct-create path. Kept out
+    of the calendar event's own persisted fields (`_parsed`/`_insert_version`
+    never see it) since it's Work Graph provenance, not calendar data."""
     attendees = attendees or []
     resources = resources or []
     _validate_fields(title=title, start_at=start_at, end_at=end_at, confidentiality_class=confidentiality_class)
@@ -180,14 +188,18 @@ async def create_event(
         staged = await action_review.stage_action(
             db, ctx,
             action_type=CALENDAR_EVENT_CREATE_ACTION,
-            action_payload=payload,
+            action_payload={**payload, "source_message_id": source_message_id},
             policy_verdicts={"autonomy": resolved.level},
             blast_radius={"attendees": [a.get("email") for a in attendees if a.get("email")]},
             rollback_descriptor="no_rollback",  # nothing exists yet to roll back on a rejected create
+            policy_version_id=policy_engine.get_current_version_id(db, ctx, category="calendar"),
         )
         return {"staged": True, "review_item": staged}
 
     event = _insert_version(db, ctx, version_chain_id=uuid7_str(), version_number=1, status="confirmed", **_parsed(payload))
+    _link_attendees_to_work_graph(db, ctx, event)
+    if source_message_id:
+        _link_email_conversion_to_work_graph(db, ctx, event, source_message_id)
     env = _emit_mutated(db, ctx, event, action="created")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -207,11 +219,16 @@ async def create_event_from_approved_proposal(db: DbSession, ctx: TenantContext,
     if item.status != "approved":
         raise Conflict(f"Item is '{item.status}', not 'approved' — cannot materialize")
 
-    p = item.action_payload
+    p = dict(item.action_payload)
+    source_message_id = p.pop("source_message_id", None)
     event = _insert_version(
         db, ctx, version_chain_id=uuid7_str(), version_number=1, status="confirmed",
         **_parsed(p),
     )
+    _link_attendees_to_work_graph(db, ctx, event)
+    if source_message_id:
+        _link_email_conversion_to_work_graph(db, ctx, event, source_message_id)
+    _link_agent_action_mutation_to_work_graph(db, ctx, item_id=item.id, event=event)
     env = _emit_mutated(db, ctx, event, action="created")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -305,6 +322,7 @@ async def update_event(
         db, ctx, version_chain_id=version_chain_id, version_number=version_number + 1,
         status="confirmed", recurrence_id=recurrence_id, **merged,
     )
+    _link_attendees_to_work_graph(db, ctx, event)
     env = _emit_mutated(db, ctx, event, action="updated")
     db.commit()
     await publish(env, topic=f"tenant:{ctx.tenant_id}")
@@ -467,6 +485,70 @@ def _insert_version(
     return event
 
 
+def _link_attendees_to_work_graph(db: DbSession, ctx: TenantContext, event: NativeCalendarEvent) -> None:
+    """Work Graph attendee_of edge (Person->CalendarEvent, spec §3.2), Phase
+    3 slice 7. Local (function-scoped) import: work_graph/service.py imports
+    this module (native_events) to resolve calendar_event nodes, so a
+    top-of-file import here would be a circular import at module load time
+    — deferring it until this function actually runs breaks the cycle since
+    both modules are already fully loaded by then. Only attendees who are
+    registered users resolve to a Person node; external attendees have no
+    Person node to link to yet, same as mail_service's sender-linking."""
+    from app.connect.work_graph import service as work_graph
+    from app.models.user import User
+
+    for attendee in event.attendees or []:
+        email = attendee.get("email")
+        if not email:
+            continue
+        user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            continue
+        work_graph.create_edge(
+            db, ctx, edge_type="attendee_of",
+            from_node_type="person", from_node_id=str(user.id),
+            to_node_type="calendar_event", to_node_id=event.version_chain_id,
+        )
+
+
+def _link_email_conversion_to_work_graph(
+    db: DbSession, ctx: TenantContext, event: NativeCalendarEvent, message_id: str,
+) -> None:
+    """Work Graph derived_from edge (CalendarEvent->Email, spec §3.2), Phase
+    3 slice 10 — the email-to-meeting conversion's provenance link, written
+    at creation time (materialize or approved-proposal-materialize) rather
+    than backfilled, since Work Graph already exists by the time this
+    slice landed (unlike Phase 2 slice 8's Task edges, which predated it).
+    Same local-import-to-break-cycle reasoning as
+    _link_attendees_to_work_graph above."""
+    from app.connect.work_graph import service as work_graph
+
+    work_graph.create_edge(
+        db, ctx, edge_type="derived_from",
+        from_node_type="calendar_event", from_node_id=event.version_chain_id,
+        to_node_type="email", to_node_id=message_id,
+    )
+
+
+def _link_agent_action_mutation_to_work_graph(
+    db: DbSession, ctx: TenantContext, *, item_id: str, event: NativeCalendarEvent,
+) -> None:
+    """Work Graph mutated edge (AgentAction->CalendarEvent, spec §3.2:
+    "Blast-radius analysis"), Phase 3/4 governance pass. Only called from
+    create_event_from_approved_proposal — the direct-create path (L0/L1,
+    no staging) has no AgentAction/ReviewQueueItem row to link from at all.
+    Same local-import-to-break-cycle reasoning as the two helpers above
+    (not `_emit_mutated`, a same-named-by-coincidence function a few lines
+    down that emits the CALENDAR_EVENT_MUTATED domain event — unrelated)."""
+    from app.connect.work_graph import service as work_graph
+
+    work_graph.create_edge(
+        db, ctx, edge_type="mutated",
+        from_node_type="agent_action", from_node_id=item_id,
+        to_node_type="calendar_event", to_node_id=event.version_chain_id,
+    )
+
+
 def _emit_mutated(db: DbSession, ctx: TenantContext, event: NativeCalendarEvent, *, action: str) -> EventEnvelope:
     """Audits + enqueues the mutation and returns the envelope so the caller
     publishes the SAME envelope (same id) after commit — building it twice
@@ -567,12 +649,18 @@ def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str)
     is_confidential = event.confidentiality_class == "confidential"
 
     for email in emails:
-        placehold = is_confidential and _is_external_attendee(db, event, email)
+        is_external = _is_external_attendee(db, event, email)
+        placehold = is_confidential and is_external
         title = CONFIDENTIAL_PLACEHOLDER_TITLE if placehold else event.title
         description = CONFIDENTIAL_PLACEHOLDER_DESCRIPTION if placehold else event.description
+        # The /calendar/{id} view is behind org auth (Phase 2 slice 9's
+        # CalendarView) with no public/guest mode yet — an external attendee
+        # clicking it hits a 403, not a working page. Keep the .ics attachment
+        # (their own calendar app still works) but drop the dead web link.
+        attendee_join_url = None if is_external else join_url
 
         ics_data = generate_ics(
-            title=title, meeting_code=event.version_chain_id, join_url=join_url,
+            title=title, meeting_code=event.version_chain_id, join_url=attendee_join_url,
             scheduled_at=event.start_at, duration_minutes=duration_minutes,
             organizer_name=organizer_name, organizer_email=organizer_email,
             attendee_email=email, description=description,
@@ -586,7 +674,7 @@ def _notify_attendees(db: DbSession, event: NativeCalendarEvent, *, method: str)
         else:
             send_meeting_invite_email(
                 to_email=email, inviter_name=organizer_name, meeting_title=title,
-                meeting_code=event.version_chain_id, join_url=join_url,
+                meeting_code=event.version_chain_id, join_url=attendee_join_url,
                 scheduled_at=scheduled_str, ics_data=ics_data,
             )
 

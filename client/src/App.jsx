@@ -30,8 +30,10 @@ const MeetingIntelligence = lazy(() => import('./pages/MeetingIntelligence.jsx')
 const OrgSettings = lazy(() => import('./pages/OrgSettings.jsx'))
 const AccountSettings = lazy(() => import('./pages/AccountSettings.jsx'))
 const CalendarIntegrations = lazy(() => import('./pages/CalendarIntegrations.jsx'))
+const Inbox = lazy(() => import('./pages/Inbox.jsx'))
 const CalendarView = lazy(() => import('./pages/CalendarView.jsx'))
 const ReviewQueue = lazy(() => import('./pages/ReviewQueue.jsx'))
+const Governance = lazy(() => import('./pages/Governance.jsx'))
 const Admin = lazy(() => import('./pages/Admin.jsx'))
 const Billing = lazy(() => import('./pages/Billing.jsx'))
 const HelpSupport = lazy(() => import('./pages/HelpSupport.jsx'))
@@ -111,13 +113,28 @@ function RedirectIfAuthed({ children }) {
   return children
 }
 
+// Meeting codes look like xxx-xxxx-xxx (lowercase + hyphens) — same shape
+// GlobalSearch.jsx uses to recognize them. /:code, /:code/room-lk,
+// /:code/left, /:code/intelligence and the legacy /meet/:code… aliases are
+// all "in the meet", not the dashboard, so Sema Guide is hidden there.
+const MEETING_CODE_RE = /^[a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3}$/i
+
+function isMeetingRoute(pathname) {
+  const segments = pathname.split('/').filter(Boolean)
+  const first = segments[0] === 'meet' ? segments[1] : segments[0]
+  return !!first && MEETING_CODE_RE.test(first)
+}
+
 export default function App() {
+  const location = useLocation()
+  const inMeeting = isMeetingRoute(location.pathname)
+
   return (
     <>
     <UpdateToast />
     <CallOverlay />
-    <SemaGuidePanel />
-    <SemaGuideToggle />
+    {!inMeeting && <SemaGuidePanel />}
+    {!inMeeting && <SemaGuideToggle />}
     <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route
@@ -205,11 +222,14 @@ export default function App() {
           <Route path="/ai-summaries" element={<Dashboard />} />
           <Route path="/scheduled" element={<ScheduledMeetings />} />
           <Route path="/calendar" element={<CalendarView />} />
+          <Route path="/calendar/:versionChainId" element={<CalendarView />} />
           <Route path="/:code/intelligence" element={<MeetingIntelligence />} />
           <Route path="/org/:slug" element={<OrgSettings />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/calendar" element={<CalendarIntegrations />} />
+          <Route path="/mail" element={<Inbox />} />
           <Route path="/review-queue" element={<ReviewQueue />} />
+          <Route path="/governance" element={<RequireAdmin><Governance /></RequireAdmin>} />
           <Route path="/security" element={<AccountSettings section="security" />} />
           <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
           {/* Billing exposes tenant-wide commercial data + destructive controls.

@@ -110,8 +110,10 @@ class Task(ConnectBase):
     Graph doesn't exist until Phase 3 slice 1; this column is exactly what
     backfills a real derived_from edge then.
 
-    Ordinary mutable table (ai_workflows.py explains why full task version-
-    history/rollback per spec §5.2's Task row isn't built in this slice).
+    Ordinary mutable table — stays that way even with version history
+    (see TaskVersion below and migrations/connect_v3_024_task_versions.sql
+    for why Task itself isn't converted into a version-chain like
+    NativeCalendarEvent).
     """
     __tablename__ = "connect_tasks"
     __table_args__ = {"extend_existing": True}
@@ -128,3 +130,23 @@ class Task(ConnectBase):
     correlation_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class TaskVersion(ConnectBase):
+    """connect_task_versions — append-only snapshot history for a Task,
+    keyed by Task's own stable id (spec §5.2's Task row: "restore previous
+    task version"). See migrations/connect_v3_024_task_versions.sql for why
+    this is a side history table rather than converting Task itself into a
+    version-chain like NativeCalendarEvent."""
+    __tablename__ = "connect_task_versions"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(UUID(as_uuid=False), primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    task_id = Column(UUID(as_uuid=False), nullable=False)
+    version_number = Column(Integer, nullable=False)
+    title = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    priority = Column(String, nullable=False)
+    assignee_email = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))

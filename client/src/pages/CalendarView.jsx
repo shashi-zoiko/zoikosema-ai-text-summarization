@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   AlertTriangle, ChevronLeft, ChevronRight, MapPin, Pencil, Plus, Search, Trash2, Users2, Video, X,
 } from 'lucide-react'
@@ -239,6 +239,26 @@ function extractMeetingCode(location) {
   return location?.match(MEETING_CODE_RE)?.[1] || null
 }
 
+// Shared between the range-fetch merge below and the calendar-invite email
+// deep link (/calendar/:versionChainId), which fetches a single event by ID
+// instead of a date range.
+function mapNativeEvent(e) {
+  return {
+    key: `native-${e.id}`,
+    versionChainId: e.version_chain_id,
+    title: e.title,
+    start: new Date(e.start_at),
+    end: new Date(e.end_at),
+    allDay: false,
+    location: e.location,
+    description: e.description,
+    attendees: e.attendees || [],
+    source: 'native',
+    confidentiality: e.confidentiality_class,
+    status: e.status,
+  }
+}
+
 // Shared by the main view-range fetch and search's wider one-off fetch —
 // same merge (external sync + native events + recurring-series expansion)
 // either way, just a different [rangeStart, rangeEnd] window.
@@ -277,20 +297,7 @@ async function fetchMergedEvents(rangeStart, rangeEnd) {
       provider: e.provider,
       status: e.status,
     })),
-    ...nonRecurring.map((e) => ({
-      key: `native-${e.id}`,
-      versionChainId: e.version_chain_id,
-      title: e.title,
-      start: new Date(e.start_at),
-      end: new Date(e.end_at),
-      allDay: false,
-      location: e.location,
-      description: e.description,
-      attendees: e.attendees || [],
-      source: 'native',
-      confidentiality: e.confidentiality_class,
-      status: e.status,
-    })),
+    ...nonRecurring.map(mapNativeEvent),
     ...occurrenceLists.flatMap((occs, i) =>
       occs.map((o) => ({
         key: `native-${recurring[i].version_chain_id}-${o.recurrence_id || o.start_at}`,
@@ -324,12 +331,15 @@ function weekLabel(days) {
 
 export default function CalendarView() {
   const { toast } = useToast()
+  const navigate = useNavigate()
+  const { versionChainId } = useParams()
   const [mode, setMode] = useState('week') // 'week' | 'month'
   const [cursor, setCursor] = useState(() => new Date())
   const [now, setNow] = useState(() => new Date()) // ticks so the current-time line stays fresh
   const [events, setEvents] = useState(null) // null = loading
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState(null)
+  const [deepLinkError, setDeepLinkError] = useState(null)
   const [editing, setEditing] = useState(null) // the native event being edited, or null
   const [showCreate, setShowCreate] = useState(null) // null | { date, startTime, endTime }
   const [searchQuery, setSearchQuery] = useState('')
@@ -340,6 +350,32 @@ export default function CalendarView() {
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000)
     return () => clearInterval(t)
+  }, [])
+
+  // Pull fresh events from any connected calendar provider once per mount —
+  // sync_calendar only ever runs when something calls POST .../calendar/sync
+  // (the OAuth callback now does this once right after connect, but that
+  // doesn't cover events added to the provider's calendar afterward). Not
+  // per view-range change: that would fire a provider API call on every
+  // prev/next click for no benefit, since sync always pulls the same fixed
+  // ±7/90-day window regardless of what's currently on screen.
+  const [syncVersion, setSyncVersion] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    api('/api/connect/provider-connections')
+      .then((connections) => {
+        const calendarProviders = connections
+          .filter((c) => ['google_calendar', 'microsoft_calendar'].includes(c.provider) && c.status === 'active')
+          .map((c) => c.provider)
+        return Promise.all(
+          calendarProviders.map((provider) =>
+            api('/api/connect/calendar/sync', { method: 'POST', body: { provider } }).catch(() => null),
+          ),
+        )
+      })
+      .then(() => { if (!cancelled) setSyncVersion((v) => v + 1) })
+      .catch(() => {})
+    return () => { cancelled = true }
   }, [])
 
   const viewDays = useMemo(() => {
@@ -365,7 +401,26 @@ export default function CalendarView() {
       .catch((err) => { if (!cancelled) { setError(err.message); setEvents([]) } })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, cursor])
+  }, [mode, cursor, syncVersion])
+
+  // Calendar-invite email deep link (/calendar/:versionChainId) — fetches the
+  // one event by ID rather than relying on it already being in the currently
+  // loaded date range, then jumps the grid to it and opens its detail modal.
+  useEffect(() => {
+    if (!versionChainId) return
+    let cancelled = false
+    setDeepLinkError(null)
+    api(`/api/connect/calendar/native-events/${encodeURIComponent(versionChainId)}`)
+      .then((e) => {
+        if (cancelled) return
+        const ev = mapNativeEvent(e)
+        setCursor(new Date(ev.start.getFullYear(), ev.start.getMonth(), ev.start.getDate()))
+        setMode('day')
+        setSelected(ev)
+      })
+      .catch((err) => { if (!cancelled) setDeepLinkError(err.message) })
+    return () => { cancelled = true }
+  }, [versionChainId])
 
   const eventsByDay = useMemo(() => {
     const map = new Map()
@@ -529,6 +584,12 @@ export default function CalendarView() {
         </div>
       )}
 
+      {deepLinkError && (
+        <div className="mb-4 rounded-[10px] border border-[color-mix(in_srgb,var(--c-danger)_30%,var(--c-line))] px-4 py-3 text-[13.5px] text-[var(--c-danger)]">
+          Couldn't open that invite — {deepLinkError}. It may have been deleted, or you may not have access to it.
+        </div>
+      )}
+
       {events === null ? (
         <div className="flex items-center justify-center rounded-[14px] border border-[var(--c-line)] bg-[var(--c-bg-1)] py-16">
           <Spinner size="lg" />
@@ -559,7 +620,10 @@ export default function CalendarView() {
         event={selected}
         colorId={selected ? eventColors[colorKeyFor(selected)] : null}
         onColorChange={setEventColor}
-        onClose={() => setSelected(null)}
+        onClose={() => {
+          setSelected(null)
+          if (versionChainId) navigate('/calendar', { replace: true })
+        }}
         onEdit={(ev) => { setSelected(null); setEditing(ev) }}
         onDelete={onDelete}
       />
