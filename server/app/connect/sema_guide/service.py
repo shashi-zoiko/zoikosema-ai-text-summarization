@@ -47,7 +47,7 @@ def chat(
     surface: str | None = None,
     page_route: str | None = None,
 ) -> GuideChatResponse:
-    MAX_MESSAGE_LENGTH = 2000
+    MAX_MESSAGE_LENGTH = 500
     if len(message) > MAX_MESSAGE_LENGTH:
         return GuideChatResponse(
             response=f"Message too long ({len(message)} chars). Please keep messages under {MAX_MESSAGE_LENGTH} characters.",

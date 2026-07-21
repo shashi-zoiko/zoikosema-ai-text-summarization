@@ -1,7 +1,7 @@
 import { ArrowUp } from 'lucide-react'
 import { useSemaGuide } from './store'
 
-const MAX_CHARS = 2000
+const MAX_CHARS = 500
 
 export default function GuideComposer() {
   const { input, setInput, sendMessage, loading, supportState } = useSemaGuide()
