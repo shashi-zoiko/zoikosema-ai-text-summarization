@@ -5,6 +5,8 @@ import {
   MoreVertical, Phone, Settings, Smile, Sparkles, Square, Users, Video, VideoOff,
 } from 'lucide-react'
 import Emoji from '../../features/emoji/Emoji'
+import { useMoreMenuV2 } from '../../features/meeting/more/flags.js'
+import MoreMenuRoot from '../../features/meeting/more/MoreMenuRoot.jsx'
 
 /**
  * Meeting control dock — a single floating dark capsule centred over the stage.
@@ -40,6 +42,7 @@ function MeetingDock({
   leave,
 }) {
   const [showMore, setShowMore] = useState(false)
+  const moreV2 = useMoreMenuV2()
   const sharingBlocked = !screenOn && !screenshareEnabled && !isHostOrCohost
 
   return (
@@ -153,20 +156,26 @@ function MeetingDock({
           </RoundBtn>
         </div>
 
-        <MoreMenu
-          open={showMore}
-          setOpen={setShowMore}
-          isRecording={isRecording}
-          startRecording={startRecording}
-          stopRecording={stopRecording}
-          isHostOrCohost={isHostOrCohost}
-          layout={layout}
-          toggleLayout={toggleLayout}
-          sidebar={sidebar}
-          setSidebar={setSidebar}
-          openBackgrounds={openBackgrounds}
-          onInfo={onInfo}
-        />
+        {/* More options — v2 (behind meeting.more_v2) mounts through the shared
+            OverlayHost; OFF falls back to the legacy overflow menu unchanged. */}
+        {moreV2 ? (
+          <MoreMenuRoot />
+        ) : (
+          <MoreMenu
+            open={showMore}
+            setOpen={setShowMore}
+            isRecording={isRecording}
+            startRecording={startRecording}
+            stopRecording={stopRecording}
+            isHostOrCohost={isHostOrCohost}
+            layout={layout}
+            toggleLayout={toggleLayout}
+            sidebar={sidebar}
+            setSidebar={setSidebar}
+            openBackgrounds={openBackgrounds}
+            onInfo={onInfo}
+          />
+        )}
 
         {/* leave — a touch of separation from the cluster, like Meet */}
         <span aria-hidden className="w-1.5" />
