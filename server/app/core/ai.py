@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from app.core.config import get_settings
@@ -353,6 +354,84 @@ def _format_chat_log(chat_log: list[dict], limit: int = 800) -> str:
     return "\n".join(lines) if lines else "(no chat activity)"
 
 
+# A meeting long/chatty enough to cross this many transcript lines risks
+# _format_chat_log's own head+tail trim above silently dropping real
+# middle-meeting content. Past this point we condense in chunks instead
+# (map), then hand the already-condensed recap to the EXISTING full-schema
+# prompt below (reduce) rather than inventing a second schema to maintain.
+# Typical meetings never cross this and take the unchanged single-shot path.
+_CHUNK_TRIGGER_MESSAGES = 800
+_CHUNK_SIZE = 400
+
+
+def _chunk_messages(chat_log: list[dict], size: int) -> list[list[dict]]:
+    return [chat_log[i:i + size] for i in range(0, len(chat_log), size)]
+
+
+def _condense_via_chunking(
+    chat_log: list[dict],
+    meeting_title: str,
+    language: str,
+    client,
+    is_groq: bool,
+    model: str,
+) -> str:
+    """Map-reduce condensing for a transcript too long to summarize in one
+    pass without risking silent content loss. Each chunk gets a focused,
+    dedicated recap (map); the caller feeds the CONCATENATED recaps into the
+    existing full-schema prompt in place of the raw transcript (reduce) —
+    same JSON schema/table logic as the normal path, just working over
+    already-condensed material instead of one giant raw transcript.
+
+    Best-effort: a chunk whose recap call fails is skipped (logged) rather
+    than aborting the whole summary — partial coverage beats none.
+
+    Chunks are summarized CONCURRENTLY, not one after another — they're
+    fully independent, so a sequential loop would multiply each call's
+    network+generation latency by the chunk count for no reason (5 chunks at
+    ~3s each = ~15s of pure serial waiting). A thread pool caps the whole map
+    phase at roughly the slowest single chunk instead. Safe to block on here:
+    the caller is a sync FastAPI route already running on a worker thread, and
+    these SDK calls are blocking HTTP, not asyncio-based.
+    """
+    chunks = _chunk_messages(chat_log, _CHUNK_SIZE)
+
+    def summarize_one(numbered_chunk: tuple[int, list[dict]]) -> str:
+        idx, chunk = numbered_chunk
+        text = _format_chat_log(chunk)
+        prompt = (
+            f"This is segment {idx} of {len(chunks)} from a longer meeting transcript "
+            f"titled \"{meeting_title}\". Condense it into a short plain-text recap: "
+            "topics covered, decisions made, action items raised (with owner if named), "
+            "risks/concerns raised, and any notable quotes — each attributed to the "
+            "speaker who said it. Do not invent anything not in this segment. "
+            f"Write the recap in {language}.\n\nSegment transcript:\n{text}"
+        )
+        try:
+            if is_groq:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=700,
+                )
+                return resp.choices[0].message.content if resp.choices else ""
+            resp = client.messages.create(
+                model=model, max_tokens=700,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return resp.content[0].text if resp.content else ""
+        except Exception:
+            log.exception("chunk condensing failed for segment %d/%d", idx, len(chunks))
+            return ""
+
+    with ThreadPoolExecutor(max_workers=min(len(chunks), 6)) as pool:
+        # pool.map preserves input order in its results, so segments still
+        # come back chronological even though they ran out of order.
+        segments = list(pool.map(summarize_one, enumerate(chunks, start=1)))
+
+    return "\n\n".join(f"[Segment {i + 1}]\n{s}" for i, s in enumerate(segments) if s and s.strip())
+
+
 def _auto_table(result: dict):
     """Ensure `tables` is always exactly the 3 fixed types (task_tracker,
     resource_allocation, risk_matrix), in order, with fixed columns.
@@ -665,7 +744,12 @@ def ai_generate_intelligence(
         return result
 
     settings = get_settings()
-    convo = _format_chat_log(chat_log)
+    is_groq = settings.ai_provider == "groq"
+    convo = (
+        _format_chat_log(chat_log)
+        if len(chat_log) <= _CHUNK_TRIGGER_MESSAGES
+        else _condense_via_chunking(chat_log, meeting_title, language, client, is_groq, settings.ai_model)
+    )
     roster = ""
     if participants:
         roster = "Participants: " + ", ".join(
@@ -729,8 +813,6 @@ def ai_generate_intelligence(
         f"Chat log (oldest first):\n{convo}\n\n"
         "Return the JSON object now."
     )
-
-    is_groq = settings.ai_provider == "groq"
 
     try:
         if is_groq:
@@ -876,7 +958,12 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         return result
 
     settings = get_settings()
-    convo = _format_chat_log(transcript)
+    model = _groq_model(settings)
+    convo = (
+        _format_chat_log(transcript)
+        if len(transcript) <= _CHUNK_TRIGGER_MESSAGES
+        else _condense_via_chunking(transcript, meeting_title, language, client, True, model)
+    )
 
     system = (
         "You are ZoikoSema's post-meeting summarizer. Read a meeting's spoken "
@@ -934,7 +1021,6 @@ def groq_summarize_transcript(transcript: list[dict], meeting_title: str = "Meet
         "Return the JSON object now."
     )
 
-    model = _groq_model(settings)
     try:
         response = client.chat.completions.create(
             model=model,

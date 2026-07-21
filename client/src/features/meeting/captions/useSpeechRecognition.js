@@ -41,13 +41,65 @@ export default function useSpeechRecognition(active, { lang, onResult, onError }
     // of silently losing it — see the onend comment below for why that
     // matters. Cleared whenever a real final arrives for the same phrase.
     let pendingInterim = ''
+    // Retry bookkeeping for restart(): a bare `rec.start()` throws if the
+    // engine hasn't fully released the previous session yet (a real race on
+    // rapid onend→start, tab wake from sleep, etc.). Swallowing that
+    // silently — the old behaviour — left recognition dead until something
+    // else (e.g. a mic re-toggle) happened to remount the hook, so every word
+    // spoken in that gap was simply never transcribed. Retrying with a short
+    // backoff instead keeps actual STT coverage close to continuous.
+    let retryTimer = null
+    let retryAttempt = 0
+    const MAX_RETRY_MS = 2000
+    // Some engine versions can go quiet mid-session — no result, no error, no
+    // onend — after a device sleep/wake, Bluetooth headset switch, or OS audio
+    // hiccup. Nothing above would ever notice, since everything hinges on an
+    // event that never comes. A liveness watchdog forces a hard reset if too
+    // long has passed without ANY engine event while we expect to be listening.
+    let lastEventAt = Date.now()
+    const WATCHDOG_CHECK_MS = 4000
+    const WATCHDOG_STALL_MS = 15000
+
     const rec = new SpeechRecognitionImpl()
     rec.lang = lang || 'en-US'
     rec.continuous = true
     rec.interimResults = true
     rec.maxAlternatives = 1
 
+    const clearRetry = () => {
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
+    }
+
+    const restart = () => {
+      if (terminated || !activeRef.current) return
+      try {
+        rec.start()
+        retryAttempt = 0
+      } catch {
+        // Already starting/running, or the browser hasn't released the mic
+        // yet — back off and try again rather than giving up permanently.
+        // A little jitter keeps many participants recovering from the same
+        // blip (e.g. a shared network hiccup) from all retrying in lockstep.
+        const delay = Math.min(300 * 2 ** retryAttempt, MAX_RETRY_MS) + Math.random() * 100
+        retryAttempt += 1
+        clearRetry()
+        retryTimer = setTimeout(restart, delay)
+      }
+    }
+
+    const watchdog = setInterval(() => {
+      if (terminated || !activeRef.current) return
+      if (Date.now() - lastEventAt > WATCHDOG_STALL_MS) {
+        lastEventAt = Date.now() // avoid re-firing every tick while it recovers
+        try { rec.abort() } catch { /* onend (if it ever fires) will restart us */ }
+      }
+    }, WATCHDOG_CHECK_MS)
+
+    rec.onstart = () => { lastEventAt = Date.now() }
+
     rec.onresult = (e) => {
+      lastEventAt = Date.now()
+      retryAttempt = 0
       let interim = ''
       let final = ''
       let conf = 0
@@ -77,15 +129,18 @@ export default function useSpeechRecognition(active, { lang, onResult, onError }
     }
 
     rec.onerror = (e) => {
+      lastEventAt = Date.now()
       // 'no-speech'/'aborted'/'network' are transient and self-heal on restart.
       // Permission errors are terminal — surface them so the UI can fall back.
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         terminated = true
+        clearRetry()
         cbRef.current.onError?.(e.error)
       }
     }
 
     rec.onend = () => {
+      lastEventAt = Date.now()
       // Chrome stops the engine after a pause; restart while still active to
       // keep one continuous transcript. Skip if the mic was denied or we're
       // tearing down.
@@ -100,18 +155,27 @@ export default function useSpeechRecognition(active, { lang, onResult, onError }
           pendingInterim = ''
           cbRef.current.onResult?.({ text: flushed.trim(), isFinal: true })
         }
-        try { rec.start() } catch { /* already (re)starting */ }
+        restart()
       }
     }
 
-    try {
-      rec.start()
-    } catch {
-      /* start() throws if called while already running — safe to ignore */
-    }
+    restart()
 
     return () => {
       terminated = true
+      clearRetry()
+      clearInterval(watchdog)
+      // Same loss the onend handler guards against (see above), but on a
+      // MANUAL stop (mic muted, captions turned off, leaving the meeting) —
+      // onend is about to be nulled specifically so it won't restart us, which
+      // would otherwise also silence this exact flush. Do it here directly so
+      // an in-progress phrase still reaches the transcript even when the
+      // session ends deliberately rather than via the engine's own timeout.
+      if (pendingInterim) {
+        const flushed = pendingInterim
+        pendingInterim = ''
+        cbRef.current.onResult?.({ text: flushed.trim(), isFinal: true })
+      }
       try {
         rec.onend = null // prevent the auto-restart firing during teardown
         rec.stop()
