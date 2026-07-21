@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
-import { ArrowLeft, X, Sparkles, Shield, Users, ExternalLink, CheckCircle, AlertTriangle, Info, RefreshCw, AlertCircle } from 'lucide-react'
+import { useEffect, useCallback } from 'react'
+import { ArrowLeft, X, Sparkles, Shield, Users, ExternalLink, CheckCircle, AlertTriangle, Info, RefreshCw, AlertCircle, CheckCircle2, Clock, Mail } from 'lucide-react'
 import { useSemaGuide } from './store'
+import { useToast } from '../../components/ui/Toast'
 import favicon from '../../assets/zoikosema-icon.svg'
 
 function LoadingSkeleton() {
@@ -100,8 +101,85 @@ function CapabilityItem({ icon, label, desc }) {
   )
 }
 
+function SupportStatusBadge({ status }) {
+  if (!status) return null
+  const configs = {
+    email_sending: { bg: '#FEF3C7', color: '#92400E', label: 'Sending confirmation...' },
+    email_sent: { bg: '#ECFDF5', color: '#065F46', label: 'Awaiting specialist' },
+    waiting_for_specialist: { bg: '#FFF7ED', color: '#9A3412', label: 'Waiting for specialist' },
+    specialist_assigned: { bg: '#EEF2FF', color: '#3730A3', label: 'Specialist assigned' },
+    active_chat: { bg: '#ECFDF5', color: '#065F46', label: 'Active chat' },
+    closed: { bg: '#F3F4F6', color: '#6B7280', label: 'Closed' },
+    failed: { bg: '#FEF2F2', color: '#991B1B', label: 'Failed' },
+  }
+  const cfg = configs[status] || { bg: '#F3F4F6', color: '#6B7280', label: status }
+  return (
+    <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 600, background: cfg.bg, color: cfg.color }}>
+      {cfg.label}
+    </span>
+  )
+}
+
+function SupportCard({ supportState }) {
+  const { ticketId, status, submittedAt, confirmationEmailSent, userEmail } = supportState
+  if (!ticketId) return null
+
+  const formattedDate = submittedAt
+    ? new Date(submittedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : ''
+
+  return (
+    <div className="rounded-xl border px-4 py-4 space-y-3" style={{ borderColor: '#D1FAE5', backgroundColor: '#F0FDF6' }}>
+      <div className="flex items-center gap-2">
+        <div className="grid h-7 w-7 place-items-center rounded-full" style={{ backgroundColor: '#D1FAE5' }}>
+          <CheckCircle2 className="h-4 w-4" style={{ color: '#059669' }} />
+        </div>
+        <span className="text-[13px] font-bold" style={{ color: '#065F46' }}>Support request submitted</span>
+      </div>
+      <div className="space-y-2 pl-9">
+        <div>
+          <span className="text-[11px] font-semibold" style={{ color: '#6B7280' }}>Ticket: </span>
+          <span className="text-[13px] font-semibold font-mono" style={{ color: '#4B3DD4' }}>{ticketId}</span>
+        </div>
+        {confirmationEmailSent && userEmail && (
+          <div className="flex items-start gap-1.5">
+            <Mail className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: '#6B7280' }} />
+            <div>
+              <p className="text-[11px]" style={{ color: '#6B7280' }}>Confirmation email sent to:</p>
+              <p className="text-[12px] font-medium" style={{ color: '#374151' }}>{userEmail}</p>
+            </div>
+          </div>
+        )}
+        <div className="flex items-center gap-1.5">
+          <Clock className="h-3.5 w-3.5" style={{ color: '#6B7280' }} />
+          <span className="text-[11px]" style={{ color: '#6B7280' }}>Submitted {formattedDate}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold" style={{ color: '#6B7280' }}>Current status:</span>
+          <SupportStatusBadge status={status} />
+        </div>
+        <p className="text-[11px]" style={{ color: '#6B7280' }}>
+          <span className="font-semibold">Expected response:</span> Within 24 hours
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function AboutGuide() {
-  const { clearSecondaryView, closePanel, aboutData, aboutLoading, aboutError, fetchAboutGuide } = useSemaGuide()
+  const { toast } = useToast()
+  const { clearSecondaryView, closePanel, aboutData, aboutLoading, aboutError, fetchAboutGuide, requestHandoff, supportState } = useSemaGuide()
+  const { ticketId, status, requesting } = supportState
+  const hasActiveTicket = !!ticketId && status !== 'closed' && status !== 'failed'
+
+  const handleTalkToPerson = useCallback(() => {
+    if (hasActiveTicket) {
+      toast({ variant: 'info', title: 'Support request already submitted', description: `Ticket ${ticketId} is ${status === 'email_sent' ? 'awaiting specialist' : 'in progress'}.` })
+      return
+    }
+    requestHandoff()
+    toast({ variant: 'success', title: 'Support request submitted', description: 'Confirmation email sent.' })
+  }, [requestHandoff, toast, hasActiveTicket, ticketId, status])
 
   useEffect(() => {
     fetchAboutGuide()
@@ -204,9 +282,18 @@ export default function AboutGuide() {
           <Section title="Human support">
             <p className="text-[12px]" style={{ color: 'var(--c-fg-dim)' }}>{d.human_support_message}</p>
             {d.human_support_enabled && (
-              <button type="button" className="mt-3 w-full rounded-lg px-3 py-2 text-[12px] font-semibold text-white transition" style={{ backgroundColor: 'var(--c-accent)' }}>
-                Talk to a person
-              </button>
+              <div className="mt-3 space-y-3">
+                <button
+                  type="button"
+                  onClick={handleTalkToPerson}
+                  disabled={requesting}
+                  className="w-full rounded-lg px-3 py-2 text-[12px] font-semibold text-white transition disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--c-accent)' }}
+                >
+                  {requesting ? 'Requesting...' : hasActiveTicket ? 'Contact support' : 'Talk to a person'}
+                </button>
+                {hasActiveTicket && <SupportCard supportState={supportState} />}
+              </div>
             )}
           </Section>
         )}
@@ -232,11 +319,30 @@ export default function AboutGuide() {
         {/* Links */}
         {d.links?.length > 0 && (
           <div className="flex flex-wrap gap-2 pb-4">
-            {d.links.map((link, i) => (
-              <a key={i} href={link.url} className="inline-flex items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline" style={{ color: 'var(--c-accent)' }}>
-                <ExternalLink className="h-3 w-3" /> {link.label}
-              </a>
-            ))}
+            {d.links.map((link, i) => {
+              const isUnavailable = !link.url || link.url === '#'
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    if (isUnavailable) {
+                      toast({ variant: 'info', title: 'Unavailable', description: 'This page is coming soon.' })
+                    } else {
+                      window.open(link.url, '_blank', 'noopener,noreferrer')
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  style={{ color: isUnavailable ? 'var(--c-fg-muted)' : 'var(--c-accent)' }}
+                  disabled={isUnavailable}
+                >
+                  <ExternalLink className="h-3 w-3" /> {link.label}
+                  {isUnavailable && (
+                    <span className="text-[10px] ml-0.5" style={{ color: 'var(--c-fg-muted)' }}>(coming soon)</span>
+                  )}
+                </button>
+              )
+            })}
           </div>
         )}
       </div>

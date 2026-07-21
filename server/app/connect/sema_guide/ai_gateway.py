@@ -27,10 +27,10 @@ class AIGateway:
         now = time.time()
 
         plan_limits = {
-            "free": {"requests_per_minute": 10, "max_tokens": 1024},
-            "pro": {"requests_per_minute": 60, "max_tokens": 2048},
-            "business": {"requests_per_minute": 120, "max_tokens": 2048},
-            "enterprise": {"requests_per_minute": 300, "max_tokens": 2048},
+            "free": {"requests_per_minute": 30, "max_tokens": 2048, "per_day": 500},
+            "pro": {"requests_per_minute": 120, "max_tokens": 4096, "per_day": 2000},
+            "business": {"requests_per_minute": 300, "max_tokens": 4096, "per_day": 5000},
+            "enterprise": {"requests_per_minute": 600, "max_tokens": 8192, "per_day": 20000},
         }
         limits = plan_limits.get(plan, plan_limits["free"])
 
@@ -46,7 +46,20 @@ class AIGateway:
                 rate_remaining=0,
             )
 
+        daily_key = f"{user_id}:{feature}:daily"
+        daily_bucket = self._rate_buckets.setdefault(daily_key, [])
+        day_cutoff = now - 86400
+        daily_bucket[:] = [t for t in daily_bucket if t > day_cutoff]
+
+        if len(daily_bucket) >= limits.get("per_day", 999999):
+            return GatewayDecision(
+                allowed=False,
+                reason=f"Daily rate limit exceeded ({limits['per_day']}/day for {plan} plan)",
+                rate_remaining=0,
+            )
+
         bucket.append(now)
+        daily_bucket.append(now)
         remaining = limits["requests_per_minute"] - len(bucket)
 
         return GatewayDecision(

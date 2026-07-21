@@ -11,7 +11,7 @@ from app.connect.sema_guide.models import (
     GuideChatResponse,
     RankedActionsResponse,
     HandoffRequest,
-    HandoffState,
+    SupportTicketState,
     PrivacyContextResponse,
     AboutGuideResponse,
     PrivacyPreferences,
@@ -22,8 +22,9 @@ from app.connect.sema_guide.models import (
 )
 from app.connect.sema_guide.service import chat as chat_service
 from app.connect.sema_guide.action_ranker import rank_actions
-from app.connect.sema_guide.handoff_service import request_handoff, get_active_session
+from app.connect.sema_guide.handoff_service import request_handoff, get_active_ticket, mark_email_sent, update_ticket_status, SupportTicketStatus
 from app.connect.sema_guide.observability import get_stats
+from app.core.email import send_support_ticket_email
 
 PRIVACY_CONTEXT_JSON = """{
   "current_session_rows": [
@@ -167,39 +168,76 @@ def get_ranked_actions(
     return RankedActionsResponse(actions=actions)
 
 
-@router.post("/handoff", response_model=HandoffState)
+@router.post("/handoff", response_model=SupportTicketState)
 def request_human_handoff(
     data: HandoffRequest | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    existing = get_active_session(user.id)
+    existing = get_active_ticket(db, user.id)
     if existing:
-        return HandoffState(
-            state=existing.state.value,
-            estimated_wait_seconds=existing.estimated_wait_seconds,
+        return SupportTicketState(
+            ticket_id=existing.ticket_id,
+            status=existing.status,
+            submitted_at=existing.created_at.isoformat() if existing.created_at else None,
+            confirmation_email_sent=existing.confirmation_email_sent,
+            user_email=existing.user_email,
+            user_name=existing.user_name,
+            estimated_wait_seconds=1440,
         )
 
-    session = request_handoff(user.id, context=(data.context if data else None))
-    return HandoffState(
-        state=session.state.value,
-        estimated_wait_seconds=session.estimated_wait_seconds,
+    message = data.context.get("message", "") if (data and data.context) else ""
+    ticket = request_handoff(db, user.id, user.email, user.name or "", message)
+
+    email_ok = send_support_ticket_email(
+        user_email=user.email,
+        user_name=user.name or "",
+        ticket_id=ticket.ticket_id,
+        message=message,
+    )
+
+    if email_ok:
+        mark_email_sent(db, ticket.ticket_id)
+    else:
+        update_ticket_status(db, ticket.ticket_id, SupportTicketStatus.WAITING_FOR_SPECIALIST)
+
+    updated = get_active_ticket(db, user.id) or ticket
+
+    return SupportTicketState(
+        ticket_id=updated.ticket_id,
+        status=updated.status,
+        submitted_at=updated.created_at.isoformat() if updated.created_at else None,
+        confirmation_email_sent=email_ok,
+        user_email=user.email,
+        user_name=user.name or "",
+        estimated_wait_seconds=1440,
     )
 
 
-@router.get("/handoff/state", response_model=HandoffState)
+@router.get("/handoff/state", response_model=SupportTicketState)
 def get_handoff_state(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    session = get_active_session(user.id)
-    if not session:
-        return HandoffState(state=None)
+    ticket = get_active_ticket(db, user.id)
+    if not ticket:
+        return SupportTicketState(
+            ticket_id=None,
+            status=None,
+            submitted_at=None,
+            confirmation_email_sent=None,
+            user_email=None,
+            user_name=None,
+        )
 
-    return HandoffState(
-        state=session.state.value,
-        estimated_wait_seconds=session.estimated_wait_seconds,
-        specialist_name=session.specialist_name,
+    return SupportTicketState(
+        ticket_id=ticket.ticket_id,
+        status=ticket.status,
+        submitted_at=ticket.created_at.isoformat() if ticket.created_at else None,
+        confirmation_email_sent=ticket.confirmation_email_sent,
+        user_email=ticket.user_email,
+        user_name=ticket.user_name,
+        estimated_wait_seconds=1440,
     )
 
 
@@ -251,11 +289,15 @@ def delete_conversation(
     db: Session = Depends(get_db),
 ):
     from app.models.chat import Message
-    count = db.query(Message).filter(
-        Message.sender_id == user.id
-    ).delete()
-    db.commit()
-    return PrivacyActionResponse(success=True, message=f"Deleted {count} message(s)")
+    try:
+        count = db.query(Message).filter(
+            Message.sender_id == user.id
+        ).delete()
+        db.commit()
+        return PrivacyActionResponse(success=True, message=f"Deleted {count} message(s)")
+    except Exception:
+        db.rollback()
+        return PrivacyActionResponse(success=False, message="Failed to delete conversation")
 
 
 @router.get("/privacy/preferences", response_model=PrivacyPreferences)

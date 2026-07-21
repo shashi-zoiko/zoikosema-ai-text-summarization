@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     smtp_from_email: str = "noreply@zoikosema.com"
     smtp_from_name: str = "ZoikoSema"
     smtp_use_tls: bool = True
+    # Set to True to use SMTP_SSL (port 465). When False (default), uses
+    # STARTTLS on smtp_port. Auto-detected: port 465 forces SSL regardless.
+    smtp_use_ssl: bool = False
 
     # Resend transactional email (preferred over SMTP when configured). The
     # API key is provided via env / GitHub / GCP secret as RESEND_API_KEY.
@@ -86,6 +89,9 @@ class Settings(BaseSettings):
     # (email-hero-{invite,reminder,cancelled}.png in client/public/). Same host
     # as the assets above by default; override with BRAND_EMAIL_ASSET_BASE_URL.
     brand_email_asset_base_url: str = "https://meet.zoikosema.com"
+
+    # Support ticket email — where user handoff requests are sent
+    support_email: str = "support@zoikosema.com"
 
     # Frontend base URL for invite links
     frontend_url: str = "http://localhost:5173"

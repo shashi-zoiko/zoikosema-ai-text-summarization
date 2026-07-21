@@ -91,6 +91,8 @@ export default function WelcomeState() {
         )}
       </div>
 
+
+
       {/* AI Notice */}
       <div
         className="rounded-xl px-4 py-3 text-[12px] leading-relaxed"

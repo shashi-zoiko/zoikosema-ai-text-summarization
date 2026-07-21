@@ -15,6 +15,7 @@ from app.models.organization import (
 from app.models.private_note import PrivateNote
 from app.models.password_reset import PasswordResetOTP
 from app.models.support import SupportCase
+from app.models.support_ticket import SupportTicket
 
 __all__ = [
     "User",
@@ -32,4 +33,5 @@ __all__ = [
     "Notification",
     "PrivateNote",
     "SupportCase",
+    "SupportTicket",
 ]
