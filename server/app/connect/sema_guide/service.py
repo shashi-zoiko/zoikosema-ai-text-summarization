@@ -47,6 +47,13 @@ def chat(
     surface: str | None = None,
     page_route: str | None = None,
 ) -> GuideChatResponse:
+    MAX_MESSAGE_LENGTH = 2000
+    if len(message) > MAX_MESSAGE_LENGTH:
+        return GuideChatResponse(
+            response=f"Message too long ({len(message)} chars). Please keep messages under {MAX_MESSAGE_LENGTH} characters.",
+            verified=False,
+        )
+
     gd = gateway.check_request(
         user_id=user_id,
         feature="sema_guide_chat",
