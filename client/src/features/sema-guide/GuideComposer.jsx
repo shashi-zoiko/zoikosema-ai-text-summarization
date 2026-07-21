@@ -2,9 +2,10 @@ import { ArrowUp } from 'lucide-react'
 import { useSemaGuide } from './store'
 
 export default function GuideComposer() {
-  const { input, setInput, sendMessage, loading, handoffState } = useSemaGuide()
+  const { input, setInput, sendMessage, loading, supportState } = useSemaGuide()
 
-  const disabled = loading || handoffState === 'human_assigned'
+  const isSpecialistAssigned = supportState.status === 'specialist_assigned' || supportState.status === 'active_chat'
+  const disabled = loading || isSpecialistAssigned
 
   const handleSubmit = () => {
     if (!input.trim() || disabled) return
@@ -22,7 +23,7 @@ export default function GuideComposer() {
 
   return (
     <div className="shrink-0 px-4 pb-3 pt-1" style={{ backgroundColor: '#FFFFFF' }}>
-      {handoffState === 'human_assigned' && (
+      {isSpecialistAssigned && (
         <div className="mb-2 rounded-lg px-3 py-2 text-[11.5px]" style={{ backgroundColor: '#EEF0FF', color: '#5B5FC7' }}>
           A human specialist has joined the conversation.
         </div>
@@ -60,7 +61,7 @@ export default function GuideComposer() {
             if (canSend) e.currentTarget.style.backgroundColor = '#5B4CE6'
           }}
         >
-          <ArrowUp className="h-[18px] w-[18px]" />
+          <ArrowUp size={26} strokeWidth={2.5} />
         </button>
       </div>
 

@@ -1,5 +1,7 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Optional
 
 
 # ── Privacy & Data ───────────────────────────────────────────────────────────
@@ -161,11 +163,19 @@ class HandoffRequest(BaseModel):
     context: dict | None = None
 
 
-class HandoffState(BaseModel):
-    # None means "no active handoff session" — matches the frontend's
-    # `res.state || null` contract (client/src/features/sema-guide/store.js),
-    # which treats any falsy state as idle. A literal "idle" string would be
-    # truthy there and trip the panel's polling effect into running forever.
-    state: Literal["queued", "connecting", "human_assigned", "failed"] | None = None
+SUPPORT_STATUS_VALUES = Literal[
+    "not_requested", "email_sending", "email_sent",
+    "waiting_for_specialist", "specialist_assigned",
+    "active_chat", "closed",
+]
+
+
+class SupportTicketState(BaseModel):
+    ticket_id: str | None = None
+    status: SUPPORT_STATUS_VALUES | None = None
+    submitted_at: str | None = None
+    confirmation_email_sent: bool | None = None
+    user_email: str | None = None
+    user_name: str | None = None
     estimated_wait_seconds: int | None = None
     specialist_name: str | None = None

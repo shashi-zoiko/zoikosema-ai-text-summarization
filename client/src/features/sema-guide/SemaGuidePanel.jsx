@@ -18,7 +18,7 @@ export default function SemaGuidePanel() {
   const {
     open, isMinimized, secondaryView, messages, loading, processing, error,
     closePanel, overflowOpen, confidential,
-    handoffState, fetchHandoffState,
+    supportState, fetchHandoffState,
   } = useSemaGuide()
   const endRef = useRef(null)
   const pollRef = useRef(null)
@@ -42,9 +42,11 @@ export default function SemaGuidePanel() {
   }, [open, closePanel])
 
   useEffect(() => {
-    const shouldPoll = handoffState && handoffState !== 'human_assigned' && handoffState !== 'failed'
+    const { status, ticketId } = supportState
+    const activeStatuses = ['email_sending', 'email_sent', 'waiting_for_specialist']
+    const shouldPoll = !!ticketId && activeStatuses.includes(status)
     if (shouldPoll && !pollRef.current) {
-      pollRef.current = setInterval(fetchHandoffState, 5000)
+      pollRef.current = setInterval(fetchHandoffState, 10000)
     }
     if (!shouldPoll && pollRef.current) {
       clearInterval(pollRef.current)
@@ -56,7 +58,7 @@ export default function SemaGuidePanel() {
         pollRef.current = null
       }
     }
-  }, [handoffState, fetchHandoffState])
+  }, [supportState, fetchHandoffState])
 
   return (
     <AnimatePresence>

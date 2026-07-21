@@ -8,6 +8,16 @@ const WELCOME_ACTIONS_DEFAULTS = [
   { id: 'contact-support', label: 'Contact support', icon: 'help-circle', intent: 'support' },
 ]
 
+const INITIAL_SUPPORT_STATE = {
+  ticketId: null,
+  status: null,
+  submittedAt: null,
+  confirmationEmailSent: null,
+  userEmail: null,
+  userName: null,
+  requesting: false,
+}
+
 export const useSemaGuide = create((set, get) => ({
   open: false,
   isMinimized: false,
@@ -17,10 +27,11 @@ export const useSemaGuide = create((set, get) => ({
   loading: false,
   processing: null,
   quickActions: WELCOME_ACTIONS_DEFAULTS,
-  handoffState: null,
+  supportState: { ...INITIAL_SUPPORT_STATE },
   confidential: false,
   overflowOpen: false,
   secondaryView: null,
+  notificationsMuted: false,
   error: null,
   privacyData: null,
   privacyLoading: false,
@@ -248,29 +259,57 @@ export const useSemaGuide = create((set, get) => ({
   clearProcessing: () => set({ processing: null }),
 
   requestHandoff: async () => {
-    set({ handoffState: 'requesting' })
+    set((s) => ({ supportState: { ...s.supportState, requesting: true } }))
     try {
       const res = await api('/api/sema-guide/handoff', { method: 'POST' })
-      set({ handoffState: res.state || 'queued' })
+      set({
+        supportState: {
+          ticketId: res.ticket_id || null,
+          status: res.status || null,
+          submittedAt: res.submitted_at || null,
+          confirmationEmailSent: res.confirmation_email_sent || null,
+          userEmail: res.user_email || null,
+          userName: res.user_name || null,
+          requesting: false,
+        },
+      })
     } catch {
-      set({ handoffState: 'failed' })
+      set((s) => ({
+        supportState: { ...s.supportState, status: 'failed', requesting: false },
+      }))
     }
   },
 
   fetchHandoffState: async () => {
     try {
       const res = await api('/api/sema-guide/handoff/state')
-      set({ handoffState: res.state || null })
+      if (res.ticket_id) {
+        set({
+          supportState: {
+            ticketId: res.ticket_id || null,
+            status: res.status || null,
+            submittedAt: res.submitted_at || null,
+            confirmationEmailSent: res.confirmation_email_sent || null,
+            userEmail: res.user_email || null,
+            userName: res.user_name || null,
+            requesting: false,
+          },
+        })
+      } else {
+        set({ supportState: { ...INITIAL_SUPPORT_STATE } })
+      }
     } catch {
       // silent — polling will retry
     }
   },
 
-  cancelHandoff: () => set({ handoffState: null }),
+  cancelHandoff: () => set({ supportState: { ...INITIAL_SUPPORT_STATE } }),
   setOverflowOpen: (open) => set({ overflowOpen: open }),
 
+  toggleMuteNotifications: () => set((s) => ({ notificationsMuted: !s.notificationsMuted })),
+
   clearConversation: () => {
-    set({ messages: [], error: null, handoffState: null })
+    set({ messages: [], error: null, supportState: { ...INITIAL_SUPPORT_STATE } })
     get().persistConversation()
   },
 
