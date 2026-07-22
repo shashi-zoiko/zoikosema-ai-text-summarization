@@ -48,7 +48,7 @@ export default function GuideComposer() {
           disabled={disabled}
           rows={1}
           maxLength={MAX_CHARS}
-          className="min-h-[24px] flex-1 resize-none border-0 bg-transparent text-[13px] leading-snug outline-none"
+          className="min-h-[40px] flex-1 resize-none border-0 bg-transparent text-[13px] leading-snug outline-none"
           style={{ color: '#111827' }}
         />
         <button
@@ -70,7 +70,7 @@ export default function GuideComposer() {
             if (canSend) e.currentTarget.style.backgroundColor = '#5B4CE6'
           }}
         >
-          <ArrowUp size={26} strokeWidth={2.5} />
+      <ArrowUp size={30} strokeWidth={2.5} />
         </button>
       </div>
 
