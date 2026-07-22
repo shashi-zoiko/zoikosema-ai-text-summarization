@@ -11,11 +11,6 @@ def rank_actions(
 ) -> list[RankedAction]:
     all_actions = _build_action_pool(user_role, user_plan)
 
-    if recent_failure:
-        recovery_actions = [a for a in all_actions if a.id == "diagnose-issue"]
-        others = [a for a in all_actions if a.id != "diagnose-issue"]
-        all_actions = recovery_actions + others
-
     if active_incident:
         status_actions = [a for a in all_actions if a.intent == "status"]
         others = [a for a in all_actions if a.intent != "status"]
@@ -31,7 +26,6 @@ def rank_actions(
 
 def _build_action_pool(user_role: str = "member", user_plan: str = "free") -> list[RankedAction]:
     actions = [
-        RankedAction(id="diagnose-issue", label="Diagnose a problem", icon="search", intent="diagnose", description="Troubleshoot meeting, audio, or connection issues"),
         RankedAction(id="schedule-meeting", label="Schedule a meeting", icon="calendar", intent="schedule", description="Create a new meeting invite"),
         RankedAction(id="join-meeting", label="Join a meeting", icon="video", intent="join", description="Join an existing meeting by code"),
         RankedAction(id="check-recording", label="Find recordings", icon="play-circle", intent="recordings", description="Browse your meeting recordings"),

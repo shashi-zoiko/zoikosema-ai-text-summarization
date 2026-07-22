@@ -68,13 +68,17 @@ def _send_via_resend(
 
 
 def _smtp_connection():
-    """Open an SMTP connection using settings."""
+    """Open an SMTP connection using settings.
+    Supports both STARTTLS (port 587) and direct SSL (port 465).
+    """
     s = get_settings()
-    if s.smtp_use_tls:
-        server = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=15)
-        server.starttls()
+    use_ssl = s.smtp_use_ssl or s.smtp_port == 465
+    if use_ssl:
+        server = smtplib.SMTP_SSL(s.smtp_host, s.smtp_port, timeout=15)
     else:
         server = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=15)
+        if s.smtp_use_tls:
+            server.starttls()
     server.login(s.smtp_user, s.smtp_password)
     return server
 
@@ -572,6 +576,111 @@ def send_meeting_rsvp_email(
     )
     attachments = [("reply.ics", ics_data, "text/calendar")] if ics_data else []
     return send_email(to_email, f"{invitee_label} {verb}: {meeting_title}", html, attachments)
+
+
+def send_support_ticket_email(
+    user_email: str,
+    user_name: str,
+    ticket_id: str,
+    message: str = "",
+) -> bool:
+    """Send two emails when a user requests human support:
+    1. Confirmation to the user ("ticket created, we'll respond within 24h")
+    2. Notification to the support team
+    Returns True if BOTH sent successfully, False otherwise.
+    """
+    s = get_settings()
+    logo_url = s.brand_email_logo_url
+    safe_name = (user_name or "there").strip() or "there"
+
+    user_html = f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background:#eef2f5;">
+  <div style="background:#eef2f5;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:0 auto;">
+      <tr><td>
+        <div style="background:#ffffff;border-radius:20px;overflow:hidden;border:1px solid #e6ecf0;box-shadow:0 20px 50px -28px rgba(15,23,42,0.35);">
+          <div style="padding:30px 32px 22px;text-align:center;border-bottom:1px solid #f0f3f6;">
+            <img src="{logo_url}" alt="ZoikoSema" width="190"
+                 style="display:inline-block;width:190px;max-width:62%;height:auto;border:0;outline:none;text-decoration:none;" />
+            <div style="height:4px;width:54px;margin:18px auto 0;border-radius:999px;background:linear-gradient(90deg,#5B4CE6,#8B7CF6);"></div>
+          </div>
+          <div style="padding:30px 32px 8px;">
+            <h1 style="margin:0 0 8px;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">Support ticket received</h1>
+            <p style="margin:0 0 18px;font-size:14.5px;line-height:1.65;color:#475569;">
+              Hello {safe_name},<br />
+              We've received your support request and a ticket has been created.
+            </p>
+            <div style="background:#f5f3ff;border:1px solid #e0d9ff;border-radius:12px;padding:14px 16px;margin-bottom:18px;">
+              <p style="margin:0 0 4px;font-size:12px;color:#6b5fc7;font-weight:600;">TICKET ID</p>
+              <p style="margin:0;font-size:18px;font-weight:700;color:#4B3DD4;font-family:ui-monospace,monospace;">{ticket_id}</p>
+            </div>
+            <p style="margin:0 0 22px;font-size:14px;line-height:1.6;color:#475569;">
+              Our team will review your request and get back to you within <strong style="color:#4B3DD4;">24 hours</strong>.
+            </p>
+            <div style="background:#f6faf8;border:1px solid #e2ece7;border-radius:12px;padding:14px 16px;">
+              <p style="margin:0;font-size:12.5px;line-height:1.6;color:#64748b;">
+                If you have additional information to share, you can continue chatting with Sema Guide or reply to this email.
+              </p>
+            </div>
+          </div>
+          <div style="padding:22px 32px 26px;text-align:center;">
+            <p style="margin:0;font-size:12px;line-height:1.6;color:#94a3b8;">
+              Regards,<br /><strong style="color:#64748b;">The ZoikoSema Support Team</strong>
+            </p>
+          </div>
+        </div>
+        <p style="margin:16px 0 0;text-align:center;font-size:11px;color:#aab4bf;">
+          &copy; ZoikoSema &middot; Ticket #{ticket_id}
+        </p>
+      </td></tr>
+    </table>
+  </div>
+</body>
+</html>"""
+
+    support_html = f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background:#eef2f5;">
+  <div style="background:#eef2f5;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;">
+      <tr><td>
+        <div style="background:#ffffff;border-radius:20px;overflow:hidden;border:1px solid #e6ecf0;box-shadow:0 20px 50px -28px rgba(15,23,42,0.35);">
+          <div style="padding:30px 32px 22px;text-align:center;border-bottom:1px solid #f0f3f6;">
+            <img src="{logo_url}" alt="ZoikoSema" width="190"
+                 style="display:inline-block;width:190px;max-width:62%;height:auto;border:0;outline:none;text-decoration:none;" />
+            <div style="height:4px;width:54px;margin:18px auto 0;border-radius:999px;background:linear-gradient(90deg,#ef4444,#f97316);"></div>
+          </div>
+          <div style="padding:30px 32px 8px;">
+            <h1 style="margin:0 0 8px;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">New support request</h1>
+            <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:14px 16px;margin-bottom:18px;">
+              <table style="width:100%;font-size:13px;line-height:1.6;">
+                <tr><td style="padding:2px 0;color:#64748b;font-weight:600;width:80px;">Ticket</td><td style="padding:2px 0;color:#0f172a;font-family:ui-monospace,monospace;">{ticket_id}</td></tr>
+                <tr><td style="padding:2px 0;color:#64748b;font-weight:600;">User</td><td style="padding:2px 0;color:#0f172a;">{safe_name}</td></tr>
+                <tr><td style="padding:2px 0;color:#64748b;font-weight:600;">Email</td><td style="padding:2px 0;color:#0f172a;">{user_email}</td></tr>
+                <tr><td style="padding:2px 0;color:#64748b;font-weight:600;">Source</td><td style="padding:2px 0;color:#0f172a;">Sema Guide (in-app)</td></tr>
+              </table>
+            </div>
+            {f'<div style="background:#f6faf8;border:1px solid #e2ece7;border-radius:12px;padding:14px 16px;margin-bottom:18px;"><p style="margin:0;font-size:13px;line-height:1.6;color:#475569;"><strong style="color:#0f172a;">Message:</strong><br/>{message}</p></div>' if message else ''}
+            <p style="margin:0;font-size:13px;color:#64748b;">
+              This ticket was auto-generated from Sema Guide. Respond via the support dashboard.
+            </p>
+          </div>
+        </div>
+      </td></tr>
+    </table>
+  </div>
+</body>
+</html>"""
+
+    user_ok = send_email(user_email, f"ZoikoSema Support — Ticket #{ticket_id} Received", user_html)
+    support_ok = send_email(s.support_email, f"New support request from {safe_name} — #{ticket_id}", support_html)
+
+    return user_ok and support_ok
 
 
 def send_password_reset_email(to_email: str, user_name: str, otp_code: str, expiry_minutes: int = 10) -> bool:

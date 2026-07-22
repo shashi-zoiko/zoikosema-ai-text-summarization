@@ -1,13 +1,22 @@
 import { ArrowUp } from 'lucide-react'
 import { useSemaGuide } from './store'
 
-export default function GuideComposer() {
-  const { input, setInput, sendMessage, loading, handoffState } = useSemaGuide()
+const MAX_CHARS = 500
 
-  const disabled = loading || handoffState === 'human_assigned'
+export default function GuideComposer() {
+  const { input, setInput, sendMessage, loading, supportState } = useSemaGuide()
+
+  const isSpecialistAssigned = supportState.status === 'specialist_assigned' || supportState.status === 'active_chat'
+  const disabled = loading || isSpecialistAssigned
+  const overLimit = input.length > MAX_CHARS
+
+  const handleChange = (e) => {
+    const val = e.target.value
+    if (val.length <= MAX_CHARS) setInput(val)
+  }
 
   const handleSubmit = () => {
-    if (!input.trim() || disabled) return
+    if (!input.trim() || disabled || overLimit) return
     sendMessage(input)
   }
 
@@ -18,11 +27,11 @@ export default function GuideComposer() {
     }
   }
 
-  const canSend = input.trim() && !disabled
+  const canSend = input.trim() && !disabled && !overLimit
 
   return (
     <div className="shrink-0 px-4 pb-3 pt-1" style={{ backgroundColor: '#FFFFFF' }}>
-      {handoffState === 'human_assigned' && (
+      {isSpecialistAssigned && (
         <div className="mb-2 rounded-lg px-3 py-2 text-[11.5px]" style={{ backgroundColor: '#EEF0FF', color: '#5B5FC7' }}>
           A human specialist has joined the conversation.
         </div>
@@ -33,11 +42,12 @@ export default function GuideComposer() {
       >
         <textarea
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder="Ask about Zoiko Sema..."
           disabled={disabled}
           rows={1}
+          maxLength={MAX_CHARS}
           className="min-h-[24px] flex-1 resize-none border-0 bg-transparent text-[13px] leading-snug outline-none"
           style={{ color: '#111827' }}
         />
@@ -60,10 +70,17 @@ export default function GuideComposer() {
             if (canSend) e.currentTarget.style.backgroundColor = '#5B4CE6'
           }}
         >
-          <ArrowUp className="h-[18px] w-[18px]" />
+          <ArrowUp size={26} strokeWidth={2.5} />
         </button>
       </div>
 
+      {input.length > 0 && (
+        <div className="flex justify-end mt-1">
+          <span className={`text-[10.5px] tabular-nums ${overLimit ? 'font-semibold' : ''}`} style={{ color: overLimit ? '#DC2626' : '#9CA3AF' }}>
+            {input.length}/{MAX_CHARS}
+          </span>
+        </div>
+      )}
       {/* Footer disclaimer */}
       <p className="mt-2 text-center text-[10.5px] leading-tight" style={{ color: '#9CA3AF' }}>
         AI-generated guidance. Verify consequential details.
