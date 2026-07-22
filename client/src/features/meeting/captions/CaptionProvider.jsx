@@ -155,16 +155,20 @@ export default function CaptionProvider({ children }) {
 
   const { publish } = useCaptionTransport({ onCaption: ingest })
 
-  // Local recognition result → throttle interims, echo locally, broadcast.
+  // Local recognition result → echo locally at full speed, throttle only the broadcast.
   const lastInterimRef = useRef(0)
   const onLocalResult = useCallback(
     ({ text, isFinal, confidence, seq, utteranceId }) => {
       if (!isMicrophoneEnabled) return // hard guard: never emit while muted
+      const identity = resolveIdentity(localParticipant)
+      // Our own bubble updates on EVERY result the engine produces — per
+      // config.js, interimThrottleMs exists to cap network fan-out to remote
+      // participants, not to slow down what we see of our own speech.
+      ingest({ speakerId: identity.speakerId, identity, text, isFinal, confidence, seq, utteranceId, lang: CAPTION_CONFIG.lang })
+
       const now = Date.now()
       if (!isFinal && now - lastInterimRef.current < CAPTION_CONFIG.interimThrottleMs) return
       lastInterimRef.current = now
-      const identity = resolveIdentity(localParticipant)
-      ingest({ speakerId: identity.speakerId, identity, text, isFinal, confidence, seq, utteranceId, lang: CAPTION_CONFIG.lang })
       publish({ text, isFinal, seq, utteranceId, confidence })
     },
     [ingest, publish, localParticipant, isMicrophoneEnabled],

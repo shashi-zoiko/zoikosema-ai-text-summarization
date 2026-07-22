@@ -75,51 +75,66 @@
 
 .sg-launcher-inner {
   position: relative;
-  width: 64px;
-  height: 64px;
+  width: 60px;
+  height: 60px;
   border-radius: 18px;
   display: grid;
   place-items: center;
-  will-change: transform;
-  transition: transform 180ms ease, box-shadow 180ms ease;
+  /* :hover/:active declare their own scoped transition on transform. */
 
-  /* Light theme (default) */
+  /* Light theme (default) — clean surface + layered elevation shadow. */
   background: #FFFFFF;
-  border: 1px solid #E5E7EB;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  border: 1px solid rgba(15,23,42,0.06);
+  box-shadow:
+    0 4px 10px rgba(15,23,42,0.08),
+    0 12px 28px rgba(15,23,42,0.14);
 }
 
 /* Dark theme */
 [data-theme="midnight"] .sg-launcher-inner {
   background: #1E1F2E;
-  border: 1px solid rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.10);
   box-shadow:
-    0 12px 32px rgba(0,0,0,0.45),
-    0 0 20px rgba(91,76,230,0.18);
+    0 4px 10px rgba(0,0,0,0.40),
+    0 12px 28px rgba(0,0,0,0.50);
 }
 
-/* Hover */
+/* Hover — a subtle neutral lift (no coloured glow), scoped transition. */
 .sg-launcher:hover .sg-launcher-inner {
-  transform: scale(1.06);
-  box-shadow: 0 16px 40px rgba(0,0,0,0.55);
+  transform: scale(1.05);
+  box-shadow:
+    0 6px 14px rgba(15,23,42,0.10),
+    0 16px 40px rgba(15,23,42,0.18);
+  transition: transform 200ms ease, box-shadow 200ms ease;
 }
 
 [data-theme="midnight"] .sg-launcher:hover .sg-launcher-inner {
   box-shadow:
-    0 16px 40px rgba(0,0,0,0.55),
-    0 0 28px rgba(91,76,230,0.28);
+    0 6px 14px rgba(0,0,0,0.45),
+    0 18px 42px rgba(0,0,0,0.55);
 }
 
 /* Active (click) */
 .sg-launcher:active .sg-launcher-inner {
   transform: scale(0.96);
-  transition: transform 100ms ease, box-shadow 100ms ease;
+  transition: transform 120ms ease;
 }
 
-/* Focus-visible */
+/* Focus-visible — an accent ring via box-shadow (not outline), so it follows
+   the widget's rounded-square corners instead of drawing a hard outline. */
 .sg-launcher:focus-visible .sg-launcher-inner {
-  outline: 2px solid var(--c-accent, #6366F1);
-  outline-offset: 3px;
+  outline: none;
+  box-shadow:
+    0 4px 10px rgba(15,23,42,0.08),
+    0 12px 28px rgba(15,23,42,0.14),
+    0 0 0 3px var(--c-accent, #6366F1);
+}
+
+[data-theme="midnight"] .sg-launcher:focus-visible .sg-launcher-inner {
+  box-shadow:
+    0 4px 10px rgba(0,0,0,0.40),
+    0 12px 28px rgba(0,0,0,0.50),
+    0 0 0 3px var(--c-accent, #6366F1);
 }
 
 /* ── Notification Badge ──────────────────────────────────────── */
@@ -141,49 +156,18 @@
   z-index: 1;
 }
 
-/* ── Floating animation (breathing shadow) ───────────────────── */
-.sg-launcher-breathe {
-  animation: sg-float 3.2s ease-in-out infinite;
-}
-
-@keyframes sg-float {
-  0%, 100% {
-    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
-  }
-  50% {
-    box-shadow: 0 18px 36px rgba(0,0,0,0.22);
-  }
-}
-
-[data-theme="midnight"] .sg-launcher-breathe {
-  animation-name: sg-float-dark;
-}
-
-@keyframes sg-float-dark {
-  0%, 100% {
-    box-shadow:
-      0 12px 32px rgba(0,0,0,0.45),
-      0 0 20px rgba(91,76,230,0.18);
-  }
-  50% {
-    box-shadow:
-      0 18px 36px rgba(0,0,0,0.50),
-      0 0 24px rgba(91,76,230,0.24);
-  }
-}
-
 /* ── Responsive ───────────────────────────────────────────────── */
 @media (min-width: 641px) and (max-width: 1024px) {
   .sg-launcher-inner {
-    width: 60px;
-    height: 60px;
+    width: 56px;
+    height: 56px;
   }
 }
 
 @media (max-width: 640px) {
   .sg-launcher-inner {
-    width: 56px;
-    height: 56px;
+    width: 54px;
+    height: 54px;
   }
 
   .sg-panel {

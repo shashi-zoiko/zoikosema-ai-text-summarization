@@ -5,10 +5,6 @@ import { useAuth } from '../context/AuthContext'
 import favicon from '../assets/zoikosema-icon.svg'
 import '../features/sema-guide/styles.css'
 
-const yTransition = {
-  y: { duration: 3.2, repeat: Infinity, ease: 'easeInOut' },
-}
-
 export default function SemaGuideToggle() {
   const { open, isMinimized, toggle, restore, unreadCount } = useSemaGuide()
   const { user, loading } = useAuth()
@@ -39,21 +35,14 @@ export default function SemaGuideToggle() {
         }
         initial={false}
       >
-        <motion.div
-          className={`sg-launcher-inner${!isOpen ? ' sg-launcher-breathe' : ''}`}
-          animate={!isOpen
-            ? { y: [0, -4, 0] }
-            : { y: 0 }
-          }
-          transition={yTransition}
-        >
-          <img src={favicon} alt="" width={32} height={32} />
+        <div className="sg-launcher-inner">
+          <img src={favicon} alt="" width={34} height={34} />
           {unreadCount > 0 && !isOpen && (
             <span className="sg-badge" aria-label={`${unreadCount} unread messages`}>
               {unreadCount > 99 ? '99+' : unreadCount}
             </span>
           )}
-        </motion.div>
+        </div>
       </motion.button>
 
       <AnimatePresence>

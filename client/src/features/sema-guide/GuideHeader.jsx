@@ -19,6 +19,8 @@ export default function GuideHeader({ onClose }) {
           onClick={() => setOverflowOpen(!overflowOpen)}
           aria-label="More options"
           aria-haspopup="menu"
+          aria-expanded={overflowOpen}
+          data-guide-overflow-toggle
           className="sg-header-btn"
         >
           <MoreVertical className="h-[16px] w-[16px]" />

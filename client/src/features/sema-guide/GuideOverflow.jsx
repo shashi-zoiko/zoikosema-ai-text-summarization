@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { Bell, BellOff, Trash2, Shield, MessageSquare, UserCircle, Check, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useSemaGuide } from './store'
@@ -22,6 +23,27 @@ export default function GuideOverflow() {
   const { clearConversation, setOverflowOpen, setSecondaryView, requestHandoff, supportState, notificationsMuted, toggleMuteNotifications } = useSemaGuide()
   const { ticketId, status, requesting } = supportState
   const hasActiveTicket = !!ticketId && status !== 'closed' && status !== 'failed'
+  const menuRef = useRef(null)
+
+  // Dismiss on click outside the menu or on Escape. The header's toggle button
+  // is excluded so a click on it runs its own toggle instead of this closing it
+  // and the button immediately reopening it.
+  useEffect(() => {
+    const handlePointerDown = (e) => {
+      if (menuRef.current?.contains(e.target)) return
+      if (e.target.closest?.('[data-guide-overflow-toggle]')) return
+      setOverflowOpen(false)
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setOverflowOpen(false)
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [setOverflowOpen])
 
   const handleClear = () => {
     if (window.confirm(t('guide.clear.confirm'))) {
@@ -48,6 +70,7 @@ export default function GuideOverflow() {
 
   return (
     <motion.div
+      ref={menuRef}
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -4 }}
