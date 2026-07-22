@@ -39,6 +39,11 @@ import RoomErrorBoundary from './components/RoomErrorBoundary.jsx'
 import { OverlayHostProvider } from './more/OverlayHost.jsx'
 import { ViewControlsProvider } from './more/ViewControlsContext.jsx'
 import useMeetingControlWs from './hooks/useMeetingControlWs.js'
+// Meeting Center + People (ZS-MTG-IMP-04) — flag-gated, default OFF. Swaps the
+// legacy People panel for the normalized Meeting Center when meeting_center_v3
+// is enabled; everything else (chat/info/settings) is untouched.
+import MeetingCenterMount from './center/MeetingCenterMount.jsx'
+import { useFlag, FLAGS } from '../../lib/flags.js'
 import useRoomEvents, { RoomEvent } from './hooks/useRoomEvents.js'
 import { useLocalParticipant, useMediaDeviceSelect, useRoomContext } from '@livekit/components-react'
 import { useRoomStore } from './state/roomStore.js'
@@ -419,6 +424,14 @@ function MeetRoom() {
   // ── Control WS ──────────────────────────────────────────────────────────
   const { connected: ctrlConnected, send: ctrlSend, subscribe: ctrlSubscribe } =
     useMeetingControlWs(code)
+  // Meeting Center v3 gate (default OFF). When on, the People panel is served by
+  // the normalized Meeting Center; when off, the legacy ParticipantsPanel runs
+  // unchanged. Reactive so a runtime flag flip (rollback) applies without reload.
+  const centerV3 = useFlag(FLAGS.MEETING_CENTER_V3)
+  const ctrlTransport = useMemo(
+    () => ({ connected: ctrlConnected, send: ctrlSend, subscribe: ctrlSubscribe }),
+    [ctrlConnected, ctrlSend, ctrlSubscribe],
+  )
 
   useEffect(() => {
     return ctrlSubscribe((data) => {
@@ -1032,17 +1045,49 @@ function MeetRoom() {
           />
         )}
         {sidebar === 'people' && (
-          <ParticipantsPanel
-            selfUserId={user?.id}
-            isHost={isHost}
-            isHostOrCohost={isHostOrCohost}
-            onClose={() => setSidebar(null)}
-            onPromote={promoteUser}
-            onAdmit={admitUser}
-            onDeny={denyUser}
-            onAdmitAll={admitAll}
-            scrollWaitingSignal={waitingScrollSignal}
-          />
+          centerV3 ? (
+            // A Meeting Center crash must never take down media or the Leave
+            // button — isolate it in its own boundary (the dock is a sibling).
+            <RoomErrorBoundary
+              fallback={({ reset }) => (
+                <aside className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-[#111827] p-6 text-center text-white sm:relative sm:m-2 sm:h-[calc(100%-1rem)] sm:w-[380px] sm:rounded-2xl sm:border sm:border-[#263244]">
+                  <p className="text-sm">The People panel hit a problem.</p>
+                  <p className="text-xs text-[#94A3B8]">Your meeting is still connected.</p>
+                  <div className="flex gap-2">
+                    <button onClick={reset} className="rounded-lg bg-[#10B981] px-3 py-1.5 text-xs font-semibold text-[#04140D]">Reload</button>
+                    <button onClick={() => setSidebar(null)} className="rounded-lg bg-white/10 px-3 py-1.5 text-xs">Close</button>
+                  </div>
+                </aside>
+              )}
+            >
+              <MeetingCenterMount
+                code={code}
+                sidebar={sidebar}
+                setSidebar={setSidebar}
+                transport={ctrlTransport}
+                user={user}
+                isHost={isHost}
+                myRole={myRole}
+                isHostOrCohost={isHostOrCohost}
+                unreadChat={unreadChat}
+                admitUser={admitUser}
+                denyUser={denyUser}
+                admitAll={admitAll}
+              />
+            </RoomErrorBoundary>
+          ) : (
+            <ParticipantsPanel
+              selfUserId={user?.id}
+              isHost={isHost}
+              isHostOrCohost={isHostOrCohost}
+              onClose={() => setSidebar(null)}
+              onPromote={promoteUser}
+              onAdmit={admitUser}
+              onDeny={denyUser}
+              onAdmitAll={admitAll}
+              scrollWaitingSignal={waitingScrollSignal}
+            />
+          )
         )}
         {sidebar === 'info' && (
           <MeetingInfoDrawer

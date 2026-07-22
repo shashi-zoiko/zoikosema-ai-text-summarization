@@ -25,6 +25,7 @@ from app.models.meeting import (
     STATUS_LEFT,
 )
 from app.websocket.manager import meet_manager
+from app.audit_meeting import audit_meeting_action, ROLE_CHANGE
 
 log = logging.getLogger(__name__)
 
@@ -852,7 +853,7 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                     if not target_user_id:
                         continue
                     tp = await _run(_get_participant, meeting.id, target_user_id, db)
-                    if tp and tp.status == STATUS_ADMITTED:
+                    if tp and tp.status in (STATUS_ADMITTED, STATUS_DISCONNECTED):
                         tp.role = ROLE_COHOST if tp.role == ROLE_PARTICIPANT else ROLE_PARTICIPANT
                         await _run(db.commit)
                         await meet_manager.broadcast(
@@ -862,6 +863,13 @@ async def meeting_ws(websocket: WebSocket, code: str, token: str = "", pwd: str 
                                 "user_id": target_user_id,
                                 "role": tp.role,
                             },
+                        )
+                        # Audit the role change (ZS-MTG-IMP-04). Best-effort +
+                        # off-loop; never blocks or breaks the promote path.
+                        await _run(
+                            audit_meeting_action, db,
+                            user=user, event_type=ROLE_CHANGE, meeting_id=meeting.id,
+                            metadata={"target_user_id": target_user_id, "role": tp.role},
                         )
 
                 elif kind == "set-permissions" and host_or_cohost:

@@ -239,14 +239,105 @@ export const BLUR_PRESETS = [
   { id: 'blur', name: 'Blur', type: 'blur', radius: 18 },
 ]
 
+// Real hosted category backgrounds live under /public/backgrounds/<category>/.
+// BASE_URL keeps the path correct under the Electron file:// bundle too.
+const BG_ROOT = `${import.meta.env.BASE_URL || '/'}backgrounds`
+const orgSrc = (file) => `${BG_ROOT}/organization/${file}`
+const sigSrc = (file) => `${BG_ROOT}/zoiko-signature/${file}`
+const execSrc = (file) => `${BG_ROOT}/executive-professional/${file}`
+const modSrc = (file) => `${BG_ROOT}/modern-workspace/${file}`
+const homeSrc = (file) => `${BG_ROOT}/home-office/${file}`
+const natSrc = (file) => `${BG_ROOT}/nature-wellbeing/${file}`
+const globSrc = (file) => `${BG_ROOT}/global-places/${file}`
+
+const ORGANIZATION_IMAGES = [
+  { id: 'org-lobby', name: 'Zoiko Lobby', type: 'image', src: orgSrc('zoiko-lobby.jpg'), category: 'organization', tags: ['lobby', 'reception', 'brand', 'zoiko', 'neon'] },
+  { id: 'org-executive-boardroom', name: 'Executive Boardroom', type: 'image', src: orgSrc('executive-boardroom.jpg'), category: 'organization', tags: ['boardroom', 'executive', 'conference', 'city'] },
+  { id: 'org-boardroom-skyline', name: 'Boardroom Skyline', type: 'image', src: orgSrc('boardroom-skyline.jpg'), category: 'organization', tags: ['boardroom', 'skyline', 'conference', 'modern'] },
+  { id: 'org-zoiko-group', name: 'Zoiko Group Boardroom', type: 'image', src: orgSrc('zoiko-group-boardroom.jpg'), category: 'organization', tags: ['boardroom', 'zoiko group', 'conference', 'brand'] },
+  { id: 'org-open-workspace', name: 'Open Workspace', type: 'image', src: orgSrc('open-workspace.jpg'), category: 'organization', tags: ['workspace', 'open plan', 'desks', 'office'] },
+  { id: 'org-warm-study', name: 'Warm Study', type: 'image', src: orgSrc('warm-study.jpg'), category: 'organization', tags: ['study', 'warm', 'desk', 'office'] },
+  { id: 'org-midnight-office', name: 'Midnight Office', type: 'image', src: orgSrc('midnight-office.jpg'), category: 'organization', tags: ['office', 'dark', 'study', 'evening'] },
+  { id: 'org-forest-office', name: 'Forest View Office', type: 'image', src: orgSrc('forest-view-office.jpg'), category: 'organization', tags: ['office', 'green', 'nature', 'study'] },
+  { id: 'org-zoiko-tech', name: 'Zoiko Tech Boardroom', type: 'image', src: orgSrc('zoiko-tech-boardroom.jpg'), category: 'organization', tags: ['boardroom', 'zoiko tech', 'conference', 'brand'] },
+]
+
+// Zoiko Signature backgrounds — real hosted images under
+// /public/backgrounds/zoiko-signature/.
+const ZOIKO_SIGNATURE_IMAGES = [
+  { id: 'sig-lounge', name: 'Signature Lounge', type: 'image', src: sigSrc('signature-lounge.jpg'), category: 'zoiko-signature', tags: ['lounge', 'executive', 'skyline', 'signature'] },
+  { id: 'sig-boardroom', name: 'Signature Boardroom', type: 'image', src: sigSrc('signature-boardroom.jpg'), category: 'zoiko-signature', tags: ['boardroom', 'conference', 'signature', 'brand'] },
+  { id: 'sig-atrium', name: 'Signature Atrium', type: 'image', src: sigSrc('signature-atrium.jpg'), category: 'zoiko-signature', tags: ['atrium', 'lobby', 'neon', 'signature'] },
+  { id: 'sig-zen', name: 'Signature Zen', type: 'image', src: sigSrc('signature-zen.jpg'), category: 'zoiko-signature', tags: ['zen', 'calm', 'bamboo', 'wellbeing', 'signature'] },
+]
+
+// Executive & Professional backgrounds — real hosted images under
+// /public/backgrounds/executive-professional/.
+const EXECUTIVE_IMAGES = [
+  { id: 'exec-lounge', name: 'Executive Lounge', type: 'image', src: execSrc('executive-lounge.jpg'), category: 'executive-professional', tags: ['lounge', 'executive', 'skyline', 'evening'] },
+  { id: 'exec-ivory-suite', name: 'Ivory Suite', type: 'image', src: execSrc('ivory-suite.jpg'), category: 'executive-professional', tags: ['suite', 'ivory', 'minimal', 'luxury'] },
+  { id: 'exec-conference', name: 'Executive Conference', type: 'image', src: execSrc('executive-conference.jpg'), category: 'executive-professional', tags: ['conference', 'boardroom', 'meeting', 'skyline'] },
+  { id: 'exec-boardroom-daylight', name: 'Boardroom Daylight', type: 'image', src: execSrc('boardroom-daylight.jpg'), category: 'executive-professional', tags: ['boardroom', 'daylight', 'conference', 'skyline'] },
+  { id: 'exec-office', name: 'Executive Office', type: 'image', src: execSrc('executive-office.jpg'), category: 'executive-professional', tags: ['office', 'desk', 'garden', 'professional'] },
+  { id: 'exec-directors-office', name: 'Director’s Office', type: 'image', src: execSrc('directors-office.jpg'), category: 'executive-professional', tags: ['office', 'executive', 'skyline', 'dusk'] },
+]
+
+// Modern Workspace backgrounds — real hosted images under
+// /public/backgrounds/modern-workspace/.
+const MODERN_WORKSPACE_IMAGES = [
+  { id: 'mod-executive-office', name: 'Modern Executive Office', type: 'image', src: modSrc('modern-executive-office.jpg'), category: 'modern-workspace', tags: ['office', 'executive', 'modern', 'skyline'] },
+  { id: 'mod-boardroom', name: 'Modern Boardroom', type: 'image', src: modSrc('modern-boardroom.jpg'), category: 'modern-workspace', tags: ['boardroom', 'conference', 'marble', 'evening'] },
+  { id: 'mod-bright-conference', name: 'Bright Conference', type: 'image', src: modSrc('bright-conference.jpg'), category: 'modern-workspace', tags: ['conference', 'bright', 'meeting', 'daylight'] },
+  { id: 'mod-collaboration-studio', name: 'Collaboration Studio', type: 'image', src: modSrc('collaboration-studio.jpg'), category: 'modern-workspace', tags: ['collaboration', 'team', 'meeting', 'studio'] },
+  { id: 'mod-coworking-lounge', name: 'Coworking Lounge', type: 'image', src: modSrc('coworking-lounge.jpg'), category: 'modern-workspace', tags: ['coworking', 'lounge', 'open plan', 'casual'] },
+  { id: 'mod-skyline-meeting', name: 'Skyline Meeting Room', type: 'image', src: modSrc('skyline-meeting-room.jpg'), category: 'modern-workspace', tags: ['meeting', 'skyline', 'daylight', 'modern'] },
+]
+
+// Home Office backgrounds — real hosted images under
+// /public/backgrounds/home-office/.
+const HOME_OFFICE_IMAGES = [
+  { id: 'home-living-office', name: 'Living Office', type: 'image', src: homeSrc('living-office.jpg'), category: 'home-office', tags: ['living', 'lounge', 'home', 'open plan'] },
+  { id: 'home-meeting-room', name: 'Home Meeting Room', type: 'image', src: homeSrc('home-meeting-room.jpg'), category: 'home-office', tags: ['meeting', 'home', 'cozy', 'oak'] },
+  { id: 'home-boardroom', name: 'Home Boardroom', type: 'image', src: homeSrc('home-boardroom.jpg'), category: 'home-office', tags: ['boardroom', 'home', 'bright', 'minimal'] },
+  { id: 'home-zen-retreat', name: 'Zen Retreat', type: 'image', src: homeSrc('zen-retreat.jpg'), category: 'home-office', tags: ['zen', 'calm', 'bamboo', 'wellbeing'] },
+  { id: 'home-minimal-office', name: 'Minimal Home Office', type: 'image', src: homeSrc('minimal-home-office.jpg'), category: 'home-office', tags: ['minimal', 'home', 'desk', 'calm'] },
+  { id: 'home-terracotta-study', name: 'Terracotta Study', type: 'image', src: homeSrc('terracotta-study.jpg'), category: 'home-office', tags: ['study', 'terracotta', 'warm', 'desk'] },
+]
+
+// Nature & Well-being backgrounds — real hosted images under
+// /public/backgrounds/nature-wellbeing/.
+const NATURE_WELLBEING_IMAGES = [
+  { id: 'nat-biophilic-atrium', name: 'Biophilic Atrium', type: 'image', src: natSrc('biophilic-atrium.jpg'), category: 'nature-wellbeing', tags: ['biophilic', 'atrium', 'plants', 'green'] },
+  { id: 'nat-garden-conservatory', name: 'Garden Conservatory', type: 'image', src: natSrc('garden-conservatory.jpg'), category: 'nature-wellbeing', tags: ['greenhouse', 'garden', 'conservatory', 'plants'] },
+  { id: 'nat-woodland-view', name: 'Woodland View', type: 'image', src: natSrc('woodland-view.jpg'), category: 'nature-wellbeing', tags: ['forest', 'woodland', 'trees', 'nature'] },
+  { id: 'nat-living-wall-lounge', name: 'Living Wall Lounge', type: 'image', src: natSrc('living-wall-lounge.jpg'), category: 'nature-wellbeing', tags: ['living wall', 'lounge', 'plants', 'wellbeing'] },
+]
+
+// Global Places backgrounds — real hosted images under
+// /public/backgrounds/global-places/.
+const GLOBAL_PLACES_IMAGES = [
+  { id: 'glob-skyline-lounge', name: 'Skyline Executive Lounge', type: 'image', src: globSrc('skyline-executive-lounge.jpg'), category: 'global-places', tags: ['skyline', 'lounge', 'city', 'dusk'] },
+  { id: 'glob-collaboratory', name: 'The Collaboratory', type: 'image', src: globSrc('the-collaboratory.jpg'), category: 'global-places', tags: ['lounge', 'collaboration', 'city', 'bright'] },
+]
+
+// Each image preset carries a `category` (matching an id in
+// backgroundCategories.js) and `tags` (free-text, used by the gallery search).
+// These are additive metadata — the effect pipeline ignores them.
 export const IMAGE_PRESETS = [
-  { id: 'zoiko', name: 'Zoiko Group', type: 'image', src: ZOIKO },
-  { id: 'office', name: 'Office', type: 'image', src: OFFICE },
-  { id: 'meeting', name: 'Meeting room', type: 'image', src: MEETING },
-  { id: 'living', name: 'Living room', type: 'image', src: LIVING },
-  { id: 'study', name: 'Study', type: 'image', src: STUDY },
-  { id: 'cafe', name: 'Café', type: 'image', src: CAFE },
-  { id: 'warm', name: 'Warm studio', type: 'image', src: WARM },
+  ...ORGANIZATION_IMAGES,
+  ...ZOIKO_SIGNATURE_IMAGES,
+  ...EXECUTIVE_IMAGES,
+  ...MODERN_WORKSPACE_IMAGES,
+  ...HOME_OFFICE_IMAGES,
+  ...NATURE_WELLBEING_IMAGES,
+  ...GLOBAL_PLACES_IMAGES,
+  { id: 'zoiko', name: 'Zoiko Group', type: 'image', src: ZOIKO, category: 'zoiko-signature', tags: ['brand', 'zoiko', 'logo', 'signature'] },
+  { id: 'office', name: 'Office', type: 'image', src: OFFICE, category: 'executive-professional', tags: ['office', 'desk', 'work', 'professional'] },
+  { id: 'meeting', name: 'Meeting room', type: 'image', src: MEETING, category: 'organization', tags: ['meeting', 'conference', 'boardroom', 'office'] },
+  { id: 'living', name: 'Living room', type: 'image', src: LIVING, category: 'home-office', tags: ['home', 'living', 'lounge', 'cozy'] },
+  { id: 'study', name: 'Study', type: 'image', src: STUDY, category: 'home-office', tags: ['home', 'study', 'books', 'library'] },
+  { id: 'cafe', name: 'Café', type: 'image', src: CAFE, category: 'global-places', tags: ['cafe', 'coffee', 'lounge', 'casual'] },
+  { id: 'warm', name: 'Warm studio', type: 'image', src: WARM, category: 'modern-workspace', tags: ['studio', 'warm', 'minimal', 'modern'] },
 ]
 
 // Colour-grade face/camera filters (Google-Meet "Filters" tab). Unlike the
