@@ -19,7 +19,10 @@ import { createPortal } from 'react-dom'
  * Positioning is intentionally NOT owned here — each overlay positions itself.
  */
 
-const OverlayHostContext = createContext(null)
+// Exported so consumers can OPTIONALLY detect a host (useContext) and degrade to
+// an inline overlay when rendered outside a provider (e.g. isolated tests),
+// instead of the throwing useOverlayHost().
+export const OverlayHostContext = createContext(null)
 
 export function useOverlayHost() {
   const ctx = useContext(OverlayHostContext)

@@ -98,7 +98,7 @@ function token() {
   return getAuthToken()
 }
 
-export async function api(path, { method = 'GET', body, form, auth = true } = {}) {
+export async function api(path, { method = 'GET', body, form, auth = true, signal } = {}) {
   const headers = {}
   if (auth && token()) headers['Authorization'] = `Bearer ${token()}`
   let payload
@@ -109,7 +109,7 @@ export async function api(path, { method = 'GET', body, form, auth = true } = {}
     payload = JSON.stringify(body)
     headers['Content-Type'] = 'application/json'
   }
-  const res = await fetch(`${API_BASE}${path}`, { method, headers, body: payload })
+  const res = await fetch(`${API_BASE}${path}`, { method, headers, body: payload, signal })
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {

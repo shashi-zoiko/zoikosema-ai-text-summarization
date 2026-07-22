@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.connect.media_service import service as media
+from app.audit_meeting import audit_meeting_action, ADMIT, DENY, ADMIT_ALL, ROLE_CHANGE
 from app.websocket import signaling as ws_signaling
 from app.core.calendar import generate_ics
 from app.core.config import get_settings
@@ -1120,6 +1121,8 @@ async def admit_participant(
     # polling.
     await ws_signaling.signal_admitted(meeting.id, data.user_id)
     await ws_signaling.broadcast_waiting_list(code, meeting.id)
+    audit_meeting_action(db, user=user, event_type=ADMIT, meeting_id=meeting.id,
+                         metadata={"target_user_id": data.user_id})
     return participant
 
 
@@ -1154,6 +1157,8 @@ async def admit_all(
 
     await ws_signaling.signal_admitted_many(meeting.id, admitted_ids)
     await ws_signaling.broadcast_waiting_list(code, meeting.id)
+    audit_meeting_action(db, user=user, event_type=ADMIT_ALL, meeting_id=meeting.id,
+                         metadata={"count": len(admitted_ids), "target_user_ids": admitted_ids})
     return AdmitAllOut(admitted=admitted_ids)
 
 
@@ -1184,6 +1189,8 @@ async def deny_participant(
 
     await ws_signaling.signal_denied(meeting.id, data.user_id)
     await ws_signaling.broadcast_waiting_list(code, meeting.id)
+    audit_meeting_action(db, user=user, event_type=DENY, meeting_id=meeting.id,
+                         metadata={"target_user_id": data.user_id})
     return participant
 
 
@@ -1243,7 +1250,7 @@ def export_attendance(
 
 
 @router.post("/{code}/promote", response_model=ParticipantOut)
-def promote_participant(
+async def promote_participant(
     code: str,
     data: ParticipantActionIn,
     db: Session = Depends(get_db),
@@ -1253,19 +1260,32 @@ def promote_participant(
     if meeting.host_id != user.id:
         raise HTTPException(status_code=403, detail="Only the host can promote participants")
 
-    participant = db.scalar(
-        select(MeetingParticipant).where(
+    # Latest row, tolerating DISCONNECTED — a participant whose control WS
+    # briefly dropped is still in the meeting (media plane up) and promotable;
+    # requiring ADMITTED 404'd them (mirrors the media-token endpoint's check).
+    participant = db.scalars(
+        select(MeetingParticipant)
+        .where(
             MeetingParticipant.meeting_id == meeting.id,
             MeetingParticipant.user_id == data.user_id,
-            MeetingParticipant.status == STATUS_ADMITTED,
+            MeetingParticipant.status.in_((STATUS_ADMITTED, STATUS_DISCONNECTED)),
         )
-    )
+        .order_by(desc(MeetingParticipant.id))
+    ).first()
     if not participant:
         raise HTTPException(status_code=404, detail="Participant not found or not admitted")
 
     participant.role = ROLE_COHOST if participant.role == ROLE_PARTICIPANT else ROLE_PARTICIPANT
     db.commit()
     db.refresh(participant)
+    audit_meeting_action(db, user=user, event_type=ROLE_CHANGE, meeting_id=meeting.id,
+                         metadata={"target_user_id": data.user_id, "role": participant.role})
+    # Broadcast so EVERY client's roster updates — this makes REST promote a
+    # reliable, WS-independent path for the acting host while still fanning the
+    # role change out to other participants (mirrors the WS 'promote' handler).
+    await ws_signaling.broadcast_event(
+        code, {"type": "role-changed", "user_id": data.user_id, "role": participant.role}
+    )
     return participant
 
 

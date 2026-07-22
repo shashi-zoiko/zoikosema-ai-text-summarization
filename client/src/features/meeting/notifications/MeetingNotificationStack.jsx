@@ -9,12 +9,17 @@ import NotificationDetailPanel from './NotificationDetailPanel.jsx'
  * AI+ZoikoTime), and opens a detail drawer per CTA — without interrupting the
  * join flow. All copy + visibility logic lives in meetingNotificationState.
  */
-export default function MeetingNotificationStack({ meeting, user }) {
+export default function MeetingNotificationStack({ meeting, user, onPanelOpen }) {
   const [openPanel, setOpenPanel] = useState(null)
 
   const input = useMemo(() => buildNotificationInputs(meeting, user), [meeting, user])
   const { banners } = useMemo(() => resolveMeetingNotifications(input), [input])
   const panelContent = openPanel ? getPanelContent(openPanel, input) : null
+
+  const openPanelTracked = (panel) => {
+    setOpenPanel(panel)
+    if (panel) onPanelOpen?.(panel)
+  }
 
   if (banners.length === 0) return null
 
@@ -22,7 +27,7 @@ export default function MeetingNotificationStack({ meeting, user }) {
     <>
       <div className="space-y-2.5">
         {banners.map((b) => (
-          <MeetingBanner key={b.id} banner={b} onCta={setOpenPanel} />
+          <MeetingBanner key={b.id} banner={b} onCta={openPanelTracked} />
         ))}
       </div>
       <NotificationDetailPanel content={panelContent} onClose={() => setOpenPanel(null)} />

@@ -81,6 +81,32 @@ export const useRoomStore = create((set) => ({
   seedRoles: (entries) =>
     set(() => ({ roles: new Map(entries) })),
 
+  // ── Meeting Center (ZS-MTG-IMP-04) ──────────────────────────────────────
+  // Single state authority for the Center shell so the header, dock, More Menu
+  // and tabs read/write via selectors instead of prop-drilling the legacy
+  // `sidebar` string. Filters/search live here so they PERSIST across tab
+  // switches and drawer close/open (spec: "Preserve filters while switching
+  // tabs"). Only consulted when meeting_center_v3 is enabled; the legacy
+  // `sidebar` useState remains the authority when the flag is off.
+  centerOpen: false,
+  activeTab: 'people',
+  peopleSearch: '',
+  peopleFilters: [], // array of FILTER values
+  openCenter: (tab) =>
+    set((s) => ({ centerOpen: true, activeTab: tab || s.activeTab || 'people' })),
+  closeCenter: () => set({ centerOpen: false }),
+  toggleCenter: (tab) =>
+    set((s) => (s.centerOpen ? { centerOpen: false } : { centerOpen: true, activeTab: tab || s.activeTab || 'people' })),
+  setActiveTab: (tab) => set((s) => (s.activeTab === tab ? s : { activeTab: tab })),
+  setPeopleSearch: (q) => set((s) => (s.peopleSearch === q ? s : { peopleSearch: q })),
+  setPeopleFilters: (filters) => set({ peopleFilters: Array.isArray(filters) ? filters : [] }),
+  togglePeopleFilter: (f) =>
+    set((s) => ({
+      peopleFilters: s.peopleFilters.includes(f)
+        ? s.peopleFilters.filter((x) => x !== f)
+        : [...s.peopleFilters, f],
+    })),
+
   // Clear all per-meeting transient state. This store is module-global, so
   // without a reset on room entry the previous meeting's reactions (replayed
   // by ReactionOverlay on mount), pins, raised hands and roles leak into the
@@ -95,5 +121,9 @@ export const useRoomStore = create((set) => ({
       reactions: [],
       roles: new Map(),
       cameraStats: null,
+      centerOpen: false,
+      activeTab: 'people',
+      peopleSearch: '',
+      peopleFilters: [],
     }),
 }))

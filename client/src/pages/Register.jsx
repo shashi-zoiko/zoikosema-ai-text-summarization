@@ -178,13 +178,13 @@ export default function Register() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.28, duration: 0.4 }}
             >
-              <Field label="Work email">
+              <Field label="Your email">
                 <Input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  placeholder="you@company.com"
+                  placeholder="your email address"
                   autoComplete="email"
                   leftIcon={<Mail />}
                 />
