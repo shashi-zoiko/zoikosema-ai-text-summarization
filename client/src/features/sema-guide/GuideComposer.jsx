@@ -48,7 +48,7 @@ export default function GuideComposer() {
           disabled={disabled}
           rows={1}
           maxLength={MAX_CHARS}
-          className="min-h-[24px] flex-1 resize-none border-0 bg-transparent text-[13px] leading-snug outline-none"
+          className="min-h-[40px] flex-1 resize-none border-0 bg-transparent text-[13px] leading-snug outline-none"
           style={{ color: '#111827' }}
         />
         <button
