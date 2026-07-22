@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMediaDeviceSelect } from '@livekit/components-react'
 import {
-  Accessibility, Ban, Bell, BellOff, Check, ImagePlus, Loader2, Mic, Palette, Play,
-  Sparkles, Video, Volume2, VolumeX,
+  Accessibility, Ban, Bell, BellOff, Check, Clock, ImagePlus, Loader2, Mic, Palette, Play,
+  Search, Sparkles, Star, Video, Volume2, VolumeX,
 } from 'lucide-react'
 import DrawerShell from './DrawerShell.jsx'
 import { BLUR_PRESETS, IMAGE_PRESETS, FILTER_PRESETS } from '../backgroundPresets.js'
+import { groupByCategory, matchesQuery } from '../backgroundCategories.js'
+import useBgCollections from '../useBgCollections.js'
 import { useNotifications } from '../notify/NotificationProvider.jsx'
+
+const SECTION_PREVIEW = 6
 
 const TABS = [
   { id: 'audio', label: 'Audio', icon: Mic },
@@ -153,12 +157,67 @@ function DeviceSection({ kind, title, icon }) {
 
 function BackgroundSection({ bgEffectId, onSelectBg, bgLoading, bgSupported, uploads, onUpload, cameraOn }) {
   const fileRef = useRef(null)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('all')
+  const { favorites, recents, toggleFavorite, pushRecent, isFavorite } = useBgCollections()
+
   const pickFile = () => fileRef.current?.click()
   const onFile = (e) => {
     const file = e.target.files?.[0]
     if (file && onUpload) onUpload(file)
     e.target.value = ''
   }
+
+  // Selecting an image records it in "Recently used"; None/blur/filter don't.
+  const selectBg = useCallback((preset) => {
+    onSelectBg?.(preset)
+    if (preset?.type === 'image') pushRecent(preset.id)
+  }, [onSelectBg, pushRecent])
+
+  // Resolve a stored favorite/recent id back to a live preset or upload.
+  const resolve = useCallback(
+    (id) => IMAGE_PRESETS.find((p) => p.id === id) || uploads.find((u) => u.id === id) || null,
+    [uploads],
+  )
+
+  const groups = useMemo(() => groupByCategory(IMAGE_PRESETS), [])
+  const q = query.trim().toLowerCase()
+  const searchResults = useMemo(() => {
+    if (!q) return null
+    return [...IMAGE_PRESETS, ...uploads].filter((p) => matchesQuery(p, q))
+  }, [q, uploads])
+
+  // Filter chips: All + collections that exist + non-empty categories + uploads.
+  const chips = useMemo(() => {
+    const list = [{ id: 'all', label: 'All' }]
+    if (favorites.length) list.push({ id: 'favorites', label: 'Favorites', count: favorites.length })
+    if (recents.length) list.push({ id: 'recent', label: 'Recently used', count: recents.length })
+    for (const g of groups) list.push({ id: g.id, label: g.label, count: g.items.length })
+    if (uploads.length) list.push({ id: 'uploads', label: 'My uploads', count: uploads.length })
+    return list
+  }, [favorites.length, recents.length, groups, uploads.length])
+
+  // The chosen filter may vanish (last favorite removed, upload cleared) — fall
+  // back to All so the grid never renders an orphaned/empty selection. Derived,
+  // not synced, so a stale `filter` never triggers an extra render.
+  const activeFilter = chips.some((c) => c.id === filter) ? filter : 'all'
+
+  const renderTile = useCallback((p) => (
+    <BgTile
+      key={p.id}
+      selected={bgEffectId === p.id}
+      onClick={() => selectBg(p)}
+      label={p.name || 'Custom'}
+      loading={bgLoading && bgEffectId === p.id}
+      favorite={isFavorite(p.id)}
+      onToggleFavorite={() => toggleFavorite(p.id)}
+    >
+      <img src={p.src} alt="" loading="lazy" className="h-full w-full object-cover" />
+    </BgTile>
+  ), [bgEffectId, bgLoading, isFavorite, selectBg, toggleFavorite])
+
+  const favItems = favorites.map(resolve).filter(Boolean)
+  const recentItems = recents.map(resolve).filter(Boolean)
 
   return (
     <div>
@@ -179,11 +238,13 @@ function BackgroundSection({ bgEffectId, onSelectBg, bgLoading, bgSupported, upl
               Turn your camera on to preview the effect.
             </p>
           )}
-          <div className="grid grid-cols-3 gap-2">
+
+          {/* Effects controls — always visible above the categories. */}
+          <div className="mb-3 grid grid-cols-4 gap-2">
             <BgTile
               selected={bgEffectId === 'none'}
-              onClick={() => onSelectBg?.({ id: 'none', type: 'none' })}
-              label="None"
+              onClick={() => selectBg({ id: 'none', type: 'none' })}
+              label="No effect"
               loading={bgLoading && bgEffectId === 'none'}
             >
               <span className="grid h-full w-full place-items-center bg-[#0B1220] text-[#475569]">
@@ -195,7 +256,7 @@ function BackgroundSection({ bgEffectId, onSelectBg, bgLoading, bgSupported, upl
               <BgTile
                 key={p.id}
                 selected={bgEffectId === p.id}
-                onClick={() => onSelectBg?.(p)}
+                onClick={() => selectBg(p)}
                 label={p.name}
                 loading={bgLoading && bgEffectId === p.id}
               >
@@ -211,43 +272,128 @@ function BackgroundSection({ bgEffectId, onSelectBg, bgLoading, bgSupported, upl
               </BgTile>
             ))}
 
-            {IMAGE_PRESETS.map((p) => (
-              <BgTile
-                key={p.id}
-                selected={bgEffectId === p.id}
-                onClick={() => onSelectBg?.(p)}
-                label={p.name}
-                loading={bgLoading && bgEffectId === p.id}
-              >
-                <img src={p.src} alt="" className="h-full w-full object-cover" />
-              </BgTile>
-            ))}
-
-            {uploads.map((p) => (
-              <BgTile
-                key={p.id}
-                selected={bgEffectId === p.id}
-                onClick={() => onSelectBg?.(p)}
-                label={p.name || 'Custom'}
-                loading={bgLoading && bgEffectId === p.id}
-              >
-                <img src={p.src} alt="" className="h-full w-full object-cover" />
-              </BgTile>
-            ))}
-
             <button
               type="button"
               onClick={pickFile}
               title="Upload a background image"
               className="flex aspect-video flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-[#10B981]/40 bg-[#10B981]/[0.06] text-[#34D399] transition hover:bg-[#10B981]/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45"
             >
-              <ImagePlus className="h-5 w-5" />
-              <span className="text-[11px] font-semibold">Upload</span>
+              <ImagePlus className="h-4 w-4" />
+              <span className="text-[10px] font-semibold">Upload</span>
             </button>
             <input ref={fileRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
           </div>
+
+          {/* Search */}
+          <div className="relative mb-3">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#64748B]" />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search backgrounds"
+              aria-label="Search backgrounds"
+              className="w-full rounded-xl border border-[#263244] bg-[#0B1220] py-2 pl-9 pr-3 text-[13px] text-white placeholder:text-[#64748B] focus:border-[#10B981] focus:outline-none focus:ring-2 focus:ring-[#10B981]/30"
+            />
+          </div>
+
+          {/* Category / collection filter chips (hidden while searching) */}
+          {!q && (
+            <div className="zk-filmstrip mb-3 flex gap-1 overflow-x-auto pb-1">
+              {chips.map((c) => {
+                const active = activeFilter === c.id
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setFilter(c.id)}
+                    aria-pressed={active}
+                    className={
+                      'inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition ' +
+                      (active
+                        ? 'bg-[#10B981]/15 text-[#34D399]'
+                        : 'text-[#94A3B8] hover:bg-white/[0.06] hover:text-white')
+                    }
+                  >
+                    {c.label}
+                    {c.count != null && <span className="text-[11px] opacity-70">{c.count}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Content */}
+          {q ? (
+            searchResults.length ? (
+              <BgGrid>{searchResults.map(renderTile)}</BgGrid>
+            ) : (
+              <EmptyState>No backgrounds match “{query.trim()}”.</EmptyState>
+            )
+          ) : activeFilter === 'all' ? (
+            groups.map((g) => (
+              <CategorySection key={g.id} label={g.label} items={g.items} renderTile={renderTile} />
+            ))
+          ) : activeFilter === 'favorites' ? (
+            favItems.length ? <BgGrid>{favItems.map(renderTile)}</BgGrid> : (
+              <EmptyState icon={<Star className="h-4 w-4" />}>
+                Tap the star on any background to save it here.
+              </EmptyState>
+            )
+          ) : activeFilter === 'recent' ? (
+            recentItems.length ? <BgGrid>{recentItems.map(renderTile)}</BgGrid> : (
+              <EmptyState icon={<Clock className="h-4 w-4" />}>Backgrounds you apply show up here.</EmptyState>
+            )
+          ) : activeFilter === 'uploads' ? (
+            uploads.length ? <BgGrid>{uploads.map(renderTile)}</BgGrid> : (
+              <EmptyState icon={<ImagePlus className="h-4 w-4" />}>Upload an image to use your own background.</EmptyState>
+            )
+          ) : (
+            <BgGrid>{(groups.find((g) => g.id === activeFilter)?.items || []).map(renderTile)}</BgGrid>
+          )}
         </>
       )}
+    </div>
+  )
+}
+
+function BgGrid({ children }) {
+  return <div className="grid grid-cols-3 gap-2">{children}</div>
+}
+
+// A category group with a count and, when it overflows, a See all / Show less
+// toggle. Rendering is guarded by SECTION_PREVIEW so short categories (today's
+// case) show everything with no toggle.
+function CategorySection({ label, items, renderTile }) {
+  const [expanded, setExpanded] = useState(false)
+  const overflow = items.length > SECTION_PREVIEW
+  const shown = expanded ? items : items.slice(0, SECTION_PREVIEW)
+  return (
+    <div className="mb-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-[12px] font-semibold uppercase tracking-wider text-[#94A3B8]">
+          {label} <span className="text-[#64748B]">({items.length})</span>
+        </h4>
+        {overflow && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="border-0 bg-transparent p-0 text-[11.5px] font-medium text-[#34D399] shadow-none hover:underline"
+          >
+            {expanded ? 'Show less' : `See all (${items.length})`}
+          </button>
+        )}
+      </div>
+      <BgGrid>{shown.map(renderTile)}</BgGrid>
+    </div>
+  )
+}
+
+function EmptyState({ icon, children }) {
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-[#263244] bg-[#0B1220] px-4 py-6 text-center text-[12.5px] text-[#94A3B8]">
+      {icon && <span className="text-[#475569]">{icon}</span>}
+      {children}
     </div>
   )
 }
@@ -307,15 +453,16 @@ function FilterSection({ bgEffectId, onSelectBg, bgLoading, bgSupported, cameraO
   )
 }
 
-function BgTile({ selected, onClick, label, loading, children }) {
-  return (
+function BgTile({ selected, onClick, label, loading, favorite, onToggleFavorite, children }) {
+  const tile = (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={selected}
+      aria-label={label}
       title={label}
       className={
-        'relative aspect-video overflow-hidden rounded-xl border transition ' +
+        'relative aspect-video w-full overflow-hidden rounded-xl border transition ' +
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45 ' +
         (selected ? 'border-[#10B981] ring-2 ring-[#10B981]' : 'border-[#263244] hover:border-[#475569]')
       }
@@ -335,6 +482,27 @@ function BgTile({ selected, onClick, label, loading, children }) {
         </span>
       )}
     </button>
+  )
+
+  // No favorite affordance (e.g. the Filters tab) → plain tile.
+  if (!onToggleFavorite) return tile
+
+  // Star is a SIBLING of the tile button (nested buttons are invalid HTML),
+  // both inside a relative wrapper that becomes the grid cell.
+  return (
+    <div className="relative">
+      {tile}
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggleFavorite() }}
+        aria-pressed={!!favorite}
+        aria-label={favorite ? `Remove ${label} from favorites` : `Add ${label} to favorites`}
+        title={favorite ? 'Remove from favorites' : 'Add to favorites'}
+        className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full border-0 bg-black/45 p-0 text-white/80 shadow backdrop-blur transition hover:bg-black/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45"
+      >
+        <Star className={'h-3 w-3 ' + (favorite ? 'fill-[#FBBF24] text-[#FBBF24]' : '')} />
+      </button>
+    </div>
   )
 }
 

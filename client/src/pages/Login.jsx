@@ -105,14 +105,14 @@ export default function Login() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.18, duration: 0.4 }}
             >
-              <Field label="Work email">
+              <Field label="Your email">
                 <Input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
                   autoFocus
-                  placeholder="you@company.com"
+                  placeholder="your email address"
                   autoComplete="email"
                   leftIcon={<Mail />}
                 />

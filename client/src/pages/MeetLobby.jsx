@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  ArrowRight, Calendar, Camera, CameraOff, Check, ChevronDown, Circle, Copy,
+  ArrowRight, Calendar, Camera, CameraOff, Check, ChevronDown, Circle, Clock, Copy,
   HelpCircle, Info, Loader2, Lock, Mic, MicOff, Monitor, MoreHorizontal,
-  MoreVertical, Settings, ShieldCheck, Sparkles, Triangle, User as UserIcon, Users,
-  Video, VideoOff, X,
+  MoreVertical, Phone, RefreshCw, ScreenShare, Search, Settings, ShieldCheck,
+  Sparkles, Star, Triangle, User as UserIcon, Users, Video, VideoOff, Volume2, X,
 } from 'lucide-react'
 import { api, fetchPublicMeeting, getWsBase } from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -13,6 +13,8 @@ import useMediaDevices from '../hooks/useMediaDevices'
 import useAudioLevel from '../hooks/useAudioLevel'
 import { BackgroundProcessor, backgroundEffectsSupported } from '../features/meeting/backgroundEngine.js'
 import { BLUR_PRESETS, FILTER_PRESETS, IMAGE_PRESETS, NONE_EFFECT, getPreset } from '../features/meeting/backgroundPresets.js'
+import { groupByCategory, matchesQuery } from '../features/meeting/backgroundCategories.js'
+import useBgCollections from '../features/meeting/useBgCollections.js'
 import MeetingNotificationStack from '../features/meeting/notifications/MeetingNotificationStack.jsx'
 import WalkingBirdLoader from '../features/meeting/notifications/WalkingBirdLoader.jsx'
 import Avatar from '../components/ui/Avatar'
@@ -20,6 +22,61 @@ import Logo from '../components/ui/Logo'
 import ThemeToggle from '../components/ui/ThemeToggle'
 import { cn } from '../lib/cn'
 import { meetingRoomPath, meetingShareText } from '../lib/meetingUrls.js'
+import { t } from '../lib/i18n.js'
+import { EVENTS, trackEvent } from '../lib/analytics.js'
+import { deriveMeetingAccess } from '../features/meeting/lobby/meetingAccess.js'
+import { registerLobbyStrings } from '../features/meeting/lobby/strings.js'
+
+registerLobbyStrings()
+
+// How long the client waits on the join handshake (/join POST + waiting-room WS
+// open) before giving up and offering Retry. This does NOT bound the legitimate
+// wait for a host to admit you — that runs on the separate WaitingApproval
+// screen, not the "Joining…" button.
+const JOIN_TIMEOUT_MS = 20000
+
+// Coarse pre-join network hint from the Network Information API. Returns a
+// signal level + honest label; only claims HD when the link is known-fast.
+function readNetworkHint() {
+  const c = typeof navigator !== 'undefined'
+    ? (navigator.connection || navigator.mozConnection || navigator.webkitConnection)
+    : null
+  const et = c?.effectiveType
+  if (et === '4g') return { level: 'strong', label: t('meeting.lobby.network.strong'), quality: t('meeting.lobby.network.hd') }
+  if (et === '3g') return { level: 'good', label: t('meeting.lobby.network.good'), quality: t('meeting.lobby.network.sd') }
+  if (et === '2g' || et === 'slow-2g') return { level: 'weak', label: t('meeting.lobby.network.weak'), quality: t('meeting.lobby.network.sd') }
+  return { level: 'good', label: t('meeting.lobby.readiness.ready'), quality: '' }
+}
+
+// A short, quiet test tone played through the selected speaker (WebAudio → sink).
+async function playSpeakerTest(sinkId) {
+  const Ctx = window.AudioContext || window.webkitAudioContext
+  if (!Ctx) return
+  const ctx = new Ctx()
+  try {
+    const dest = ctx.createMediaStreamDestination()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = 440
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.05)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.55)
+    osc.connect(gain).connect(dest)
+    const audioEl = new Audio()
+    audioEl.srcObject = dest.stream
+    if (sinkId && typeof audioEl.setSinkId === 'function') {
+      try { await audioEl.setSinkId(sinkId) } catch { /* fall back to default output */ }
+    }
+    await audioEl.play().catch(() => {})
+    osc.start()
+    osc.stop(ctx.currentTime + 0.6)
+    await new Promise((r) => setTimeout(r, 700))
+    try { audioEl.pause() } catch {}
+  } finally {
+    try { await ctx.close() } catch {}
+  }
+}
 
 /**
  * Meeting pre-join lobby — enterprise "managed workspace" layout.
@@ -113,12 +170,36 @@ export default function MeetLobby() {
 
   const [stream, setStream] = useState(null)
 
-  const { devices, audioDeviceId, setAudioDeviceId, videoDeviceId, setVideoDeviceId, refresh: refreshDevices } = useMediaDevices()
+  const {
+    devices, audioDeviceId, setAudioDeviceId, videoDeviceId, setVideoDeviceId,
+    speakerDeviceId, setSpeakerDeviceId, refresh: refreshDevices,
+  } = useMediaDevices()
 
   const [waitingStatus, setWaitingStatus] = useState(null)
   const [copied, setCopied] = useState(false)
   const [joining, setJoining] = useState(false)
+  // Distinguishes a hard join failure/timeout (→ "Retry join") from the initial
+  // idle state, so the CTA never sits on "Joining…" forever.
+  const [joinTimedOut, setJoinTimedOut] = useState(false)
+  const [speakerTesting, setSpeakerTesting] = useState(false)
+  const joinAbortRef = useRef(null)
+  const joinTimerRef = useRef(null)
   const [devicesOpen, setDevicesOpen] = useState(false)
+
+  // Device-change handlers that also emit analytics (kind: mic|camera|speaker).
+  const changeDevice = useCallback((kind, setter) => (id) => {
+    setter(id)
+    trackEvent(EVENTS.DEVICE_CHANGED, { kind })
+  }, [])
+  const onAudioDevice = useMemo(() => changeDevice('microphone', setAudioDeviceId), [changeDevice, setAudioDeviceId])
+  const onVideoDevice = useMemo(() => changeDevice('camera', setVideoDeviceId), [changeDevice, setVideoDeviceId])
+  const onSpeakerDevice = useMemo(() => changeDevice('speaker', setSpeakerDeviceId), [changeDevice, setSpeakerDeviceId])
+
+  const testSpeaker = useCallback(async () => {
+    trackEvent(EVENTS.DEVICE_TEST_CLICKED, { kind: 'speaker' })
+    setSpeakerTesting(true)
+    try { await playSpeakerTest(speakerDeviceId) } finally { setSpeakerTesting(false) }
+  }, [speakerDeviceId])
   // In-preview control popovers. `barPanel` is which one is open ('effects' |
   // 'more' | null).
   const [barPanel, setBarPanel] = useState(null)
@@ -426,9 +507,11 @@ export default function MeetLobby() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [permState, audioOn, videoOn])
 
-  // Close keepalive ws on unmount.
+  // Close keepalive ws + tear down any in-flight join timer/abort on unmount.
   useEffect(() => () => {
     if (wsRef.current) { try { wsRef.current.close() } catch {}; wsRef.current = null }
+    if (joinTimerRef.current) { clearTimeout(joinTimerRef.current); joinTimerRef.current = null }
+    if (joinAbortRef.current) { try { joinAbortRef.current.abort() } catch {} }
   }, [])
 
   // Release the lobby preview camera before navigating to the room. Without
@@ -444,8 +527,14 @@ export default function MeetLobby() {
   }
 
   // ── Join meeting ───────────────────────────────────────────────────
-  const join = async () => {
+  // `video: false` joins audio-only (camera off in the room). Timeout-guarded:
+  // if the /join handshake stalls we abort, reset the CTA and offer Retry —
+  // "Joining…" can never persist forever. The wait for a host to admit runs on
+  // the separate WaitingApproval screen and is intentionally NOT bounded here.
+  const join = async ({ video: videoOverride } = {}) => {
     setErr('')
+    setJoinTimedOut(false)
+    trackEvent(EVENTS.JOIN_CLICKED, { guest: isGuest, audioOnly: videoOverride === false })
     // Guests: validate + mint an anonymous identity before the normal join.
     if (isGuest) {
       const nameErr = validateDisplayName(guestName)
@@ -457,6 +546,13 @@ export default function MeetLobby() {
       } catch {}
     }
     setJoining(true)
+    const controller = new AbortController()
+    joinAbortRef.current = controller
+    if (joinTimerRef.current) clearTimeout(joinTimerRef.current)
+    joinTimerRef.current = setTimeout(() => { try { controller.abort() } catch {} }, JOIN_TIMEOUT_MS)
+    const clearJoinTimer = () => {
+      if (joinTimerRef.current) { clearTimeout(joinTimerRef.current); joinTimerRef.current = null }
+    }
     try {
       // For guests: reuse the durable identity already admitted to THIS meeting
       // if we have one — that's what lets an admitted guest rejoin after a
@@ -482,7 +578,7 @@ export default function MeetLobby() {
       if (needsPassword) joinBody.password = meetingPwd
       let participant
       try {
-        participant = await api(`/api/meetings/${code}/join`, { method: 'POST', body: joinBody })
+        participant = await api(`/api/meetings/${code}/join`, { method: 'POST', body: joinBody, signal: controller.signal })
       } catch (e) {
         // A resumed guest token can be stale (6h expiry, or the meeting ended
         // and the guest row was purged). Mint a fresh identity ONCE and retry —
@@ -496,11 +592,14 @@ export default function MeetLobby() {
           password: needsPassword ? meetingPwd : undefined,
         })
         authToken = guestData.access_token
-        participant = await api(`/api/meetings/${code}/join`, { method: 'POST', body: joinBody })
+        participant = await api(`/api/meetings/${code}/join`, { method: 'POST', body: joinBody, signal: controller.signal })
       }
+      // Handshake is done — the POST returned — so the join timeout has served
+      // its purpose; any further wait is host admission, not a stalled request.
+      clearJoinTimer()
       sessionStorage.setItem(
         `zoiko_meet_prefs_${code}`,
-        JSON.stringify({ audio: audioOn, video: videoOn }),
+        JSON.stringify({ audio: audioOn, video: videoOverride ?? videoOn }),
       )
       if (needsPassword && meetingPwd) {
         sessionStorage.setItem(`zoiko_meet_pwd_${code}`, meetingPwd)
@@ -521,11 +620,15 @@ export default function MeetLobby() {
             setWaitingStatus('admitted')
             try { ws.close() } catch {}
             wsRef.current = null
+            trackEvent(EVENTS.JOIN_SUCCESS, { path: 'admitted' })
             releasePreview()
             navigate(pickRoomPath(code))
           } else if (data.type === 'denied') {
             setWaitingStatus('denied')
             setErr('The host denied your request to join.')
+            // Reset the CTA so it can't sit on "Joining…" forever after a denial.
+            setJoining(false)
+            trackEvent(EVENTS.JOIN_FAILED, { reason: 'denied' })
             try { ws.close() } catch {}
             wsRef.current = null
           }
@@ -535,15 +638,22 @@ export default function MeetLobby() {
           else clearInterval(keepalive)
         }, 3000)
       } else {
+        trackEvent(EVENTS.JOIN_SUCCESS, { path: 'direct' })
+        releasePreview()
         navigate(pickRoomPath(code))
       }
     } catch (e) {
-      setErr(e.message || 'Could not join meeting')
+      clearJoinTimer()
+      const aborted = e?.name === 'AbortError' || controller.signal.aborted
+      setErr(aborted ? t('meeting.lobby.join.timeout') : (e.message || 'Could not join meeting'))
+      setJoinTimedOut(true)
+      trackEvent(EVENTS.JOIN_FAILED, { reason: aborted ? 'timeout' : 'error' })
       setJoining(false)
     }
   }
 
   const copyLink = async () => {
+    trackEvent(EVENTS.COPY_INVITE_CLICKED)
     try {
       await navigator.clipboard.writeText(meetingShareText(code))
       setCopied(true)
@@ -566,6 +676,29 @@ export default function MeetLobby() {
   const JOIN_LEAD_MS = 5 * 60 * 1000
   const scheduledMs = meeting?.scheduled_at ? new Date(meeting.scheduled_at).getTime() : null
   const isHost = !!(user && meeting && meeting.host_id === user.id)
+
+  // Security/policy view-model — single source of truth for the status tiles and
+  // the connection chip. Derived from real meeting fields via the shared
+  // resolver contract; never hardcoded literals. Recomputed only when inputs
+  // change so it doesn't churn the tile subtree.
+  const access = useMemo(
+    () => deriveMeetingAccess(meeting, { isGuest, isHost, user }),
+    [meeting, isGuest, isHost, user],
+  )
+  // Pre-join network hint. There is no LiveKit room yet, so we can only read the
+  // browser's coarse Network Information API — and only claim HD when it's
+  // actually known to be fast. Unknown (Firefox/Safari) → neutral, never a fake
+  // "HD available" promise like the old static strip.
+  const netHint = readNetworkHint()
+
+  const testMic = () => {
+    trackEvent(EVENTS.DEVICE_TEST_CLICKED, { kind: 'microphone' })
+    if (!audioOn) toggleAudio()
+  }
+  const previewCamera = () => {
+    trackEvent(EVENTS.DEVICE_TEST_CLICKED, { kind: 'camera' })
+    if (!videoOn) toggleVideo()
+  }
   const msToStart = scheduledMs != null ? scheduledMs - nowTs : null
   const showCountdown = msToStart != null && msToStart > 0
   const notYetOpen = scheduledMs != null && !isHost && msToStart > JOIN_LEAD_MS
@@ -740,7 +873,7 @@ export default function MeetLobby() {
                   {barPanel === 'more' && (
                     <BarPopover>
                       <MenuItem onClick={() => { copyLink(); setBarPanel(null) }}>
-                        <Copy className="h-4 w-4" /> {copied ? 'Link copied' : 'Copy invite link'}
+                        <Copy className="h-4 w-4" /> {copied ? t('meeting.lobby.invite.copied') : t('meeting.lobby.invite.copy')}
                       </MenuItem>
                       <div className="my-1 h-px bg-white/10" />
                       <PopoverHeading>Keyboard shortcuts</PopoverHeading>
@@ -794,11 +927,24 @@ export default function MeetLobby() {
                 </div>
 
                 <div className="flex items-center gap-2.5 rounded-2xl bg-white/95 px-3.5 py-2 text-[12.5px] shadow-[0_10px_30px_-14px_rgba(0,0,0,0.5)] backdrop-blur">
-                  <SignalBars />
-                  <span className="font-semibold text-[#111827]">Strong connection</span>
-                  <span className="font-medium text-[#059669]">HD available</span>
-                  <span className="ml-auto hidden text-[#6B7280] sm:inline">Your network supports high quality video.</span>
-                  <Info className="h-3.5 w-3.5 shrink-0 text-[#9CA3AF]" />
+                  <SignalBars level={netHint.level} />
+                  <span className="font-semibold text-[#111827]">{netHint.label}</span>
+                  {netHint.quality && <span className="font-medium text-[#059669]">{netHint.quality}</span>}
+                  <span
+                    className="ml-auto inline-flex items-center gap-1.5 font-medium text-[#374151]"
+                    title={t('meeting.lobby.connection.details')}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        'h-2 w-2 rounded-full',
+                        access.connection === 'connected' ? 'bg-[#10B981]'
+                          : access.connection === 'limited' ? 'bg-[#F59E0B]'
+                          : 'bg-[#9CA3AF]',
+                      )}
+                    />
+                    ZoikoTime · {t(`meeting.lobby.connection.${access.connection}`)}
+                  </span>
                 </div>
               </div>
             </div>
@@ -806,12 +952,24 @@ export default function MeetLobby() {
             {/* State-aware trust notification stack — sits directly under the
                 camera preview (policy · confidential · AI/ZoikoTime). */}
             <div className="mt-4">
-              <MeetingNotificationStack meeting={meeting} user={user} />
+              <MeetingNotificationStack
+                meeting={meeting}
+                user={user}
+                onPanelOpen={(panel) => trackEvent(
+                  panel === 'connection' ? EVENTS.CONNECTION_DETAILS_OPENED : EVENTS.CONFIDENTIAL_DETAILS_OPENED,
+                  { panel },
+                )}
+              />
             </div>
           </section>
 
           {/* ── Right: meeting info card ───────────────────────────── */}
-          <aside className="zk-themed min-w-0 rounded-[24px] border border-[var(--c-line)] bg-[var(--c-surface)] p-5 shadow-[0_24px_60px_-34px_rgba(15,23,42,0.3)] sm:p-6">
+          <aside
+            role="region"
+            aria-label={t('meeting.lobby.region')}
+            className="zk-themed min-w-0 rounded-[24px] border border-[var(--c-line)] bg-[var(--c-surface)] p-5 shadow-[0_24px_60px_-34px_rgba(15,23,42,0.3)] sm:p-6"
+          >
+            <h2 className="sr-only">{t('meeting.lobby.region')}</h2>
             {meeting ? (
               <h1 className="text-[24px] font-bold leading-tight tracking-tight text-[var(--c-fg)] sm:text-[26px]">
                 {meeting.title || 'Meeting'}
@@ -931,19 +1089,52 @@ export default function MeetLobby() {
               </div>
             )}
 
-            {/* Join */}
+            {/* Join — primary CTA. Defaults to "Join meeting"; only shows
+                "Joining…" during an active request, and flips to "Retry join"
+                after a failure/timeout so it can never hang indefinitely. */}
             <button
-              onClick={join}
+              onClick={() => join()}
               disabled={joinDisabled}
               aria-busy={joining}
               className="zk-press zk-sheen mt-4 flex h-14 w-full items-center justify-between rounded-2xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] px-6 text-[15px] font-semibold text-white shadow-[0_16px_36px_-14px_rgba(124,58,237,0.7)] transition hover:from-[#5B21B6] hover:to-[#6D28D9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--c-surface)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
               <span className="flex items-center gap-2">
                 {joining && <Loader2 className="h-[18px] w-[18px] animate-spin" />}
-                {joining ? 'Joining…' : 'Join meeting'}
+                {joining
+                  ? t('meeting.lobby.readiness.joining')
+                  : joinTimedOut
+                    ? t('meeting.lobby.join.retry')
+                    : t('meeting.lobby.join')}
               </span>
-              {!joining && <ArrowRight className="h-5 w-5" />}
+              {!joining && (joinTimedOut ? <RefreshCw className="h-5 w-5" /> : <ArrowRight className="h-5 w-5" />)}
             </button>
+
+            {/* Secondary join modes — must never visually compete with the
+                primary CTA. Audio-only is real; Present/Dial-in are surfaced but
+                disabled with a reason (no backend), matching Teams/Meet. */}
+            <div className="mt-2.5 grid grid-cols-3 gap-2">
+              <JoinModeButton
+                icon={<MicOff className="h-4 w-4" />}
+                label={t('meeting.lobby.mode.audio')}
+                title={t('meeting.lobby.mode.audio.hint')}
+                onClick={() => { if (videoOn) toggleVideo(); join({ video: false }) }}
+                disabled={joinDisabled}
+              />
+              <JoinModeButton
+                icon={<ScreenShare className="h-4 w-4" />}
+                label={t('meeting.lobby.mode.present')}
+                title={t('meeting.lobby.mode.unavailable')}
+                disabled
+                unavailable
+              />
+              <JoinModeButton
+                icon={<Phone className="h-4 w-4" />}
+                label={t('meeting.lobby.mode.dialin')}
+                title={t('meeting.lobby.mode.unavailable')}
+                disabled
+                unavailable
+              />
+            </div>
 
             {/* Options */}
             <button
@@ -958,35 +1149,82 @@ export default function MeetLobby() {
 
             {devicesOpen && (
               <div className="mt-3 space-y-2.5 rounded-2xl border border-[var(--c-line)] bg-[var(--c-bg-2)] p-3">
-                <DevicePicker
-                  label="Microphone"
-                  icon={<Mic className="h-4 w-4" />}
-                  devices={devices.audio}
-                  value={audioDeviceId}
-                  onChange={setAudioDeviceId}
-                  disabled={permState !== PERM.granted}
-                  fallbackLabel="Default microphone"
-                />
-                <DevicePicker
-                  label="Camera"
-                  icon={<Camera className="h-4 w-4" />}
-                  devices={devices.video}
-                  value={videoDeviceId}
-                  onChange={setVideoDeviceId}
-                  disabled={permState !== PERM.granted}
-                  fallbackLabel="Default camera"
-                />
+                <DeviceRow>
+                  <DevicePicker
+                    label={t('meeting.lobby.device.microphone')}
+                    icon={<Mic className="h-4 w-4" />}
+                    devices={devices.audio}
+                    value={audioDeviceId}
+                    onChange={onAudioDevice}
+                    disabled={permState !== PERM.granted}
+                    fallbackLabel={t('meeting.lobby.device.microphone.fallback')}
+                  />
+                  <DeviceAction
+                    label={t('meeting.lobby.device.test')}
+                    onClick={testMic}
+                    disabled={permState !== PERM.granted}
+                  >
+                    {audioOn && permState === PERM.granted
+                      ? <AudioMeter level={audioLevel} />
+                      : <Mic className="h-4 w-4" />}
+                  </DeviceAction>
+                </DeviceRow>
+                <DeviceRow>
+                  <DevicePicker
+                    label={t('meeting.lobby.device.camera')}
+                    icon={<Camera className="h-4 w-4" />}
+                    devices={devices.video}
+                    value={videoDeviceId}
+                    onChange={onVideoDevice}
+                    disabled={permState !== PERM.granted}
+                    fallbackLabel={t('meeting.lobby.device.camera.fallback')}
+                  />
+                  <DeviceAction
+                    label={t('meeting.lobby.device.preview')}
+                    onClick={previewCamera}
+                    disabled={permState !== PERM.granted}
+                  >
+                    {videoOn ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
+                  </DeviceAction>
+                </DeviceRow>
+                <DeviceRow>
+                  <DevicePicker
+                    label={t('meeting.lobby.device.speaker')}
+                    icon={<Volume2 className="h-4 w-4" />}
+                    devices={devices.speaker}
+                    value={speakerDeviceId}
+                    onChange={onSpeakerDevice}
+                    disabled={devices.speaker.length === 0}
+                    fallbackLabel={t('meeting.lobby.device.speaker.fallback')}
+                  />
+                  <DeviceAction
+                    label={t('meeting.lobby.device.test.audio')}
+                    onClick={testSpeaker}
+                    disabled={speakerTesting}
+                    busy={speakerTesting}
+                  >
+                    <Volume2 className="h-4 w-4" />
+                  </DeviceAction>
+                </DeviceRow>
               </div>
             )}
 
-            <div className="mt-2 text-center text-[12px] text-[var(--c-fg-muted)]">audio only · present · dial in</div>
-
-            {/* Stat tiles */}
-            <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-line)] sm:grid-cols-4">
-              <StatTile icon={<Sparkles />} iconClass="text-[var(--lobby-accent-fg)]" label="AI notes" value="Off · E2EE" />
-              <StatTile icon={<Circle />} iconClass="text-[var(--lobby-success-fg)]" label="Recording" value="Off" />
-              <StatTile icon={<Users />} iconClass="text-[var(--lobby-warn-fg)]" label="Guests" value="1 external" />
-              <StatTile icon={<ShieldCheck />} iconClass="text-[var(--lobby-success-fg)]" label="Admission" value="Not required" />
+            {/* Security status tiles — derived from meeting policy (never
+                hardcoded). Values + tone come from deriveMeetingAccess. */}
+            <div
+              role="list"
+              aria-label="Meeting security status"
+              className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-[var(--c-line)] bg-[var(--c-line)] sm:grid-cols-3 xl:grid-cols-5"
+            >
+              {access.tiles.map((tile) => (
+                <StatTile
+                  key={tile.key}
+                  icon={TILE_ICONS[tile.icon]}
+                  iconClass={TILE_TONE_CLASS[tile.tone] || TILE_TONE_CLASS.muted}
+                  label={tile.label}
+                  value={tile.value}
+                />
+              ))}
             </div>
 
             <button
@@ -994,9 +1232,18 @@ export default function MeetLobby() {
               onClick={copyLink}
               className="zk-press mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-transparent bg-transparent text-[12.5px] font-medium text-[var(--c-fg-muted)] shadow-none transition hover:bg-[var(--c-bg-3)] hover:text-[var(--lobby-accent-fg)]"
             >
-              {copied ? <><Check className="h-3.5 w-3.5" /> Link copied</> : <><Copy className="h-3.5 w-3.5" /> Copy invite link</>}
+              {copied
+                ? <><Check className="h-3.5 w-3.5" /> {t('meeting.lobby.invite.copied')}</>
+                : <><Copy className="h-3.5 w-3.5" /> {t('meeting.lobby.invite.copy')}</>}
             </button>
-            <span className="sr-only" role="status" aria-live="polite">{copied ? 'Meeting link copied to clipboard' : ''}</span>
+            {/* Copying a link never bypasses admission — say so explicitly so it
+                can't imply "anyone can enter". */}
+            {copied && (
+              <p className="mt-1 text-center text-[11.5px] text-[var(--c-fg-muted)]">{t('meeting.lobby.invite.note')}</p>
+            )}
+            <span className="sr-only" role="status" aria-live="polite">
+              {copied ? `${t('meeting.lobby.invite.copied')}. ${t('meeting.lobby.invite.note')}` : ''}
+            </span>
           </aside>
         </div>
 
@@ -1139,10 +1386,16 @@ function PopoverHeading({ children }) {
   return <div className="px-2.5 py-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-white/40">{children}</div>
 }
 
-// Google-Meet-style background picker anchored above the control bar. Reuses
-// the shared presets so the pre-join choice matches exactly what the call
-// applies. Thumbnails are the same generated SVG scenes — zero extra assets.
+// Google-Meet-style background picker anchored above the control bar. Shares
+// the in-call gallery's data layer — presets, category taxonomy
+// (backgroundCategories.js), search and Favorites/Recently-used
+// (useBgCollections.js) — so the pre-join choice matches the call exactly and
+// there's one source of truth. Thumbnails are the same generated SVG scenes.
 function BackgroundPopover({ activeId, onSelect, supported }) {
+  const { favorites, recents, toggleFavorite, pushRecent, isFavorite } = useBgCollections()
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('all')
+
   if (!supported) {
     return (
       <BarPopover>
@@ -1153,45 +1406,135 @@ function BackgroundPopover({ activeId, onSelect, supported }) {
       </BarPopover>
     )
   }
+
+  const pick = (preset) => {
+    onSelect(preset.id)
+    if (preset?.type === 'image') pushRecent(preset.id)
+  }
+  const resolve = (id) => IMAGE_PRESETS.find((p) => p.id === id) || null
+  const groups = groupByCategory(IMAGE_PRESETS)
+  const q = query.trim().toLowerCase()
+  const searchResults = q ? IMAGE_PRESETS.filter((p) => matchesQuery(p, q)) : null
+
+  const chips = [{ id: 'all', label: 'All' }]
+  if (favorites.length) chips.push({ id: 'favorites', label: 'Favorites', count: favorites.length })
+  if (recents.length) chips.push({ id: 'recent', label: 'Recent', count: recents.length })
+  for (const g of groups) chips.push({ id: g.id, label: g.label, count: g.items.length })
+  const activeFilter = chips.some((c) => c.id === filter) ? filter : 'all'
+
+  const tile = (p) => (
+    <BgTile
+      key={p.id}
+      preset={p}
+      active={activeId === p.id}
+      onSelect={pick}
+      favorite={isFavorite(p.id)}
+      onToggleFavorite={() => toggleFavorite(p.id)}
+    />
+  )
+  const favItems = favorites.map(resolve).filter(Boolean)
+  const recentItems = recents.map(resolve).filter(Boolean)
+
   return (
-    <div className="absolute bottom-[calc(100%+10px)] left-0 z-10 max-h-[min(70vh,360px)] w-[300px] overflow-y-auto rounded-2xl bg-[#111827] p-3 text-white shadow-[0_20px_50px_-16px_rgba(0,0,0,0.8)] ring-1 ring-white/10">
-      <PopoverHeading>Blur</PopoverHeading>
+    <div className="absolute bottom-[calc(100%+10px)] left-0 z-10 max-h-[min(72vh,420px)] w-78 overflow-y-auto rounded-2xl bg-[#111827] p-3 text-white shadow-[0_20px_50px_-16px_rgba(0,0,0,0.8)] ring-1 ring-white/10">
+      <PopoverHeading>Effects</PopoverHeading>
       <div className="grid grid-cols-3 gap-2">
-        <BgTile preset={NONE_EFFECT} active={activeId === 'none'} onSelect={onSelect} />
+        <BgTile preset={NONE_EFFECT} active={activeId === 'none'} onSelect={pick} />
         {BLUR_PRESETS.map((p) => (
-          <BgTile key={p.id} preset={p} active={activeId === p.id} onSelect={onSelect} />
+          <BgTile key={p.id} preset={p} active={activeId === p.id} onSelect={pick} />
         ))}
       </div>
 
-      <PopoverHeading>Backgrounds</PopoverHeading>
-      <div className="grid grid-cols-3 gap-2">
-        {IMAGE_PRESETS.map((p) => (
-          <BgTile key={p.id} preset={p} active={activeId === p.id} onSelect={onSelect} />
-        ))}
+      <div className="relative my-2.5">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search backgrounds"
+          aria-label="Search backgrounds"
+          className="w-full rounded-lg border border-white/10 bg-white/5 py-1.5 pl-8 pr-2.5 text-[12px] text-white placeholder:text-white/40 focus:border-[#10B981] focus:outline-none focus:ring-1 focus:ring-[#10B981]/40"
+        />
       </div>
 
-      <PopoverHeading>Filters</PopoverHeading>
-      <div className="grid grid-cols-3 gap-2">
-        {FILTER_PRESETS.map((p) => (
-          <BgTile key={p.id} preset={p} active={activeId === p.id} onSelect={onSelect} />
-        ))}
-      </div>
+      {!q && (
+        <div className="zk-filmstrip mb-2 flex gap-1 overflow-x-auto pb-1">
+          {chips.map((c) => {
+            const active = activeFilter === c.id
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setFilter(c.id)}
+                aria-pressed={active}
+                className={cn(
+                  'inline-flex shrink-0 items-center gap-1 rounded-full border-0 px-2.5 py-1 text-[11.5px] font-medium shadow-none transition',
+                  active ? 'bg-[#10B981]/15 text-[#34D399]' : 'bg-transparent text-white/60 hover:bg-white/10 hover:text-white',
+                )}
+              >
+                {c.label}
+                {c.count != null && <span className="text-[10.5px] opacity-70">{c.count}</span>}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {q ? (
+        searchResults.length ? (
+          <div className="grid grid-cols-3 gap-2">{searchResults.map(tile)}</div>
+        ) : (
+          <p className="px-1 py-3 text-center text-[12px] text-white/50">No backgrounds match “{query.trim()}”.</p>
+        )
+      ) : activeFilter === 'all' ? (
+        groups.map((g) => (
+          <div key={g.id}>
+            <PopoverHeading>{g.label} ({g.items.length})</PopoverHeading>
+            <div className="grid grid-cols-3 gap-2">{g.items.map(tile)}</div>
+          </div>
+        ))
+      ) : activeFilter === 'favorites' ? (
+        favItems.length ? (
+          <div className="grid grid-cols-3 gap-2">{favItems.map(tile)}</div>
+        ) : (
+          <p className="px-1 py-3 text-center text-[12px] text-white/50">Tap the star on a background to save it here.</p>
+        )
+      ) : activeFilter === 'recent' ? (
+        recentItems.length ? (
+          <div className="grid grid-cols-3 gap-2">{recentItems.map(tile)}</div>
+        ) : (
+          <p className="px-1 py-3 text-center text-[12px] text-white/50">Backgrounds you apply show up here.</p>
+        )
+      ) : (
+        <div className="grid grid-cols-3 gap-2">{(groups.find((g) => g.id === activeFilter)?.items || []).map(tile)}</div>
+      )}
+
+      {!q && activeFilter === 'all' && (
+        <>
+          <PopoverHeading>Filters</PopoverHeading>
+          <div className="grid grid-cols-3 gap-2">
+            {FILTER_PRESETS.map((p) => (
+              <BgTile key={p.id} preset={p} active={activeId === p.id} onSelect={pick} />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
 
-function BgTile({ preset, active, onSelect }) {
+function BgTile({ preset, active, onSelect, favorite, onToggleFavorite }) {
   const isImage = preset.type === 'image'
-  return (
+  const btn = (
     <button
       type="button"
-      onClick={() => onSelect(preset.id)}
+      onClick={() => onSelect(preset)}
       aria-label={preset.name}
       aria-pressed={active}
       title={preset.name}
       className={cn(
-        'group relative aspect-square overflow-hidden rounded-lg border-0 bg-white/10 p-0 shadow-none ring-1 ring-inset transition',
-        active ? 'ring-2 ring-[#8B5CF6]' : 'ring-white/10 hover:ring-white/30',
+        'group relative aspect-square w-full overflow-hidden rounded-lg border-0 bg-white/10 p-0 shadow-none ring-1 ring-inset transition',
+        active ? 'ring-2 ring-[#10B981]' : 'ring-white/10 hover:ring-white/30',
       )}
       style={isImage ? { backgroundImage: `url("${preset.src}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
     >
@@ -1204,16 +1547,34 @@ function BgTile({ preset, active, onSelect }) {
         </span>
       )}
       {preset.type === 'filter' && (
-        <span className="grid h-full w-full place-items-center bg-[linear-gradient(135deg,#6D28D9,#7C3AED)] px-1 text-center text-[9.5px] font-semibold leading-tight text-white">
+        <span className="grid h-full w-full place-items-center bg-[linear-gradient(135deg,#065F46,#10B981)] px-1 text-center text-[9.5px] font-semibold leading-tight text-white">
           {preset.name}
         </span>
       )}
       {active && (
-        <span className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded-full bg-[#8B5CF6] text-white ring-2 ring-[#111827]">
+        <span className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded-full bg-[#10B981] text-white ring-2 ring-[#111827]">
           <Check className="h-2.5 w-2.5" />
         </span>
       )}
     </button>
+  )
+
+  if (!onToggleFavorite) return btn
+
+  return (
+    <div className="relative">
+      {btn}
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggleFavorite() }}
+        aria-pressed={!!favorite}
+        aria-label={favorite ? `Remove ${preset.name} from favorites` : `Add ${preset.name} to favorites`}
+        title={favorite ? 'Remove from favorites' : 'Add to favorites'}
+        className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full border-0 bg-black/45 p-0 text-white/80 shadow-none backdrop-blur transition hover:bg-black/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10B981]/45"
+      >
+        <Star className={cn('h-3 w-3', favorite && 'fill-[#FBBF24] text-[#FBBF24]')} />
+      </button>
+    </div>
   )
 }
 
@@ -1239,23 +1600,88 @@ function ShortcutRow({ keys, label }) {
   )
 }
 
-function SignalBars() {
+function SignalBars({ level = 'strong' }) {
+  const activeCount = level === 'strong' ? 4 : level === 'good' ? 3 : level === 'weak' ? 2 : 1
   return (
     <span aria-hidden="true" className="flex items-end gap-0.5">
       {[6, 9, 12, 15].map((h, i) => (
-        <span key={i} style={{ height: `${h}px` }} className="w-1 rounded-sm bg-[#10B981]" />
+        <span
+          key={i}
+          style={{ height: `${h}px`, opacity: i < activeCount ? 1 : 0.3 }}
+          className="w-1 rounded-sm bg-[#10B981]"
+        />
       ))}
     </span>
   )
 }
 
+// Icon + tone maps for the state-driven security tiles (keys come from
+// meetingAccess.js so the view-model stays presentation-agnostic).
+const TILE_ICONS = {
+  shield: <ShieldCheck />,
+  sparkles: <Sparkles />,
+  record: <Circle />,
+  users: <Users />,
+  admission: <Lock />,
+}
+const TILE_TONE_CLASS = {
+  good: 'text-[var(--lobby-success-fg)]',
+  warn: 'text-[var(--lobby-warn-fg)]',
+  accent: 'text-[var(--lobby-accent-fg)]',
+  muted: 'text-[var(--c-fg-muted)]',
+}
+
 function StatTile({ icon, iconClass, label, value }) {
   return (
-    <div className="bg-[var(--c-surface)] px-3 py-3 text-center">
-      <div className={cn('mx-auto grid h-6 w-6 place-items-center [&_svg]:h-4 [&_svg]:w-4', iconClass)}>{icon}</div>
+    <div role="listitem" aria-label={`${label}: ${value}`} className="bg-[var(--c-surface)] px-3 py-3 text-center">
+      <div aria-hidden="true" className={cn('mx-auto grid h-6 w-6 place-items-center [&_svg]:h-4 [&_svg]:w-4', iconClass)}>{icon}</div>
       <div className="mt-1.5 text-[12px] font-semibold text-[var(--c-fg-dim)]">{label}</div>
       <div className="text-[11px] text-[var(--c-fg-muted)]">{value}</div>
     </div>
+  )
+}
+
+// Secondary join-mode chip. Kept visually quiet (outline, muted) so it never
+// competes with the primary Join CTA. `unavailable` renders a disabled chip
+// whose reason is exposed via title + aria for screen readers.
+function JoinModeButton({ icon, label, title, onClick, disabled, unavailable }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={unavailable ? `${label} — ${title}` : label}
+      aria-disabled={disabled || undefined}
+      className={cn(
+        'zk-press flex h-11 items-center justify-center gap-1.5 rounded-xl border border-[var(--c-line)] bg-[var(--c-surface)] px-2 text-[12.5px] font-semibold text-[var(--c-fg-dim)] shadow-none transition hover:bg-[var(--c-bg-3)] disabled:cursor-not-allowed',
+        unavailable && 'opacity-55',
+      )}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+    </button>
+  )
+}
+
+// One device row: the picker grows, a compact quick-action sits alongside so it
+// isn't swallowed by the picker's full-bleed invisible <select>.
+function DeviceRow({ children }) {
+  return <div className="flex items-stretch gap-2">{children}</div>
+}
+
+function DeviceAction({ label, onClick, disabled, busy, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className="zk-press flex h-12 shrink-0 items-center gap-1.5 self-center rounded-xl border border-[var(--c-line)] bg-[var(--c-surface)] px-3 text-[11.5px] font-semibold text-[var(--c-fg-dim)] shadow-none transition hover:bg-[var(--c-bg-3)] disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : children}
+      <span className="hidden sm:inline">{label}</span>
+    </button>
   )
 }
 
