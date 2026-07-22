@@ -332,13 +332,15 @@ export default function AboutGuide() {
                       window.open(link.url, '_blank', 'noopener,noreferrer')
                     }
                   }}
-                  className="inline-flex items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline disabled:opacity-40 disabled:cursor-not-allowed transition"
-                  style={{ color: isUnavailable ? 'var(--c-fg-muted)' : 'var(--c-accent)' }}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline disabled:cursor-not-allowed transition"
+                  // opacity:1 overrides the global `button:disabled { opacity:0.5 }`
+                  // in index.css so these "coming soon" buttons stay 100% visible.
+                  style={{ color: isUnavailable ? 'var(--c-fg)' : 'var(--c-accent)', opacity: 1 }}
                   disabled={isUnavailable}
                 >
                   <ExternalLink className="h-3 w-3" /> {link.label}
                   {isUnavailable && (
-                    <span className="text-[10px] ml-0.5" style={{ color: 'var(--c-fg-muted)' }}>(coming soon)</span>
+                    <span className="text-[10px] ml-0.5" style={{ color: 'var(--c-accent)' }}>(coming soon)</span>
                   )}
                 </button>
               )

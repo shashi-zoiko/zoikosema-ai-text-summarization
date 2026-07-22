@@ -56,7 +56,7 @@ export default function GuideComposer() {
           onClick={handleSubmit}
           disabled={!canSend}
           aria-label="Send message"
-          className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl transition-all duration-150 active:scale-[0.97]"
+          className="flex h-12.5 w-12.5 shrink-0 items-center justify-center rounded-xl transition-all duration-150 active:scale-[0.97]"
           style={{
             backgroundColor: canSend ? '#5B4CE6' : '#D9DCE5',
             color: canSend ? '#FFFFFF' : '#9CA3AF',
@@ -70,7 +70,7 @@ export default function GuideComposer() {
             if (canSend) e.currentTarget.style.backgroundColor = '#5B4CE6'
           }}
         >
-          <ArrowUp size={26} strokeWidth={2.5} />
+          <ArrowUp size={34} strokeWidth={2.5} />
         </button>
       </div>
 
