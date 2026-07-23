@@ -31,7 +31,6 @@ export const useSemaGuide = create((set, get) => ({
   confidential: false,
   overflowOpen: false,
   secondaryView: null,
-  notificationsMuted: false,
   error: null,
   privacyData: null,
   privacyLoading: false,
@@ -224,7 +223,6 @@ export const useSemaGuide = create((set, get) => ({
           {
             role: 'assistant',
             content: res.response,
-            sources: res.sources || [],
             verified: res.verified ?? false,
             action_preview: res.action_preview || null,
             timestamp: new Date().toISOString(),
@@ -249,9 +247,6 @@ export const useSemaGuide = create((set, get) => ({
     const last = messages[messages.length - 1]
     if (!last || last.role !== 'assistant') return
     const updated = { ...last, content: (last.content || '') + (chunk.content || '') }
-    if (chunk.sources) {
-      return
-    }
     set({ messages: [...messages.slice(0, -1), updated] })
   },
 
@@ -305,8 +300,6 @@ export const useSemaGuide = create((set, get) => ({
 
   cancelHandoff: () => set({ supportState: { ...INITIAL_SUPPORT_STATE } }),
   setOverflowOpen: (open) => set({ overflowOpen: open }),
-
-  toggleMuteNotifications: () => set((s) => ({ notificationsMuted: !s.notificationsMuted })),
 
   clearConversation: () => {
     set({ messages: [], error: null, supportState: { ...INITIAL_SUPPORT_STATE } })
