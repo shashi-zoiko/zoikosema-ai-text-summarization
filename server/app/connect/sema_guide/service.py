@@ -6,7 +6,7 @@ from app.core.config import get_settings
 from app.connect.sema_guide.models import GuideChatResponse, Source, ActionPreview
 from app.connect.sema_guide.prompt_registry import build_system_prompt
 from app.connect.sema_guide.context_orchestrator import build_context
-from app.connect.sema_guide.guardrails import check_input, check_output
+from app.connect.sema_guide.guardrails import check_input, check_output, sanitize_output
 from app.connect.sema_guide.response_validator import validate_response
 from app.connect.sema_guide.ai_gateway import gateway
 from app.connect.sema_guide.observability import record_span, RequestSpan
@@ -109,7 +109,10 @@ def chat(
     if ctx.context_text:
         system += f"\n\nRelevant knowledge context:\n{ctx.context_text}"
 
-    system += "\n\nWhen providing answers, cite your sources using the labels from the knowledge context above."
+    system += (
+        "\n\nDo NOT include sources, citations, reference lists, or a \"Source:\"/\"Sources:\" "
+        "section anywhere in your reply. Answer directly, without attributing the information."
+    )
 
     messages = list(conversation)
     messages.append({"role": "user", "content": message})
@@ -126,6 +129,8 @@ def chat(
         ogr = check_output(text)
         if not ogr.allowed:
             text = "I'm unable to provide that response. Please ask a product-related question."
+
+        text = sanitize_output(text)
 
         is_valid, validation_error = validate_response(text, {
             "requires_source": bool(ctx.sources),

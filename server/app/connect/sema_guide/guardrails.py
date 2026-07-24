@@ -59,6 +59,31 @@ OUTPUT_DISALLOWED = [
 ]
 
 
+# Distinctive phrases from the system prompt's internal "Knowledge precedence"
+# hierarchy. These must never surface to users, but blocking the whole response
+# is too blunt — the model tends to append them as a bogus "source", so we strip
+# just the offending lines instead.
+INTERNAL_LEAK_PATTERNS = [
+    re.compile(r"knowledge\s+precedence", re.I),
+    re.compile(r"live\s+tenant\s+policy", re.I),
+    re.compile(r"live\s+entitlement", re.I),
+    re.compile(r"curated\s+external\s+vendor\s+documentation", re.I),
+    re.compile(r"approved\s+support\s+procedures\s+and\s+integration", re.I),
+    re.compile(r"general\s+model\s+knowledge", re.I),
+]
+
+# Source/citation tags the model appends despite instructions. Sources must be
+# completely hidden from end-users, so these are stripped from the reply text.
+_SOURCE_PAREN_RE = re.compile(r"\s*\((?:[\[*_\s]*)sources?\s*:(?:[^()]|\([^()]*\))*\)", re.I)
+_SOURCE_BARE_LABEL_RE = re.compile(
+    r"\s*\[\s*(?:help\s*cent(?:er|re)|product\s+documentation|approved[^\]]*document[^\]]*)\s*\](?!\()",
+    re.I,
+)
+_SOURCE_TAIL_RE = re.compile(
+    r"(?:^|\n)[ \t]*\[?[ \t]*\**[ \t]*sources?\**[ \t]*\d*[ \t]*:[\s\S]*$", re.I
+)
+
+
 class GuardrailResult:
     def __init__(self, allowed: bool, reason: str | None = None):
         self.allowed = allowed
@@ -109,3 +134,27 @@ def check_output(text: str) -> GuardrailResult:
             )
 
     return GuardrailResult(allowed=True)
+
+
+def sanitize_output(text: str) -> str:
+    """Strip source citations and internal-metadata leaks from a reply.
+
+    Unlike check_output (which blocks the whole reply for hard-disallowed
+    content), this removes only the offending fragments so the rest of an
+    otherwise useful answer survives. It drops (a) lines leaking the internal
+    knowledge-precedence hierarchy and (b) source/citation tags in any form the
+    model tends to emit — parenthesised, bracketed, numbered or trailing.
+    """
+    if not text:
+        return text
+
+    kept = [
+        line for line in text.split("\n")
+        if not any(p.search(line) for p in INTERNAL_LEAK_PATTERNS)
+    ]
+    result = "\n".join(kept)
+    result = _SOURCE_PAREN_RE.sub("", result)
+    result = _SOURCE_BARE_LABEL_RE.sub("", result)
+    result = _SOURCE_TAIL_RE.sub("", result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()

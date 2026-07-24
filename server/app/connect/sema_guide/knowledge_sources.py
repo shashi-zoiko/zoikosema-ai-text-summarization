@@ -35,7 +35,7 @@ _HELP_CENTER_ARTICLES = [
     },
     {
         "title": "Plans and pricing",
-        "content": "Free plan includes unlimited 1-on-1 meetings (40-min limit), up to 10 participants. Pro ($15/mo) removes time limits, adds recording and 100 participants. Business ($25/mo) adds admin controls, SSO, and 300 participants. Enterprise has custom pricing.",
+        "content": "All prices are in US dollars (USD). Free plan includes unlimited 1-on-1 meetings (40-min limit on group meetings), up to 10 participants. Pro is $14/month and removes time limits, adds cloud recording and up to 100 participants. Business is $24/month and adds admin controls, SSO, and up to 300 participants. Enterprise uses custom pricing and is not self-serve — to get Enterprise you Request a Demo (not a Help Center article). Enterprise adds custom seat limits, dedicated support, advanced security controls, and admin controls.",
         "source_url": "https://www.zoikosema.com/pricing",
     },
     {
@@ -74,7 +74,7 @@ _PRODUCT_DOC_ARTICLES = [
     {
         "title": "Sema Guide — AI assistant",
         "content": "Sema Guide is Zoiko's AI support agent integrated into the platform. It answers product questions, troubleshoots common issues, and can request human handoff when needed. It has access to workspace policy, account context, and conversation history. Meeting content is never accessed unless explicitly authorized.",
-        "source_url": "https://www.zoikosema.com/sema-meet",
+        "source_url": "https://meet.zoikosema.com/login",
     },
     {
         "title": "Confidential Mode",

@@ -5,7 +5,23 @@ import { cn } from '../../lib/cn'
 import { useSemaGuide } from './store'
 
 function stripCitations(text) {
-  return text.replace(/\s*\(#\d+\)/g, '').trim()
+  return text
+    .replace(/\s*\(#\d+\)/g, '')
+    // parenthesised "(Source: …)" citation, incl. a wrapped markdown link like
+    // "([Source: …](url))" (leading-bracket/emphasis tolerance, one nested paren).
+    .replace(/\s*\((?:[[*_\s]*)sources?\s*:(?:[^()]|\([^()]*\))*\)/gi, '')
+    // bare bracketed citation labels ("[Help Center]", "[Product Documentation]",
+    // "[Approved … documentation]") that are not real markdown links.
+    .replace(/\s*\[\s*(?:help\s*cent(?:er|re)|product\s+documentation|approved[^\]]*document[^\]]*)\s*\](?!\()/gi, '')
+    // trailing "Source:" / "[Source:" / "Source 1:" citation block to end of reply,
+    // covering the bracketed, numbered and double-bracketed forms.
+    .replace(/(?:^|\n)[ \t]*\[?[ \t]*\**[ \t]*sources?\**[ \t]*\d*[ \t]*:[\s\S]*$/i, '')
+    // drop any line leaking the internal knowledge-precedence hierarchy (mirrors
+    // the server-side guardrails.sanitize_output) so already-persisted replies
+    // that still contain it clean up on display too.
+    .replace(/^.*(?:knowledge precedence|live tenant policy|live entitlement|curated external vendor documentation|approved support procedures and integration|general model knowledge).*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 export default function AiMessage({ content, verified = false, actionPreview = null }) {
